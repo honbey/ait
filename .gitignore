@@ -1,0 +1,62 @@
+# Rust
+/target
+**/*.rs.bk
+**/*.rs.bk.*
+
+# Rust analyzer
+.rust-analyzer/
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+*.swn
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# macOS Finder search scope
+.Spotlight-V100
+.Trashes
+
+# macOS Thumbnails
+.Thumbs
+
+# macOS media files
+._*
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# macOS Dock
+Dock
+
+# Linux
+*~
+*.bak
+*.swp
+*.swo
+*.log
+
+# Vagrant
+.vagrant/
+
+# ENV
+.env
+.env.local
+.env.*.local
+
+# Thumbsnails
+Thumbs.db
+ehthumbs.db
+
+# Custom
+.vscode/settings.json
+*.tmp
+a.*
