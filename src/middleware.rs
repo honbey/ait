@@ -1,12 +1,12 @@
+use crate::app::AppState;
+use crate::providers::OpenAIError;
 use axum::{
+    Json,
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::Response,
-    Json,
 };
-use crate::app::AppState;
-use crate::providers::OpenAIError;
 
 pub async fn auth_middleware(
     State(state): State<AppState>,
@@ -18,7 +18,7 @@ pub async fn auth_middleware(
     }
 
     let expected_token = state.config.auth.token.as_deref().unwrap_or("");
-    check_bearer_token(&req.headers(), expected_token)?;
+    check_bearer_token(req.headers(), expected_token)?;
 
     Ok(next.run(req).await)
 }
@@ -29,15 +29,9 @@ pub async fn admin_auth_middleware(
     next: Next,
 ) -> Result<Response, (StatusCode, Json<OpenAIError>)> {
     // Admin endpoints always require authentication regardless of auth.enabled
-    let expected_token = state
-        .config
-        .auth
-        .admin_token
-        .as_deref()
-        .or_else(|| state.config.auth.token.as_deref())
-        .unwrap_or("");
+    let expected_token = state.config.auth.admin_token.as_deref().unwrap_or("");
 
-    check_bearer_token(&req.headers(), expected_token)?;
+    check_bearer_token(req.headers(), expected_token)?;
 
     Ok(next.run(req).await)
 }
@@ -52,10 +46,7 @@ fn check_bearer_token(
         .unwrap_or("");
 
     if !auth_header.starts_with("Bearer ") || &auth_header[7..] != expected_token {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(OpenAIError::unauthorized()),
-        ));
+        return Err((StatusCode::UNAUTHORIZED, Json(OpenAIError::unauthorized())));
     }
 
     Ok(())

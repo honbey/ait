@@ -28,9 +28,10 @@ pub struct Provider {
     pub updated_at: DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderType {
+    #[default]
     OpenAICompat,
     DeepSeek,
     Zhipu,
@@ -38,15 +39,9 @@ pub enum ProviderType {
     LlamaCpp,
 }
 
-impl Default for ProviderType {
-    fn default() -> Self {
-        ProviderType::OpenAICompat
-    }
-}
-
 impl Provider {
     /// Return a masked version of the API key for safe display.
-    /// None -> null, short keys -> "****", long keys -> first4 + "***" + last4
+    /// None -> null, short keys -> "******", long keys -> first4 + "******" + last4
     pub fn masked_api_key(&self) -> Option<String> {
         self.api_key.as_ref().map(|key| {
             let chars: Vec<char> = key.chars().collect();
@@ -153,15 +148,17 @@ impl Database {
         // Also delete associated models
         let mut deleted_models = 0;
         let cf_models = self.db.cf_handle(MODELS_CF).ok_or("models CF not found")?;
-        for item in self.db.iterator_cf(&cf_models, IteratorMode::Start) {
-            if let Ok((k, v)) = item {
-                let model: Model = serde_json::from_slice(&v).map_err(|e| e.to_string())?;
-                if model.provider_id == id {
-                    self.db
-                        .delete_cf(&cf_models, k)
-                        .map_err(|e| e.to_string())?;
-                    deleted_models += 1;
-                }
+        for item in self
+            .db
+            .iterator_cf(&cf_models, IteratorMode::Start)
+            .flatten()
+        {
+            let model: Model = serde_json::from_slice(&item.1).map_err(|e| e.to_string())?;
+            if model.provider_id == id {
+                self.db
+                    .delete_cf(&cf_models, item.0)
+                    .map_err(|e| e.to_string())?;
+                deleted_models += 1;
             }
         }
 
@@ -187,11 +184,9 @@ impl Database {
             .cf_handle(PROVIDERS_CF)
             .ok_or("providers CF not found")?;
         let mut providers = Vec::new();
-        for item in self.db.iterator_cf(&cf, IteratorMode::Start) {
-            if let Ok((_k, v)) = item {
-                let provider: Provider = serde_json::from_slice(&v).map_err(|e| e.to_string())?;
-                providers.push(provider);
-            }
+        for item in self.db.iterator_cf(&cf, IteratorMode::Start).flatten() {
+            let provider: Provider = serde_json::from_slice(&item.1).map_err(|e| e.to_string())?;
+            providers.push(provider);
         }
         Ok(providers)
     }
@@ -238,11 +233,9 @@ impl Database {
     pub fn list_models(&self) -> Result<Vec<Model>, String> {
         let cf = self.db.cf_handle(MODELS_CF).ok_or("models CF not found")?;
         let mut models = Vec::new();
-        for item in self.db.iterator_cf(&cf, IteratorMode::Start) {
-            if let Ok((_k, v)) = item {
-                let model: Model = serde_json::from_slice(&v).map_err(|e| e.to_string())?;
-                models.push(model);
-            }
+        for item in self.db.iterator_cf(&cf, IteratorMode::Start).flatten() {
+            let model: Model = serde_json::from_slice(&item.1).map_err(|e| e.to_string())?;
+            models.push(model);
         }
         Ok(models)
     }

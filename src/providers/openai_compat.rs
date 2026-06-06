@@ -34,10 +34,8 @@ impl UpstreamProvider for OpenAICompatProvider {
         let mut body = body.clone();
 
         // Replace model name with upstream model name
-        if let Some(model_val) = body.get("model") {
-            if let Some(_original) = model_val.as_str() {
-                body["model"] = serde_json::json!(upstream_model);
-            }
+        if body.get("model").and_then(|m| m.as_str()).is_some() {
+            body["model"] = serde_json::json!(upstream_model);
         }
 
         if stream {
@@ -46,7 +44,8 @@ impl UpstreamProvider for OpenAICompatProvider {
 
         let body_bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
 
-        let mut builder = self.client
+        let mut builder = self
+            .client
             .post(self.upstream_url(upstream_path))
             .header("Content-Type", "application/json")
             .body(body_bytes);
