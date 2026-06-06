@@ -1,3 +1,118 @@
-fn main() {
-    println!("Hello, world!");
+mod app;
+mod config;
+mod db;
+mod handlers;
+mod middleware;
+mod providers;
+
+use axum::{
+    routing::{delete, get, post, put, Router},
+    Extension,
+};
+use std::net::SocketAddr;
+use tower_http::trace::TraceLayer;
+use tracing::info;
+
+use handlers::admin::{
+    create_model, create_provider, delete_model, delete_provider,
+    get_provider, get_provider_api_key, list_models, list_providers, update_provider,
+};
+use handlers::proxy::{chat_completions, completions, embeddings, health, list_models_proxy};
+use middleware::{admin_auth_middleware, auth_middleware};
+
+#[tokio::main]
+async fn main() {
+    init_logging();
+
+    let config_path = parse_config_path();
+    let config = match config::ConfigApp::new(config_path.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load config: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let state = app::AppState::new(config.clone());
+
+    let app = build_app(state, &config);
+
+    let addr: SocketAddr =
+        format!("{}:{}", config.server.host, config.server.port)
+            .parse()
+            .expect("Invalid host:port");
+
+    info!("ait starting on http://{}", addr);
+
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+
+fn parse_config_path() -> Option<String> {
+    let mut args = std::env::args();
+    args.next(); // skip program name
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-c" | "--config" => {
+                return args.next().or_else(|| {
+                    eprintln!("error: -c/--config requires a path argument");
+                    std::process::exit(1);
+                });
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn init_logging() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "ait=debug,axum=info".into()),
+        )
+        .init();
+}
+
+fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
+    // Admin API routes (admin auth required)
+    let admin_api = Router::new()
+        // Provider management
+        .route("/admin/providers", post(create_provider))
+        .route("/admin/providers", get(list_providers))
+        .route("/admin/providers/{id}", get(get_provider))
+        .route("/admin/providers/{id}", put(update_provider))
+        .route("/admin/providers/{id}", delete(delete_provider))
+        .route("/admin/providers/{id}/api-key", get(get_provider_api_key))
+        // Model management
+        .route("/admin/models", post(create_model))
+        .route("/admin/models", get(list_models))
+        .route("/admin/models/{name}", delete(delete_model))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            admin_auth_middleware,
+        ));
+
+    // Health check (no auth required)
+    let health_route = Router::new()
+        .route("/v1/health", get(health));
+
+    // OpenAI-compatible proxy routes (auth required)
+    let proxy_api = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .route("/v1/completions", post(completions))
+        .route("/v1/embeddings", post(embeddings))
+        .route("/v1/models", get(list_models_proxy))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ));
+
+    Router::new()
+        .merge(admin_api)
+        .merge(health_route)
+        .merge(proxy_api)
+        .with_state(state)
+        .layer(Extension(config.clone()))
+        .layer(TraceLayer::new_for_http())
 }
