@@ -1,0 +1,20 @@
+[server]
+host = "127.0.0.1"
+port = 8000
+# 健康检查是否返回详细信息（版本、运行时间等）
+health_detail = false
+
+[auth]
+# 仅控制 /v1/* 代理接口的认证开关，Admin 接口始终需要认证
+enabled = true
+# /v1/* 代理接口 Token，不足 16 位时自动生成随机值
+token = "your-secret-token-here"
+# /admin/* 管理接口 Token，不足 16 位时回退到 token
+admin_token = "your-admin-token-here"
+
+[database]
+path = "./data/ait.rocksdb"
+
+[proxy]
+timeout_secs = 300
+stream = true

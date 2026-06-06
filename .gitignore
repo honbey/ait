@@ -56,7 +56,13 @@ Dock
 Thumbs.db
 ehthumbs.db
 
+# Config (actual config with secrets, keep .example instead)
+config/ait.toml
+data/
+*.clinerules
+
 # Custom
 .vscode/settings.json
 *.tmp
 a.*
+*.http
