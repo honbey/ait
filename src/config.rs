@@ -1,5 +1,5 @@
 use config::{Config, ConfigError, Environment, File, FileFormat};
-use rand::Rng;
+use rand::RngExt;
 use serde::Deserialize;
 use tracing::warn;
 
@@ -83,9 +83,9 @@ impl ConfigApp {
 /// Generate a random alphanumeric token of the given length.
 fn generate_random_token(len: usize) -> String {
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..len)
-        .map(|_| CHARS[rng.gen_range(0..CHARS.len())] as char)
+        .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
         .collect()
 }
 
