@@ -10,7 +10,11 @@ tokio = { version = "1", features = ["full"] }
 # HTTP server
 axum = { version = "0.8", features = ["json", "macros"] }
 tower-http = { version = "0.6", features = ["trace"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = [
+  "rustls",
+  "json",
+  "stream",
+] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -20,7 +24,7 @@ serde_json = "1"
 config = "0.15"
 
 # Database
-rocksdb = { version = "0.22", default-features = false, features = ["snappy"] }
+rocksdb = { version = "0.24", default-features = false, features = ["snappy"] }
 
 # UUID
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -39,4 +43,4 @@ async-trait = "0.1"
 futures-util = "0.3"
 
 # Random token generation
-rand = "0.8"
+rand = "0.10"
