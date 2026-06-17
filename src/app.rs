@@ -1,5 +1,5 @@
 use crate::config::ConfigApp;
-use crate::db::Database;
+use crate::db::{Database, User};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
@@ -25,6 +25,22 @@ impl AppState {
             .timeout(std::time::Duration::from_secs(config.proxy.timeout_secs))
             .build()
             .expect("Failed to build HTTP client");
+
+        // Bootstrap admin user on first startup if configured
+        if config.auth.bootstrap_admin {
+            let users = db.list_users().unwrap_or_default();
+            if users.is_empty() {
+                let password_hash = bcrypt::hash(&config.auth.bootstrap_password, bcrypt::DEFAULT_COST)
+                    .expect("Failed to hash bootstrap password");
+                let user = User {
+                    username: config.auth.bootstrap_username.clone(),
+                    password_hash,
+                    created_at: Utc::now(),
+                };
+                db.insert_user(user).expect("Failed to bootstrap admin user");
+                tracing::info!("Bootstrapped admin user '{}'", config.auth.bootstrap_username);
+            }
+        }
 
         Self {
             config,

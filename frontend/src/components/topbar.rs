@@ -1,11 +1,12 @@
 use sycamore::prelude::*;
 use sycamore::web::tags::*;
+use sycamore::web::events;
+use sycamore_futures::spawn_local_scoped;
 
 use super::dark_mode_toggle::DarkModeToggle;
 use super::dark_mode_toggle::DarkModeToggleProps;
 use crate::i18n::I18n;
 use crate::route::Route;
-use sycamore::web::events;
 
 #[derive(Props)]
 pub struct TopbarProps {
@@ -168,8 +169,13 @@ pub fn Topbar(props: TopbarProps) -> View {
                                                         .class("w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700")
                                                         .on(events::click, move |_| {
                                                             show_dropdown.set(false);
-                                                            auth.set(false);
-                                                            r.set(crate::route::Route::Login);
+                                                            let a = auth;
+                                                            let rt = r;
+                                                            spawn_local_scoped(async move {
+                                                                crate::api::logout_api().await.ok();
+                                                                a.set(false);
+                                                                rt.set(crate::route::Route::Index);
+                                                            });
                                                         })
                                                         .children(i18n_logout.t("logout")),
                                                 )
