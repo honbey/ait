@@ -10,6 +10,8 @@ use uuid::Uuid;
 // RocksDB Column Family
 const PROVIDERS_CF: &str = "providers";
 const MODELS_CF: &str = "models";
+const USERS_CF: &str = "users";
+const SESSIONS_CF: &str = "sessions";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
@@ -69,6 +71,24 @@ pub struct Model {
     pub created_at: DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub username: String,
+    pub password_hash: String,
+    #[serde(with = "ts_seconds", default)]
+    pub created_at: DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub session_key: String,
+    pub username: String,
+    #[serde(with = "ts_seconds", default)]
+    pub created_at: DateTime<chrono::Utc>,
+    #[serde(with = "ts_seconds")]
+    pub expires_at: DateTime<chrono::Utc>,
+}
+
 pub struct Database {
     db: Arc<RocksDB>,
 }
@@ -83,7 +103,7 @@ impl Database {
         db_opts.create_if_missing(true);
         db_opts.create_missing_column_families(true);
 
-        let cf_names = vec![PROVIDERS_CF, MODELS_CF];
+        let cf_names = vec![PROVIDERS_CF, MODELS_CF, USERS_CF, SESSIONS_CF];
         let db = RocksDB::open_cf(&db_opts, path, &cf_names)?;
 
         Ok(Self { db: Arc::new(db) })
@@ -255,6 +275,83 @@ impl Database {
         };
 
         Ok(Some((model, provider)))
+    }
+
+    // --- User CRUD ---
+
+    pub fn insert_user(&self, mut user: User) -> Result<User, String> {
+        user.created_at = Utc::now();
+        let key = format!("user:{}", user.username);
+        let val = serde_json::to_string(&user).map_err(|e| e.to_string())?;
+        let cf = self.db.cf_handle(USERS_CF).ok_or("users CF not found")?;
+        self.db.put_cf(&cf, &key, &val).map_err(|e| e.to_string())?;
+        Ok(user)
+    }
+
+    pub fn get_user(&self, username: &str) -> Result<Option<User>, String> {
+        let key = format!("user:{}", username);
+        let cf = self.db.cf_handle(USERS_CF).ok_or("users CF not found")?;
+        self.db
+            .get_cf(&cf, &key)
+            .map_err(|e| e.to_string())?
+            .map(|val| serde_json::from_slice(&val).map_err(|e| e.to_string()))
+            .transpose()
+    }
+
+    pub fn list_users(&self) -> Result<Vec<User>, String> {
+        let cf = self.db.cf_handle(USERS_CF).ok_or("users CF not found")?;
+        let mut users = Vec::new();
+        for item in self.db.iterator_cf(&cf, IteratorMode::Start).flatten() {
+            let user: User = serde_json::from_slice(&item.1).map_err(|e| e.to_string())?;
+            users.push(user);
+        }
+        Ok(users)
+    }
+
+    // --- Session CRUD ---
+
+    pub fn insert_session(&self, mut session: Session) -> Result<Session, String> {
+        session.created_at = Utc::now();
+        let key = format!("sess:{}", session.session_key);
+        let val = serde_json::to_string(&session).map_err(|e| e.to_string())?;
+        let cf = self
+            .db
+            .cf_handle(SESSIONS_CF)
+            .ok_or("sessions CF not found")?;
+        self.db.put_cf(&cf, &key, &val).map_err(|e| e.to_string())?;
+        Ok(session)
+    }
+
+    pub fn get_session(&self, session_key: &str) -> Result<Option<Session>, String> {
+        let key = format!("sess:{}", session_key);
+        let cf = self
+            .db
+            .cf_handle(SESSIONS_CF)
+            .ok_or("sessions CF not found")?;
+        self.db
+            .get_cf(&cf, &key)
+            .map_err(|e| e.to_string())?
+            .map(|val| serde_json::from_slice(&val).map_err(|e| e.to_string()))
+            .transpose()
+    }
+
+    pub fn delete_session(&self, session_key: &str) -> Result<bool, String> {
+        let key = format!("sess:{}", session_key);
+        let cf = self
+            .db
+            .cf_handle(SESSIONS_CF)
+            .ok_or("sessions CF not found")?;
+        self.db.delete_cf(&cf, &key).map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+
+    /// Check if a session key exists and has not expired.
+    /// Returns `None` on DB error, `Some(true/false)` otherwise.
+    pub fn is_valid_session(&self, session_key: &str) -> Result<bool, String> {
+        match self.get_session(session_key)? {
+            Some(s) => Ok(s.expires_at > Utc::now()),
+            None => Ok(false),
+        }
     }
 }
 

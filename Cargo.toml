@@ -83,3 +83,6 @@ async-trait = "0.1"
 
 # Random token generation
 rand = "0.10"
+
+# Password hashing
+bcrypt = "0.16"

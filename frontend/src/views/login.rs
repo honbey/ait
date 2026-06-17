@@ -2,6 +2,7 @@ use sycamore::prelude::*;
 use sycamore::web::bind;
 use sycamore::web::events;
 use sycamore::web::tags::*;
+use sycamore_futures::spawn_local_scoped;
 
 use crate::i18n::I18n;
 use crate::route::Route;
@@ -10,29 +11,38 @@ pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal
     let username = create_signal(String::new());
     let password = create_signal(String::new());
     let error = create_signal(String::new());
+    let loading = create_signal(false);
 
     let i18n_submit = i18n.clone();
     let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
+
+        if loading.get() {
+            return;
+        }
 
         if username.get_clone().is_empty() || password.get_clone().is_empty() {
             error.set(i18n_submit.t("login_required"));
             return;
         }
 
+        loading.set(true);
         let u = username.get_clone();
         let p = password.get_clone();
-
-        match crate::api::mock_login(&u, &p) {
-            Ok(token) => {
-                crate::get_storage().set_item("ait-auth", &token);
-                authenticated.set(true);
-                route.set(Route::Dashboard);
+        let i18n_async = i18n_submit.clone();
+        let loading_async = loading;
+        spawn_local_scoped(async move {
+            match crate::api::login_api(&u, &p).await {
+                Ok(()) => {
+                    authenticated.set(true);
+                    route.set(Route::Dashboard);
+                }
+                Err(e) => {
+                    error.set(i18n_async.t_replace("login_error", "msg", &e));
+                    loading_async.set(false);
+                }
             }
-            Err(e) => {
-                error.set(i18n_submit.t_replace("login_error", "msg", &e));
-            }
-        }
+        });
     };
 
     form()
@@ -53,7 +63,8 @@ pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal
                             .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
                             .attr("type", "text")
                             .attr("placeholder", i18n.t("username"))
-                            .bind(bind::value, username),
+                            .bind(bind::value, username)
+                            .on(events::input, move |_| error.set(String::new())),
                     )),
                     div().class("mb-6").children((
                         label()
@@ -63,7 +74,8 @@ pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal
                             .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
                             .attr("type", "password")
                             .attr("placeholder", i18n.t("password"))
-                            .bind(bind::value, password),
+                            .bind(bind::value, password)
+                            .on(events::input, move |_| error.set(String::new())),
                     )),
                     View::from_dynamic(move || {
                         let err = error.get_clone();
@@ -73,10 +85,23 @@ pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal
                             p().class("text-red-500 text-sm mb-4").children(err).into()
                         }
                     }),
-                    button()
-                        .attr("type", "submit")
-                        .class("w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition-colors disabled:opacity-50")
-                        .children(i18n.t("login_btn")),
+                    {
+                        let i18n_btn = i18n.clone();
+                        button()
+                            .attr("type", "submit")
+                            .disabled(move || loading.get())
+                            .class("w-full py-2 px-4 bg-indigo-600 hover:enabled:bg-indigo-700 text-white font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2")
+                            .children(View::from_dynamic(move || -> View {
+                                if loading.get() {
+                                    div().class("flex items-center gap-2").children((
+                                        i().class("fas fa-spinner animate-spin"),
+                                        span().children(i18n_btn.t("login_btn")),
+                                    )).into()
+                                } else {
+                                    span().children(i18n_btn.t("login_btn")).into()
+                                }
+                            }))
+                    },
                 )),
         )
         .into()

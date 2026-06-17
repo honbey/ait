@@ -4,6 +4,7 @@ use std::rc::Rc;
 use sycamore::web::console_error;
 
 use sycamore::prelude::*;
+use sycamore_futures::spawn_local_scoped;
 
 mod api;
 mod i18n;
@@ -16,7 +17,6 @@ mod views;
 
 pub const THEME_KEY: &str = "ait-theme";
 pub const LANG_KEY: &str = "ait-lang";
-pub const AUTH_KEY: &str = "ait-auth";
 
 #[derive(Clone)]
 pub enum AppStorage {
@@ -61,12 +61,20 @@ fn App() -> View {
     let initial_dark = matches!(storage.get_item(THEME_KEY), Some(v) if v == "dark");
     let dark = create_signal(initial_dark);
     let route = create_signal(route::Route::Index);
-    let authenticated = create_signal(storage.get_item(AUTH_KEY).is_some());
+    let authenticated = create_signal(false);
 
     let initial_lang = storage
         .get_item(LANG_KEY)
         .unwrap_or_else(|| "zh".to_string());
     let i18n = i18n::I18n::new(&initial_lang);
+
+    // On mount, check if we have a valid session cookie
+    let auth_check = authenticated;
+    spawn_local_scoped(async move {
+        if crate::api::check_session().await.unwrap_or(false) {
+            auth_check.set(true);
+        }
+    });
 
     let i18n_clone = i18n.clone();
     let storage_for_lang = storage.clone();

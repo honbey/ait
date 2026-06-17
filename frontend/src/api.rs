@@ -5,9 +5,6 @@ use gloo_net::http::{Headers, Request};
 
 use crate::models::{DashboardData, Model, Provider};
 
-// Admin token for testing (from config/ait.toml)
-const ADMIN_TOKEN: &str = "";
-
 /// Get base URL from window.location.origin at runtime
 fn get_base_url() -> String {
     sycamore::web::window()
@@ -26,14 +23,10 @@ fn mock_token_consumption() -> u64 {
     17814528
 }
 
-// --- Mock login ---
+// --- Auth headers (session via HttpOnly cookie; static Bearer for CLI/scripts) ---
 
-pub fn mock_login(username: &str, password: &str) -> Result<String, String> {
-    if username == "admin" && password == "admin123" {
-        Ok("mock-session-token".to_string())
-    } else {
-        Err("Invalid credentials".to_string())
-    }
+fn auth_headers() -> Headers {
+    Headers::new()
 }
 
 // --- Generic request helper ---
@@ -53,12 +46,50 @@ async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
     resp.json().await
 }
 
-// --- Auth ---
+// --- Auth API ---
 
-fn auth_headers() -> Headers {
-    let headers = Headers::new();
-    headers.set("Authorization", &format!("Bearer {}", ADMIN_TOKEN));
-    headers
+pub async fn login_api(username: &str, password: &str) -> Result<(), String> {
+    let url = format!("{}/admin/login", get_base_url());
+    let body = serde_json::json!({ "username": username, "password": password });
+    let req = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .map_err(|e| e.to_string())?;
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        if let Ok(err) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(msg) = err.get("message").and_then(|m| m.as_str()) {
+                return Err(msg.to_string());
+            }
+        }
+        return Err(format!("Login failed (HTTP {})", status));
+    }
+
+    Ok(())
+}
+
+pub async fn check_session() -> Result<bool, String> {
+    let url = format!("{}/admin/session", get_base_url());
+    let resp = Request::get(&url)
+        .headers(Headers::new())
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(json.get("authenticated").and_then(|v| v.as_bool()).unwrap_or(false))
+}
+
+pub async fn logout_api() -> Result<(), String> {
+    let url = format!("{}/admin/logout", get_base_url());
+    let req = Request::post(&url)
+        .body("")
+        .map_err(|e| e.to_string())?;
+    req.send().await.map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // --- API functions ---
