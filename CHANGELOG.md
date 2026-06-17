@@ -1,5 +1,22 @@
 # 更新日志
 
+## [v0.1.1] - 2026-06-17
+
+### 新增功能
+
+- **Web 管理界面** — 基于 Sycamore 0.9 的 WASM CSR 前端
+  - 6 个路由页面：首页、登录、仪表盘、提供商、模型、文本生成
+  - 响应式侧边栏 + 移动端浮动按钮
+  - i18n 中英文切换
+  - 深色模式切换（localStorage 持久化）
+  - Provider/Model 表格及详情弹窗
+
+- **会话认证系统**
+  - bcrypt 密码哈希存储
+  - HttpOnly Cookie 存储 session key（XSS 防护）
+  - 首次启动自动创建管理员（`bootstrap_admin`）
+  - Admin 中间件支持三种认证：静态 Token（Bearer）、Session Key（Bearer）、Session Key（Cookie）
+
 ## [v0.1.0] - 2026-06-10
 
 ### 新增功能
