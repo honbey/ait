@@ -1,24 +1,66 @@
-[package]
-name = "ait"
+[workspace]
+members = [".", "frontend"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+authors = ["honbey"]
+license = "MIT"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Stream utilities
+futures-util = "0.3"
+
+[package]
+name = "ait"
+version.workspace = true
+edition.workspace = true
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = false
+
+[profile.release-wasm]
+inherits = "release"
+
+[profile.dev]
+debug = "line-tables-only"
+panic = "abort"
+opt-level = 1
+lto = false
+incremental = true
+overflow-checks = true
+rpath = false
+codegen-units = 2
+
+[profile.dev.package."*"]
+debug = "line-tables-only"
+opt-level = 0
+codegen-units = 2
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+futures-util.workspace = true
+
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
 # HTTP server
 axum = { version = "0.8", features = ["json", "macros"] }
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.7", features = ["trace", "fs"] }
 reqwest = { version = "0.13", default-features = false, features = [
   "rustls",
   "json",
   "stream",
 ] }
-
-# Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 
 # Config
 config = "0.15"
@@ -38,9 +80,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Async traits
 async-trait = "0.1"
-
-# Stream utilities
-futures-util = "0.3"
 
 # Random token generation
 rand = "0.10"

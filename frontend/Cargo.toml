@@ -1,0 +1,23 @@
+[package]
+name = "ait-frontend"
+version.workspace = true
+edition.workspace = true
+
+[package.metadata.sycamore]
+lib-profile-release = "release-wasm"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+futures-util.workspace = true
+
+console_error_panic_hook = "0.1"
+
+sycamore = { version = "0.9", features = ["web", "suspense"] }
+sycamore-futures = "0.9"
+gloo-net = "0.7"
+web-sys = { version = "0.3", features = [
+  "Storage",
+  "Event",
+  "SubmitEvent",
+] }
