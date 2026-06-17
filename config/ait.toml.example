@@ -11,6 +11,12 @@ enabled = true
 token = "your-secret-token-here"
 # /admin/* 管理接口 Token，不足 16 位时回退到 token
 admin_token = "your-admin-token-here"
+# Session 有效期（秒），Web 登录使用
+session_ttl_secs = 86400
+# 首次启动时自动创建初始管理员
+bootstrap_admin = true
+bootstrap_username = "admin"
+bootstrap_password = "admin123"
 
 [database]
 path = "./data/ait.rocksdb"

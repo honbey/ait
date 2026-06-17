@@ -9,6 +9,7 @@ use axum::{
     routing::{delete, get, post, put, Router},
     Extension,
 };
+use tower_http::services::ServeDir;
 use std::net::SocketAddr;
 use tower_http::trace::TraceLayer;
 use tracing::info;
@@ -17,6 +18,7 @@ use handlers::admin::{
     create_model, create_provider, delete_model, delete_provider,
     get_provider, get_provider_api_key, list_models, list_providers, update_provider,
 };
+use handlers::auth::{login_handler, logout_handler, session_check};
 use handlers::proxy::{chat_completions, completions, embeddings, health, list_models_proxy};
 use middleware::{admin_auth_middleware, auth_middleware};
 
@@ -75,6 +77,12 @@ fn init_logging() {
 }
 
 fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
+    // Auth routes (no admin middleware — they handle their own auth logic)
+    let auth_route = Router::new()
+        .route("/admin/login", post(login_handler))
+        .route("/admin/logout", post(logout_handler))
+        .route("/admin/session", get(session_check));
+
     // Admin API routes (admin auth required)
     let admin_api = Router::new()
         // Provider management
@@ -108,7 +116,13 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
             auth_middleware,
         ));
 
+    // Serve frontend static files
+    let frontend_service = ServeDir::new("frontend/dist");
+
     Router::new()
+        .nest_service("/static", frontend_service.clone())
+        .fallback_service(frontend_service)
+        .merge(auth_route)
         .merge(admin_api)
         .merge(health_route)
         .merge(proxy_api)

@@ -25,7 +25,23 @@ pub struct AuthConfig {
     pub token: Option<String>,
     /// Admin token for /admin/* endpoints. If not set, falls back to `token`.
     pub admin_token: Option<String>,
+    /// Session TTL in seconds for web login sessions.
+    #[serde(default = "default_session_ttl")]
+    pub session_ttl_secs: u64,
+    /// Whether to bootstrap an admin user on first startup.
+    #[serde(default)]
+    pub bootstrap_admin: bool,
+    /// Username for the bootstrapped admin user.
+    #[serde(default = "default_bootstrap_username")]
+    pub bootstrap_username: String,
+    /// Password for the bootstrapped admin user.
+    #[serde(default = "default_bootstrap_password")]
+    pub bootstrap_password: String,
 }
+
+fn default_session_ttl() -> u64 { 86400 }
+fn default_bootstrap_username() -> String { "admin".to_string() }
+fn default_bootstrap_password() -> String { "admin123".to_string() }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
@@ -51,6 +67,10 @@ impl ConfigApp {
             .set_default("auth.enabled", true)?
             .set_default("auth.token", "")?
             .set_default("auth.admin_token", "")?
+            .set_default("auth.session_ttl_secs", 86400u64)?
+            .set_default("auth.bootstrap_admin", false)?
+            .set_default("auth.bootstrap_username", "admin")?
+            .set_default("auth.bootstrap_password", "admin123")?
             .set_default("database.path", "./data/ait.rocksdb")?
             .set_default("proxy.timeout_secs", 300u64)?
             .set_default("proxy.stream", true)?
