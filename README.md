@@ -9,6 +9,8 @@
 - **OpenAI 兼容** — 完全兼容 OpenAI API 格式，现有配置 OpenAI 接口应用只需修改  `base_url` 和 `api_key`
 - **多提供商支持** — 支持 OpenAI Compatible（DeepSeek、Zhipu、LlamaCpp 等）和 Ollama
 - **动态管理** — 通过 Admin API 动态添加/更新/删除提供商和模型
+- **Web 管理界面** — 基于 Sycamore 0.9 的 WASM CSR 前端
+- **会话认证** — HttpOnly Cookie 的登录/登出/会话管理
 
 ## 快速开始
 
@@ -36,6 +38,10 @@ health_detail = false
 enabled = true
 token = "your-proxy-token"
 admin_token = "your-admin-token"
+session_ttl_secs = 86400
+bootstrap_admin = true
+bootstrap_username = "admin"
+bootstrap_password = "admin123"
 
 [database]
 path = "./data/ait.rocksdb"
@@ -61,6 +67,18 @@ ait
 # 指定配置文件
 ait -c /path/to/config.toml
 ```
+
+## Web 管理界面
+
+编译时将前端 WASM 静态文件嵌入后端，启动后通过 `http://{host}:{port}` 访问。
+
+| 路径 | 说明 |
+|------|------|
+| / | 首页 |
+| /login | 管理员登录 |
+| /dashboard | 仪表盘 |
+| /providers | 提供商管理 |
+| /models | 模型管理 |
 
 ## API 接口
 
