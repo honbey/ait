@@ -39,19 +39,12 @@ pub async fn admin_auth_middleware(
     req: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, Json<OpenAIError>)> {
-    // Admin endpoints always require authentication regardless of auth.enabled
-    let static_token = state.config.auth.admin_token.as_deref().unwrap_or("");
-
+    // Admin endpoints always require authentication
     let auth_header = req
         .headers()
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
-
-    // Check static admin token first
-    if auth_header.starts_with("Bearer ") && &auth_header[7..] == static_token {
-        return Ok(next.run(req).await);
-    }
 
     // Check session key from Authorization header (Bearer <session_key>)
     if auth_header.starts_with("Bearer ")

@@ -1,5 +1,5 @@
 use crate::config::ConfigApp;
-use crate::db::{Database, User};
+use crate::db::{Database, User, UserRole};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
@@ -35,6 +35,8 @@ impl AppState {
                 let user = User {
                     username: config.auth.bootstrap_username.clone(),
                     password_hash,
+                    role: UserRole::Admin,
+                    allowed: vec![],
                     created_at: Utc::now(),
                 };
                 db.insert_user(user).expect("Failed to bootstrap admin user");

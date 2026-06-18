@@ -1,7 +1,6 @@
 use config::{Config, ConfigError, Environment, File, FileFormat};
 use rand::RngExt;
 use serde::Deserialize;
-use tracing::warn;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ConfigApp {
@@ -23,8 +22,6 @@ pub struct ServerConfig {
 pub struct AuthConfig {
     pub enabled: bool,
     pub token: Option<String>,
-    /// Admin token for /admin/* endpoints. If not set, falls back to `token`.
-    pub admin_token: Option<String>,
     /// Session TTL in seconds for web login sessions.
     #[serde(default = "default_session_ttl")]
     pub session_ttl_secs: u64,
@@ -66,7 +63,6 @@ impl ConfigApp {
             .set_default("server.health_detail", false)?
             .set_default("auth.enabled", true)?
             .set_default("auth.token", "")?
-            .set_default("auth.admin_token", "")?
             .set_default("auth.session_ttl_secs", 86400u64)?
             .set_default("auth.bootstrap_admin", false)?
             .set_default("auth.bootstrap_username", "admin")?
@@ -79,21 +75,15 @@ impl ConfigApp {
             .build()?
             .try_deserialize()?;
 
-        // Validate and auto-generate tokens if needed
+        // Validate and auto-generate proxy token if needed
         let token = app.auth.token.as_deref().unwrap_or("");
         if token.len() < 16 {
             let generated = generate_random_token(32);
-            warn!(
+            tracing::warn!(
                 "auth.token is not set or too short (< 16 chars), using auto-generated token: {}",
                 generated
             );
             app.auth.token = Some(generated);
-        }
-
-        let admin_token = app.auth.admin_token.as_deref().unwrap_or("");
-        if admin_token.len() < 16 {
-            warn!("auth.admin_token is too short (< 16 chars), using auth.token");
-            app.auth.admin_token = app.auth.token.clone();
         }
 
         Ok(app)

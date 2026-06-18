@@ -20,6 +20,9 @@ use handlers::admin::{
 };
 use handlers::auth::{login_handler, logout_handler, session_check};
 use handlers::proxy::{chat_completions, completions, embeddings, health, list_models_proxy};
+use handlers::users::{
+    change_password_handler, delete_user_handler, list_users_handler, update_user_handler,
+};
 use middleware::{admin_auth_middleware, auth_middleware};
 
 #[tokio::main]
@@ -96,6 +99,11 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
         .route("/admin/models", post(create_model))
         .route("/admin/models", get(list_models))
         .route("/admin/models/{name}", delete(delete_model))
+        // User management
+        .route("/admin/users", get(list_users_handler))
+        .route("/admin/users/{username}", put(update_user_handler))
+        .route("/admin/users/{username}", delete(delete_user_handler))
+        .route("/admin/users/{username}/password", put(change_password_handler))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             admin_auth_middleware,

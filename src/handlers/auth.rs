@@ -8,7 +8,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::Session;
+use crate::db::{Session, UserRole, Permission};
 use crate::providers::OpenAIError;
 
 #[derive(Deserialize)]
@@ -20,12 +20,16 @@ pub struct LoginRequest {
 #[derive(Serialize)]
 pub struct LoginResponse {
     pub ok: bool,
+    pub session_key: String,
+    pub role: UserRole,
 }
 
 #[derive(Serialize)]
 pub struct SessionResponse {
     pub authenticated: bool,
     pub username: Option<String>,
+    pub role: Option<UserRole>,
+    pub allowed: Option<Vec<Permission>>,
 }
 
 /// Extract `session_key` from the Cookie header.
@@ -93,7 +97,14 @@ pub async fn login_handler(
         set_cookie_header(&session_key, ttl as i64).parse().unwrap(),
     );
 
-    Ok((headers, Json(LoginResponse { ok: true })))
+    Ok((
+        headers,
+        Json(LoginResponse {
+            ok: true,
+            session_key,
+            role: user.role,
+        }),
+    ))
 }
 
 pub async fn logout_handler(
@@ -123,18 +134,35 @@ pub async fn session_check(
             return Json(SessionResponse {
                 authenticated: false,
                 username: None,
+                role: None,
+                allowed: None,
             });
         }
     };
 
     match state.db.get_session(session_key) {
-        Ok(Some(session)) if session.expires_at > Utc::now() => Json(SessionResponse {
-            authenticated: true,
-            username: Some(session.username),
-        }),
+        Ok(Some(session)) if session.expires_at > Utc::now() => {
+            let user = state.db.get_user(&session.username).ok().flatten();
+            match user {
+                Some(u) => Json(SessionResponse {
+                    authenticated: true,
+                    username: Some(session.username),
+                    role: Some(u.role),
+                    allowed: Some(u.allowed),
+                }),
+                None => Json(SessionResponse {
+                    authenticated: false,
+                    username: None,
+                    role: None,
+                    allowed: None,
+                }),
+            }
+        }
         _ => Json(SessionResponse {
             authenticated: false,
             username: None,
+            role: None,
+            allowed: None,
         }),
     }
 }

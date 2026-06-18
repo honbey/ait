@@ -7,6 +7,21 @@ use std::path::Path;
 use std::sync::Arc;
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum UserRole {
+    #[default]
+    User,
+    Admin,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Permission {
+    pub provider_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_names: Vec<String>,
+}
+
 // RocksDB Column Family
 const PROVIDERS_CF: &str = "providers";
 const MODELS_CF: &str = "models";
@@ -75,6 +90,10 @@ pub struct Model {
 pub struct User {
     pub username: String,
     pub password_hash: String,
+    #[serde(default)]
+    pub role: UserRole,
+    #[serde(default)]
+    pub allowed: Vec<Permission>,
     #[serde(with = "ts_seconds", default)]
     pub created_at: DateTime<chrono::Utc>,
 }
@@ -306,6 +325,29 @@ impl Database {
             users.push(user);
         }
         Ok(users)
+    }
+
+    pub fn update_user(&self, username: &str, mut user: User) -> Result<User, String> {
+        let key = format!("user:{}", username);
+        let cf = self.db.cf_handle(USERS_CF).ok_or("users CF not found")?;
+
+        let existing = self.get_user(username)?;
+        match existing {
+            Some(_) => {
+                user.created_at = Utc::now();
+                let val = serde_json::to_string(&user).map_err(|e| e.to_string())?;
+                self.db.put_cf(&cf, &key, &val).map_err(|e| e.to_string())?;
+                Ok(user)
+            }
+            None => Err(format!("User '{}' not found", username)),
+        }
+    }
+
+    pub fn delete_user(&self, username: &str) -> Result<bool, String> {
+        let key = format!("user:{}", username);
+        let cf = self.db.cf_handle(USERS_CF).ok_or("users CF not found")?;
+        self.db.delete_cf(&cf, &key).map_err(|e| e.to_string())?;
+        Ok(true)
     }
 
     // --- Session CRUD ---
