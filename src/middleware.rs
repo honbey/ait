@@ -1,4 +1,5 @@
 use crate::app::AppState;
+use crate::db::{Permission, UserRole};
 use crate::error::AitError;
 use axum::{
     Json,
@@ -8,7 +9,22 @@ use axum::{
     response::Response,
 };
 
+#[derive(Clone)]
+pub struct SessionUser {
+    pub username: String,
+    pub role: UserRole,
+    pub allowed: Vec<Permission>,
+}
+
+/// Extract `session_key` from Authorization header (Bearer) or Cookie header.
 fn extract_session_key(headers: &HeaderMap) -> Option<&str> {
+    if let Some(key) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+    {
+        return Some(key);
+    }
     let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
     for pair in cookie.split(';') {
         let pair = pair.trim();
@@ -36,34 +52,37 @@ pub async fn auth_middleware(
 
 pub async fn admin_auth_middleware(
     State(state): State<AppState>,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     // Admin endpoints always require authentication
-    let auth_header = req
-        .headers()
-        .get("Authorization")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("");
+    let session_key = extract_session_key(req.headers())
+        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
-    // Check session key from Authorization header (Bearer <session_key>)
-    if auth_header.starts_with("Bearer ")
-        && state
-            .db
-            .is_valid_session(&auth_header[7..])
-            .unwrap_or(false)
-    {
-        return Ok(next.run(req).await);
+    let session = state
+        .db
+        .get_session(session_key)
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(AitError::internal_error("Database error"))))?
+        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+
+    if session.expires_at <= chrono::Utc::now() {
+        return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
     }
 
-    // Check session key from Cookie header (for web login)
-    if let Some(session_key) = extract_session_key(req.headers())
-        && state.db.is_valid_session(session_key).unwrap_or(false)
-    {
-        return Ok(next.run(req).await);
-    }
+    let user = state
+        .db
+        .get_user(&session.username)
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(AitError::internal_error("Database error"))))?
+        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
-    Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))
+    let session_user = SessionUser {
+        username: user.username,
+        role: user.role,
+        allowed: user.allowed,
+    };
+
+    req.extensions_mut().insert(session_user);
+    Ok(next.run(req).await)
 }
 
 fn check_bearer_token(

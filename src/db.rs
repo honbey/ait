@@ -387,14 +387,6 @@ impl Database {
         Ok(true)
     }
 
-    /// Check if a session key exists and has not expired.
-    /// Returns `None` on DB error, `Some(true/false)` otherwise.
-    pub fn is_valid_session(&self, session_key: &str) -> Result<bool, String> {
-        match self.get_session(session_key)? {
-            Some(s) => Ok(s.expires_at > Utc::now()),
-            None => Ok(false),
-        }
-    }
 }
 
 // Database is safe to share across threads (Arc internally)
