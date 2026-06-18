@@ -30,17 +30,23 @@ impl AppState {
         if config.auth.bootstrap_admin {
             let users = db.list_users().unwrap_or_default();
             if users.is_empty() {
-                let password_hash = bcrypt::hash(&config.auth.bootstrap_password, bcrypt::DEFAULT_COST)
-                    .expect("Failed to hash bootstrap password");
+                let password_hash =
+                    bcrypt::hash(&config.auth.bootstrap_password, bcrypt::DEFAULT_COST)
+                        .expect("Failed to hash bootstrap password");
                 let user = User {
                     username: config.auth.bootstrap_username.clone(),
                     password_hash,
                     role: UserRole::Admin,
                     allowed: vec![],
+                    api_keys: vec![],
                     created_at: Utc::now(),
                 };
-                db.insert_user(user).expect("Failed to bootstrap admin user");
-                tracing::info!("Bootstrapped admin user '{}'", config.auth.bootstrap_username);
+                db.insert_user(user)
+                    .expect("Failed to bootstrap admin user");
+                tracing::info!(
+                    "Bootstrapped admin user '{}'",
+                    config.auth.bootstrap_username
+                );
             }
         }
 
@@ -52,3 +58,4 @@ impl AppState {
         }
     }
 }
+

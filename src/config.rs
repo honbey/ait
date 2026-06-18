@@ -1,5 +1,4 @@
 use config::{Config, ConfigError, Environment, File, FileFormat};
-use rand::RngExt;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -21,7 +20,6 @@ pub struct ServerConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct AuthConfig {
     pub enabled: bool,
-    pub token: Option<String>,
     /// Session TTL in seconds for web login sessions.
     #[serde(default = "default_session_ttl")]
     pub session_ttl_secs: u64,
@@ -36,9 +34,15 @@ pub struct AuthConfig {
     pub bootstrap_password: String,
 }
 
-fn default_session_ttl() -> u64 { 86400 }
-fn default_bootstrap_username() -> String { "admin".to_string() }
-fn default_bootstrap_password() -> String { "admin123".to_string() }
+fn default_session_ttl() -> u64 {
+    86400
+}
+fn default_bootstrap_username() -> String {
+    "admin".to_string()
+}
+fn default_bootstrap_password() -> String {
+    "admin123".to_string()
+}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
@@ -57,12 +61,11 @@ impl ConfigApp {
     pub fn new(config_path: Option<&str>) -> Result<Self, ConfigError> {
         let config_file = config_path.unwrap_or("config/ait");
 
-        let mut app: Self = Config::builder()
+        let app: Self = Config::builder()
             .set_default("server.host", "127.0.0.1")?
             .set_default("server.port", 8000u16)?
             .set_default("server.health_detail", false)?
             .set_default("auth.enabled", true)?
-            .set_default("auth.token", "")?
             .set_default("auth.session_ttl_secs", 86400u64)?
             .set_default("auth.bootstrap_admin", false)?
             .set_default("auth.bootstrap_username", "admin")?
@@ -75,28 +78,8 @@ impl ConfigApp {
             .build()?
             .try_deserialize()?;
 
-        // Validate and auto-generate proxy token if needed
-        let token = app.auth.token.as_deref().unwrap_or("");
-        if token.len() < 16 {
-            let generated = generate_random_token(32);
-            tracing::warn!(
-                "auth.token is not set or too short (< 16 chars), using auto-generated token: {}",
-                generated
-            );
-            app.auth.token = Some(generated);
-        }
-
         Ok(app)
     }
-}
-
-/// Generate a random alphanumeric token of the given length.
-fn generate_random_token(len: usize) -> String {
-    const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let mut rng = rand::rng();
-    (0..len)
-        .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
-        .collect()
 }
 
 #[cfg(test)]

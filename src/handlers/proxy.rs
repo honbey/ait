@@ -1,4 +1,5 @@
 use axum::{
+    Extension,
     extract::{State, Json},
     http::{HeaderMap, HeaderName, StatusCode},
     response::{sse::Event, IntoResponse, Response, Sse},
@@ -9,28 +10,33 @@ use futures_util::StreamExt;
 use tracing::{info, warn};
 
 use crate::app::AppState;
+use crate::db::{UserRole, Permission};
 use crate::error::AitError;
+use crate::middleware::SessionUser;
 use crate::providers::create_provider;
 
 pub async fn chat_completions(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionUser>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, body, "/v1/chat/completions").await
+    proxy_request(state, session, body, "/v1/chat/completions").await
 }
 
 pub async fn completions(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionUser>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, body, "/v1/completions").await
+    proxy_request(state, session, body, "/v1/completions").await
 }
 
 pub async fn embeddings(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionUser>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, body, "/v1/embeddings").await
+    proxy_request(state, session, body, "/v1/embeddings").await
 }
 
 pub async fn health(State(state): State<AppState>) -> AxumJson<serde_json::Value> {
@@ -62,6 +68,7 @@ pub async fn health(State(state): State<AppState>) -> AxumJson<serde_json::Value
 
 pub async fn list_models_proxy(
     State(state): State<AppState>,
+    Extension(session): Extension<SessionUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
     let models = state.db.list_models().map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(AitError::internal_error(e)))
@@ -74,6 +81,13 @@ pub async fn list_models_proxy(
     let data: Vec<serde_json::Value> = models
         .into_iter()
         .filter(|m| m.enabled)
+        .filter(|m| match session.role {
+            UserRole::Admin => true,
+            UserRole::User => session.allowed.iter().any(|a| {
+                a.provider_id == m.provider_id
+                    && (a.model_names.is_empty() || a.model_names.contains(&m.name))
+            }),
+        })
         .map(|m| {
             let owned_by = providers
                 .iter()
@@ -95,10 +109,35 @@ pub async fn list_models_proxy(
     })))
 }
 
+fn check_model_access(model_provider_id: &str, model_name: &str, session: &SessionUser) -> Result<(), (StatusCode, Json<AitError>)> {
+    match session.role {
+        UserRole::Admin => Ok(()),
+        UserRole::User => {
+            let has_access = session.allowed.iter().any(|a: &Permission| {
+                a.provider_id == model_provider_id
+                    && (a.model_names.is_empty() || a.model_names.contains(&model_name.to_string()))
+            });
+            if has_access {
+                Ok(())
+            } else {
+                Err((
+                    StatusCode::FORBIDDEN,
+                    Json(AitError {
+                        message: format!("You don't have access to model '{}'", model_name),
+                        code: 403,
+                        r#type: "forbidden".to_string(),
+                    }),
+                ))
+            }
+        }
+    }
+}
+
 // --- Core Proxy Logic ---
 
 pub async fn proxy_request(
     state: AppState,
+    session: SessionUser,
     body: serde_json::Value,
     upstream_path: &str,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
@@ -134,6 +173,9 @@ pub async fn proxy_request(
             ));
         }
     };
+
+    // Check access permissions
+    check_model_access(provider.id.as_str(), model_name, &session)?;
 
     // Check if stream is requested
     let stream = body

@@ -7,8 +7,6 @@ health_detail = false
 [auth]
 # 仅控制 /v1/* 代理接口的认证开关，Admin 接口始终需要认证
 enabled = true
-# /v1/* 代理接口 Token，不足 16 位时自动生成随机值
-token = "your-secret-token-here"
 # Session 有效期（秒），Web 登录使用
 session_ttl_secs = 86400
 # 首次启动时自动创建初始管理员

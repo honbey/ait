@@ -27,6 +27,7 @@ const PROVIDERS_CF: &str = "providers";
 const MODELS_CF: &str = "models";
 const USERS_CF: &str = "users";
 const SESSIONS_CF: &str = "sessions";
+const API_KEYS_CF: &str = "api_keys";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
@@ -87,6 +88,38 @@ pub struct Model {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKey {
+    pub key: String,
+    pub name: String,
+    #[serde(with = "ts_seconds", default)]
+    pub created_at: DateTime<chrono::Utc>,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// Stored in the api_keys CF for O(1) reverse lookup by key value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKeyInfo {
+    pub username: String,
+    pub name: String,
+    #[serde(with = "ts_seconds", default)]
+    pub created_at: DateTime<chrono::Utc>,
+}
+
+impl ApiKey {
+    pub fn masked(&self) -> String {
+        let chars: Vec<char> = self.key.chars().collect();
+        if chars.len() <= 10 {
+            "sk-******".to_string()
+        } else {
+            let prefix: String = chars[..6].iter().collect();
+            let suffix: String = chars[chars.len() - 4..].iter().collect();
+            format!("{}******{}", prefix, suffix)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub username: String,
     pub password_hash: String,
@@ -94,6 +127,8 @@ pub struct User {
     pub role: UserRole,
     #[serde(default)]
     pub allowed: Vec<Permission>,
+    #[serde(default)]
+    pub api_keys: Vec<ApiKey>,
     #[serde(with = "ts_seconds", default)]
     pub created_at: DateTime<chrono::Utc>,
 }
@@ -122,7 +157,7 @@ impl Database {
         db_opts.create_if_missing(true);
         db_opts.create_missing_column_families(true);
 
-        let cf_names = vec![PROVIDERS_CF, MODELS_CF, USERS_CF, SESSIONS_CF];
+        let cf_names = vec![PROVIDERS_CF, MODELS_CF, USERS_CF, SESSIONS_CF, API_KEYS_CF];
         let db = RocksDB::open_cf(&db_opts, path, &cf_names)?;
 
         Ok(Self { db: Arc::new(db) })
@@ -387,6 +422,86 @@ impl Database {
         Ok(true)
     }
 
+    // --- API Key CRUD ---
+
+    fn generate_api_key() -> String {
+        use rand::RngExt;
+        const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let mut rng = rand::rng();
+        let random: String = (0..32)
+            .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
+            .collect();
+        format!("sk-{}", random)
+    }
+
+    pub fn insert_api_key(&self, username: &str, name: &str) -> Result<ApiKey, String> {
+        let key = Self::generate_api_key();
+        let now = Utc::now();
+        let api_key = ApiKey {
+            key: key.clone(),
+            name: name.to_string(),
+            created_at: now,
+            enabled: true,
+        };
+
+        // Store in api_keys CF for reverse lookup
+        let info = ApiKeyInfo {
+            username: username.to_string(),
+            name: name.to_string(),
+            created_at: now,
+        };
+        let cf = self
+            .db
+            .cf_handle(API_KEYS_CF)
+            .ok_or("api_keys CF not found")?;
+        self.db
+            .put_cf(
+                &cf,
+                &key,
+                serde_json::to_string(&info).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+
+        // Append to user's api_keys list
+        let mut user = self
+            .get_user(username)?
+            .ok_or_else(|| format!("User '{}' not found", username))?;
+        user.api_keys.push(api_key.clone());
+        self.update_user(username, user)?;
+
+        Ok(api_key)
+    }
+
+    pub fn get_user_by_api_key(&self, api_key: &str) -> Result<Option<String>, String> {
+        let cf = self
+            .db
+            .cf_handle(API_KEYS_CF)
+            .ok_or("api_keys CF not found")?;
+        self.db
+            .get_cf(&cf, api_key)
+            .map_err(|e| e.to_string())?
+            .map(|val| {
+                let info: ApiKeyInfo = serde_json::from_slice(&val).map_err(|e| e.to_string())?;
+                Ok(info.username)
+            })
+            .transpose()
+    }
+
+    pub fn delete_api_key(&self, username: &str, api_key: &str) -> Result<bool, String> {
+        let cf = self
+            .db
+            .cf_handle(API_KEYS_CF)
+            .ok_or("api_keys CF not found")?;
+        self.db.delete_cf(&cf, api_key).map_err(|e| e.to_string())?;
+
+        let mut user = self
+            .get_user(username)?
+            .ok_or_else(|| format!("User '{}' not found", username))?;
+        user.api_keys.retain(|k| k.key != api_key);
+        self.update_user(username, user)?;
+
+        Ok(true)
+    }
 }
 
 // Database is safe to share across threads (Arc internally)
