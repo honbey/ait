@@ -1,5 +1,5 @@
 use crate::app::AppState;
-use crate::providers::OpenAIError;
+use crate::error::AitError;
 use axum::{
     Json,
     extract::{Request, State},
@@ -23,7 +23,7 @@ pub async fn auth_middleware(
     State(state): State<AppState>,
     req: Request,
     next: Next,
-) -> Result<Response, (StatusCode, Json<OpenAIError>)> {
+) -> Result<Response, (StatusCode, Json<AitError>)> {
     if !state.config.auth.enabled {
         return Ok(next.run(req).await);
     }
@@ -38,7 +38,7 @@ pub async fn admin_auth_middleware(
     State(state): State<AppState>,
     req: Request,
     next: Next,
-) -> Result<Response, (StatusCode, Json<OpenAIError>)> {
+) -> Result<Response, (StatusCode, Json<AitError>)> {
     // Admin endpoints always require authentication
     let auth_header = req
         .headers()
@@ -63,20 +63,20 @@ pub async fn admin_auth_middleware(
         return Ok(next.run(req).await);
     }
 
-    Err((StatusCode::UNAUTHORIZED, Json(OpenAIError::unauthorized())))
+    Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))
 }
 
 fn check_bearer_token(
     headers: &HeaderMap,
     expected_token: &str,
-) -> Result<(), (StatusCode, Json<OpenAIError>)> {
+) -> Result<(), (StatusCode, Json<AitError>)> {
     let auth_header = headers
         .get("Authorization")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
 
     if !auth_header.starts_with("Bearer ") || &auth_header[7..] != expected_token {
-        return Err((StatusCode::UNAUTHORIZED, Json(OpenAIError::unauthorized())));
+        return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
     }
 
     Ok(())

@@ -9,26 +9,27 @@ use futures_util::StreamExt;
 use tracing::{info, warn};
 
 use crate::app::AppState;
-use crate::providers::{OpenAIError, create_provider};
+use crate::error::AitError;
+use crate::providers::create_provider;
 
 pub async fn chat_completions(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
-) -> Result<Response, (StatusCode, Json<OpenAIError>)> {
+) -> Result<Response, (StatusCode, Json<AitError>)> {
     proxy_request(state, body, "/v1/chat/completions").await
 }
 
 pub async fn completions(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
-) -> Result<Response, (StatusCode, Json<OpenAIError>)> {
+) -> Result<Response, (StatusCode, Json<AitError>)> {
     proxy_request(state, body, "/v1/completions").await
 }
 
 pub async fn embeddings(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
-) -> Result<Response, (StatusCode, Json<OpenAIError>)> {
+) -> Result<Response, (StatusCode, Json<AitError>)> {
     proxy_request(state, body, "/v1/embeddings").await
 }
 
@@ -61,13 +62,13 @@ pub async fn health(State(state): State<AppState>) -> AxumJson<serde_json::Value
 
 pub async fn list_models_proxy(
     State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<OpenAIError>)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
     let models = state.db.list_models().map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(OpenAIError::internal_error(e)))
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(AitError::internal_error(e)))
     })?;
 
     let providers = state.db.list_providers().map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(OpenAIError::internal_error(e)))
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(AitError::internal_error(e)))
     })?;
 
     let data: Vec<serde_json::Value> = models
@@ -100,7 +101,7 @@ pub async fn proxy_request(
     state: AppState,
     body: serde_json::Value,
     upstream_path: &str,
-) -> Result<Response, (StatusCode, Json<OpenAIError>)> {
+) -> Result<Response, (StatusCode, Json<AitError>)> {
     // Extract model name
     let model_name = body
         .get("model")
@@ -108,7 +109,7 @@ pub async fn proxy_request(
         .ok_or_else(|| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(OpenAIError::bad_request("Missing 'model' field in request body")),
+                Json(AitError::bad_request("Missing 'model' field in request body")),
             )
         })?;
 
@@ -120,7 +121,7 @@ pub async fn proxy_request(
         Ok(None) => {
             return Err((
                 StatusCode::NOT_FOUND,
-                Json(OpenAIError::not_found(format!(
+                Json(AitError::not_found(format!(
                     "Model '{}' not found or disabled",
                     model_name
                 ))),
@@ -129,7 +130,7 @@ pub async fn proxy_request(
         Err(e) => {
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(OpenAIError::internal_error(e)),
+                Json(AitError::internal_error(e)),
             ));
         }
     };
@@ -149,7 +150,7 @@ pub async fn proxy_request(
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
-                Json(OpenAIError::bad_request(e)),
+                Json(AitError::bad_request(e)),
             )
         })?;
 
@@ -172,7 +173,7 @@ async fn proxy_non_streamed(
     request: reqwest::Request,
     provider: &crate::db::Provider,
     _model: &crate::db::Model,
-) -> Result<impl IntoResponse + use<>, (StatusCode, Json<OpenAIError>)> {
+) -> Result<impl IntoResponse + use<>, (StatusCode, Json<AitError>)> {
     let response = state
         .http_client
         .execute(request)
@@ -180,7 +181,7 @@ async fn proxy_non_streamed(
         .map_err(|e| {
             (
                 StatusCode::BAD_GATEWAY,
-                Json(OpenAIError::upstream_error(
+                Json(AitError::upstream_error(
                     502,
                     format!("Failed to connect to provider '{}': {}", provider.name, e),
                 )),
@@ -191,14 +192,14 @@ async fn proxy_non_streamed(
     let bytes = response.bytes().await.map_err(|e| {
         (
             StatusCode::BAD_GATEWAY,
-            Json(OpenAIError::upstream_error(502, e.to_string())),
+            Json(AitError::upstream_error(502, e.to_string())),
         )
     })?;
 
     if !status.is_success() {
         return Err((
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            Json(OpenAIError::upstream_error(
+            Json(AitError::upstream_error(
                 status.as_u16(),
                 String::from_utf8_lossy(&bytes).to_string(),
             )),
@@ -218,7 +219,7 @@ async fn proxy_streamed(
     request: reqwest::Request,
     provider: &crate::db::Provider,
     _model: &crate::db::Model,
-) -> Result<impl IntoResponse + use<>, (StatusCode, Json<OpenAIError>)> {
+) -> Result<impl IntoResponse + use<>, (StatusCode, Json<AitError>)> {
     let response = state
         .http_client
         .execute(request)
@@ -226,7 +227,7 @@ async fn proxy_streamed(
         .map_err(|e| {
             (
                 StatusCode::BAD_GATEWAY,
-                Json(OpenAIError::upstream_error(
+                Json(AitError::upstream_error(
                     502,
                     format!("Failed to connect to provider '{}': {}", provider.name, e),
                 )),
@@ -238,7 +239,7 @@ async fn proxy_streamed(
         let body = response.text().await.unwrap_or_default();
         return Err((
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            Json(OpenAIError::upstream_error(status.as_u16(), body)),
+            Json(AitError::upstream_error(status.as_u16(), body)),
         ));
     }
 

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::db::{Permission, User, UserRole};
-use crate::providers::OpenAIError;
+use crate::error::AitError;
 
 #[derive(Serialize)]
 pub struct UserInfo {
@@ -61,10 +61,10 @@ fn extract_session_key(headers: &HeaderMap) -> Option<&str> {
     None
 }
 
-fn unauthorized(msg: &str) -> (StatusCode, Json<OpenAIError>) {
+fn unauthorized(msg: &str) -> (StatusCode, Json<AitError>) {
     (
         StatusCode::UNAUTHORIZED,
-        Json(OpenAIError {
+        Json(AitError {
             message: msg.to_string(),
             code: 401,
             r#type: "auth_error".to_string(),
@@ -72,10 +72,10 @@ fn unauthorized(msg: &str) -> (StatusCode, Json<OpenAIError>) {
     )
 }
 
-fn internal_error(msg: &str) -> (StatusCode, Json<OpenAIError>) {
+fn internal_error(msg: &str) -> (StatusCode, Json<AitError>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(OpenAIError {
+        Json(AitError {
             message: msg.to_string(),
             code: 500,
             r#type: "internal_error".to_string(),
@@ -85,7 +85,7 @@ fn internal_error(msg: &str) -> (StatusCode, Json<OpenAIError>) {
 
 pub async fn list_users_handler(
     State(state): State<AppState>,
-) -> Result<Json<Vec<UserInfo>>, (StatusCode, Json<OpenAIError>)> {
+) -> Result<Json<Vec<UserInfo>>, (StatusCode, Json<AitError>)> {
     let users = state.db.list_users().map_err(|e| internal_error(&e))?;
     Ok(Json(users.into_iter().map(Into::into).collect()))
 }
@@ -94,13 +94,13 @@ pub async fn update_user_handler(
     State(state): State<AppState>,
     Path(username): Path<String>,
     Json(input): Json<UpdateUserRequest>,
-) -> Result<Json<UserInfo>, (StatusCode, Json<OpenAIError>)> {
+) -> Result<Json<UserInfo>, (StatusCode, Json<AitError>)> {
     let mut user = match state.db.get_user(&username) {
         Ok(Some(u)) => u,
         Ok(None) => {
             return Err((
                 StatusCode::NOT_FOUND,
-                Json(OpenAIError {
+                Json(AitError {
                     message: format!("User '{}' not found", username),
                     code: 404,
                     r#type: "not_found".to_string(),
@@ -129,7 +129,7 @@ pub async fn update_user_handler(
         .ok_or_else(|| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(OpenAIError {
+                Json(AitError {
                     message: "User lost after update".to_string(),
                     code: 500,
                     r#type: "internal_error".to_string(),
@@ -143,7 +143,7 @@ pub async fn update_user_handler(
 pub async fn delete_user_handler(
     State(state): State<AppState>,
     Path(username): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<OpenAIError>)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
     state
         .db
         .delete_user(&username)
@@ -156,7 +156,7 @@ pub async fn change_password_handler(
     Path(username): Path<String>,
     headers: HeaderMap,
     Json(input): Json<ChangePasswordRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<OpenAIError>)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
     // Identify the caller via session
     let session_key =
         extract_session_key(&headers).ok_or_else(|| unauthorized("Authentication required"))?;
@@ -174,7 +174,7 @@ pub async fn change_password_handler(
     if session.username != username {
         return Err((
             StatusCode::FORBIDDEN,
-            Json(OpenAIError {
+            Json(AitError {
                 message: "You can only change your own password".to_string(),
                 code: 403,
                 r#type: "forbidden".to_string(),
@@ -189,7 +189,7 @@ pub async fn change_password_handler(
         .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
-                Json(OpenAIError {
+                Json(AitError {
                     message: format!("User '{}' not found", username),
                     code: 404,
                     r#type: "not_found".to_string(),

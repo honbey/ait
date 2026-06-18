@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::db::{Session, UserRole, Permission};
-use crate::providers::OpenAIError;
+use crate::error::AitError;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -55,7 +55,7 @@ fn set_cookie_header(session_key: &str, max_age: i64) -> String {
 pub async fn login_handler(
     State(state): State<AppState>,
     Json(input): Json<LoginRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<OpenAIError>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<AitError>)> {
     let user = match state.db.get_user(&input.username) {
         Ok(Some(u)) => u,
         Ok(None) => {
@@ -110,7 +110,7 @@ pub async fn login_handler(
 pub async fn logout_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<OpenAIError>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<AitError>)> {
     if let Some(session_key) = extract_session_key(&headers) {
         state.db.delete_session(session_key).ok();
     }
@@ -176,10 +176,10 @@ fn generate_session_key() -> String {
         .collect()
 }
 
-fn unauthorized(msg: &str) -> (StatusCode, Json<OpenAIError>) {
+fn unauthorized(msg: &str) -> (StatusCode, Json<AitError>) {
     (
         StatusCode::UNAUTHORIZED,
-        Json(OpenAIError {
+        Json(AitError {
             message: msg.to_string(),
             code: 401,
             r#type: "auth_error".to_string(),
@@ -187,10 +187,10 @@ fn unauthorized(msg: &str) -> (StatusCode, Json<OpenAIError>) {
     )
 }
 
-fn internal_error(msg: &str) -> (StatusCode, Json<OpenAIError>) {
+fn internal_error(msg: &str) -> (StatusCode, Json<AitError>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(OpenAIError {
+        Json(AitError {
             message: msg.to_string(),
             code: 500,
             r#type: "internal_error".to_string(),
