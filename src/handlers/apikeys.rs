@@ -35,7 +35,7 @@ pub async fn create_api_key_handler(
     Path(username): Path<String>,
     Json(input): Json<CreateApiKeyRequest>,
 ) -> Result<Json<ApiKeyResponse>, (StatusCode, Json<AitError>)> {
-    if session.role != crate::db::UserRole::Admin {
+    if session.role != crate::db::UserRole::Admin && session.username != username {
         return Err(forbidden());
     }
 
@@ -56,7 +56,7 @@ pub async fn list_api_keys_handler(
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,
 ) -> Result<Json<Vec<ApiKeyListItem>>, (StatusCode, Json<AitError>)> {
-    if session.role != crate::db::UserRole::Admin {
+    if session.role != crate::db::UserRole::Admin && session.username != username {
         return Err(forbidden());
     }
 
@@ -84,7 +84,7 @@ pub async fn delete_api_key_handler(
     Extension(session): Extension<SessionUser>,
     Path((username, key)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
-    if session.role != crate::db::UserRole::Admin {
+    if session.role != crate::db::UserRole::Admin && session.username != username {
         return Err(forbidden());
     }
 
