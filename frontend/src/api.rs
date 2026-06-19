@@ -162,3 +162,40 @@ pub async fn fetch_dashboard() -> Result<DashboardData, NetError> {
         token_consumption: mock_token_consumption(),
     })
 }
+
+pub async fn create_provider(
+    name: &str,
+    provider_type: &str,
+    base_url: &str,
+    api_key: Option<String>,
+    enabled: bool,
+) -> Result<Provider, NetError> {
+    let url = format!("{}/admin/providers", get_base_url());
+    let api_key_value = api_key.as_deref()
+        .map(|k| serde_json::Value::String(k.to_string()))
+        .unwrap_or(serde_json::Value::Null);
+    let body = serde_json::json!({
+        "id": "",
+        "name": name,
+        "type": provider_type,
+        "base_url": base_url,
+        "api_key": api_key_value,
+        "enabled": enabled,
+    });
+    let resp = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .map_err(|e| NetError::GlooError(e.to_string()))?
+        .send()
+        .await?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        return Err(NetError::GlooError(format!(
+            "HTTP {} creating provider",
+            status
+        )));
+    }
+
+    resp.json().await
+}

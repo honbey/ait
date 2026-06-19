@@ -114,21 +114,30 @@ pub fn Layout(props: LayoutProps) -> View {
         }
     });
 
-    let data = create_client_resource(on(route, move || async move {
-        match route.get() {
-            Route::Dashboard => fetch_dashboard()
-                .await
-                .map(RouteData::Dashboard)
-                .unwrap_or_else(|e| RouteData::Error(e.to_string())),
-            Route::Providers => fetch_providers()
-                .await
-                .map(RouteData::Providers)
-                .unwrap_or_else(|e| RouteData::Error(e.to_string())),
-            Route::Models => fetch_models()
-                .await
-                .map(RouteData::Models)
-                .unwrap_or_else(|e| RouteData::Error(e.to_string())),
-            _ => RouteData::Placeholder,
+    let provider_refresh = create_signal(0usize);
+    let provider_refreshing = create_signal(false);
+    let dep = create_memo(move || (route.get(), provider_refresh.get()));
+    let refreshing_capture = provider_refreshing;
+    let data = create_client_resource(on(dep, move || {
+        let r = refreshing_capture;
+        async move {
+            let result = match route.get() {
+                Route::Dashboard => fetch_dashboard()
+                    .await
+                    .map(RouteData::Dashboard)
+                    .unwrap_or_else(|e| RouteData::Error(e.to_string())),
+                Route::Providers => fetch_providers()
+                    .await
+                    .map(RouteData::Providers)
+                    .unwrap_or_else(|e| RouteData::Error(e.to_string())),
+                Route::Models => fetch_models()
+                    .await
+                    .map(RouteData::Models)
+                    .unwrap_or_else(|e| RouteData::Error(e.to_string())),
+                _ => RouteData::Placeholder,
+            };
+            r.set(false);
+            result
         }
     }));
 
@@ -218,7 +227,7 @@ pub fn Layout(props: LayoutProps) -> View {
                                     }
                                     Some(RouteData::Providers(p)) => {
                                         let is_admin = create_signal(role.get_clone().as_deref() == Some("admin"));
-                                        crate::views::providers::render_providers_view(p, is_admin)
+                                        crate::views::providers::render_providers_view(p, is_admin, provider_refresh, provider_refreshing)
                                     }
                                     Some(RouteData::Models(m)) => {
                                         crate::views::models::render_models_view(&i18n_view, m)
