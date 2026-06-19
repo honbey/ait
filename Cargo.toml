@@ -86,3 +86,6 @@ rand = "0.10"
 
 # Password hashing
 bcrypt = "0.16"
+
+# Key hashing
+sha2 = "0.10"

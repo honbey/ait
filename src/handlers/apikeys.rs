@@ -39,15 +39,15 @@ pub async fn create_api_key_handler(
         return Err(forbidden());
     }
 
-    let api_key = state
+    let (stored, raw_key) = state
         .db
         .insert_api_key(&username, &input.name)
         .map_err(internal_error)?;
 
     Ok(Json(ApiKeyResponse {
-        key: api_key.key,
-        name: api_key.name,
-        created_at: api_key.created_at.to_rfc3339(),
+        key: raw_key,
+        name: stored.name,
+        created_at: stored.created_at.to_rfc3339(),
     }))
 }
 
