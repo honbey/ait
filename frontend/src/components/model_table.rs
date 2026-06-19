@@ -16,8 +16,8 @@ fn detail_row(label: String, value: String) -> View {
 }
 
 fn render_detail_modal(i18n: &I18n, model: Model, show_detail: Signal<Option<usize>>) -> View {
-    let enabled_text = i18n.t("providers_status_enabled");
-    let disabled_text = i18n.t("providers_status_disabled");
+    let enabled_text = i18n.t("status_enabled");
+    let disabled_text = i18n.t("status_disabled");
     let status = if model.enabled {
         enabled_text
     } else {
@@ -37,17 +37,17 @@ fn render_detail_modal(i18n: &I18n, model: Model, show_detail: Signal<Option<usi
                         .class("flex items-center justify-between mb-4")
                         .children((
                             h2().class("text-lg font-semibold text-gray-800 dark:text-gray-100")
-                                .children(i18n.t("model_detail")),
+                                .children(i18n.t_replace("detail_title", "entity", &i18n.t("models"))),
                             button()
                                 .class("text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
                                 .on(events::click, move |_| show_detail.set(None))
                                 .children(i().class("fas fa-times")),
                         )),
                     detail_row("ID".to_string(), model.id),
-                    detail_row(i18n.t("models_table_name"), model.name),
-                    detail_row(i18n.t("models_table_provider_id"), model.provider_id),
-                    detail_row(i18n.t("models_table_upstream_model"), model.upstream_model),
-                    detail_row(i18n.t("providers_table_status"), status),
+                    detail_row(i18n.t("name"), model.name),
+                    detail_row(i18n.t("model_provider_id"), model.provider_id),
+                    detail_row(i18n.t("model_upstream_model"), model.upstream_model),
+                    detail_row(i18n.t("table_status"), status),
                     detail_row(i18n.t("created_at"), format!("{}", model.created_at as u64)),
                 )),
         ))
@@ -59,8 +59,8 @@ fn make_model_rows(
     i18n: &I18n,
     show_detail: Signal<Option<usize>>,
 ) -> Vec<View> {
-    let enabled_text = i18n.t("providers_status_enabled");
-    let disabled_text = i18n.t("providers_status_disabled");
+    let enabled_text = i18n.t("status_enabled");
+    let disabled_text = i18n.t("status_disabled");
     models
         .into_iter()
         .enumerate()
@@ -134,7 +134,7 @@ pub fn ModelTable(props: ModelTableProps) -> View {
                 .class("p-6 border-b border-gray-100 dark:border-gray-700")
                 .children(
                     h2().class("text-lg font-semibold text-gray-800 dark:text-gray-100")
-                        .children(i18n.t("models_table_title")),
+                        .children(i18n.t("model_title")),
                 ),
             div().class("overflow-x-auto").children(
                 table().class("w-full text-sm").children((
@@ -144,19 +144,19 @@ pub fn ModelTable(props: ModelTableProps) -> View {
                             th().class(
                                 "text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
                             )
-                            .children(i18n.t("models_table_name")),
+                            .children(i18n.t("name")),
                             th().class(
                                 "text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
                             )
-                            .children(i18n.t("models_table_provider_id")),
+                            .children(i18n.t("model_provider_id")),
                             th().class(
                                 "text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
                             )
-                            .children(i18n.t("models_table_upstream_model")),
+                            .children(i18n.t("model_upstream_model")),
                             th().class(
                                 "text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
                             )
-                            .children(i18n.t("models_table_status")),
+                            .children(i18n.t("table_status")),
                             th().class(
                                 "text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
                             ),

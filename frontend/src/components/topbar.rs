@@ -159,7 +159,6 @@ pub fn Topbar(props: TopbarProps) -> View {
                                                 .children(avatar_letter),
                                             span().class("hidden sm:inline text-sm text-gray-700 dark:text-gray-300")
                                                 .children(View::from_dynamic({
-                                                    let uname = uname.clone();
                                                     move || uname.get_clone().unwrap_or_default()
                                                 })),
                                             i().class(

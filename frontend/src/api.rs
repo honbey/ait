@@ -104,7 +104,7 @@ pub async fn login_api(username: &str, password: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn check_session() -> Result<Option<String>, String> {
+pub async fn check_session() -> Result<Option<(String, String)>, String> {
     let url = format!("{}/admin/session", get_base_url());
     let resp = Request::get(&url)
         .headers(Headers::new())
@@ -118,10 +118,15 @@ pub async fn check_session() -> Result<Option<String>, String> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     if authenticated {
-        Ok(json
+        let username = json
             .get("username")
             .and_then(|v| v.as_str())
-            .map(String::from))
+            .map(String::from);
+        let role = json.get("role").and_then(|v| v.as_str()).map(String::from);
+        match (username, role) {
+            (Some(u), Some(r)) => Ok(Some((u, r))),
+            _ => Ok(None),
+        }
     } else {
         Ok(None)
     }

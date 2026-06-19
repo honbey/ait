@@ -16,8 +16,8 @@ fn detail_row(label: String, value: String) -> View {
 }
 
 fn render_detail_modal(i18n: &I18n, prov: Provider, show_detail: Signal<Option<usize>>) -> View {
-    let enabled_text = i18n.t("providers_status_enabled");
-    let disabled_text = i18n.t("providers_status_disabled");
+    let enabled_text = i18n.t("status_enabled");
+    let disabled_text = i18n.t("status_disabled");
     let status = if prov.enabled {
         enabled_text
     } else {
@@ -38,18 +38,18 @@ fn render_detail_modal(i18n: &I18n, prov: Provider, show_detail: Signal<Option<u
                         .class("flex items-center justify-between mb-4")
                         .children((
                             h2().class("text-lg font-semibold text-gray-800 dark:text-gray-100")
-                                .children(i18n.t("provider_detail")),
+                                .children(i18n.t_replace("detail_title", "entity", &i18n.t("providers"))),
                             button()
-                                .class("text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+                                .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
                                 .on(events::click, move |_| show_detail.set(None))
                                 .children(i().class("fas fa-times")),
                         )),
                     detail_row("ID".to_string(), prov.id),
-                    detail_row(i18n.t("providers_table_name"), prov.name),
-                    detail_row(i18n.t("providers_table_api_type"), prov.provider_type),
-                    detail_row(i18n.t("providers_table_base_url"), prov.base_url),
+                    detail_row(i18n.t("name"), prov.name),
+                    detail_row(i18n.t("provider_api_type"), prov.provider_type),
+                    detail_row(i18n.t("provider_base_url"), prov.base_url),
                     detail_row(i18n.t("api_key"), api_key_display),
-                    detail_row(i18n.t("providers_table_status"), status),
+                    detail_row(i18n.t("table_status"), status),
                     detail_row(i18n.t("created_at"), format!("{}", prov.created_at as u64)),
                     detail_row(i18n.t("updated_at"), format!("{}", prov.updated_at as u64)),
                 )),
@@ -61,9 +61,10 @@ fn make_provider_rows(
     providers: Vec<Provider>,
     i18n: &I18n,
     show_detail: Signal<Option<usize>>,
+    is_admin: sycamore::reactive::Signal<bool>,
 ) -> Vec<View> {
-    let enabled_text = i18n.t("providers_status_enabled");
-    let disabled_text = i18n.t("providers_status_disabled");
+    let enabled_text = i18n.t("status_enabled");
+    let disabled_text = i18n.t("status_disabled");
     providers
         .into_iter()
         .enumerate()
@@ -101,11 +102,33 @@ fn make_provider_rows(
                         .children(url),
                     td().class("px-6 py-4")
                         .children(span().class(span_class).children(st.clone())),
-                    td().class("px-6 py-4 text-center").children(
+                    td().class("px-6 py-4 text-center whitespace-nowrap").children(
                         button()
-                            .class("cursor-pointer text-gray-400")
+                            .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
                             .on(events::click, move |_| show.set(Some(idx)))
-                            .children(i().class("fas fa-ellipsis-h")),
+                            .children(i().class("fas fa-eye text-xs")),
+                    ),
+                    td().class("px-6 py-4 text-center whitespace-nowrap").children(
+                        View::from_dynamic::<View>(move || {
+                            if is_admin.get() {
+                                div().class("flex items-center justify-center gap-3").children((
+                                    button()
+                                        .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+                                        .on(events::click, move |_| {
+                                            sycamore::web::console_log!("Edit provider {}", idx);
+                                        })
+                                        .children(i().class("fas fa-pen text-xs")),
+                                    button()
+                                        .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+                                        .on(events::click, move |_| {
+                                            sycamore::web::console_log!("Delete provider {}", idx);
+                                        })
+                                        .children(i().class("fas fa-trash text-xs")),
+                                )).into()
+                            } else {
+                                i().class("fas fa-ban text-gray-300 dark:text-gray-600 cursor-not-allowed").into()
+                            }
+                        }),
                     ),
                 ))
                 .into()
@@ -116,6 +139,7 @@ fn make_provider_rows(
 #[derive(Props)]
 pub struct ProviderTableProps {
     pub providers: Vec<Provider>,
+    pub is_admin: sycamore::reactive::Signal<bool>,
 }
 
 #[component]
@@ -123,8 +147,10 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
     let i18n = use_context::<I18n>();
     let show_detail = create_signal::<Option<usize>>(None);
     let providers = props.providers;
-    let rows = make_provider_rows(providers.clone(), &i18n, show_detail);
+    let is_admin = props.is_admin;
+    let rows = make_provider_rows(providers.clone(), &i18n, show_detail, is_admin);
 
+    let count = providers.len();
     let i18n_modal = i18n.clone();
     let modal = View::from_dynamic(move || match show_detail.get() {
         Some(idx) => providers.get(idx).map_or(View::new(), |prov| {
@@ -134,14 +160,45 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
     });
 
     div()
-        .class("bg-white dark:bg-gray-800 rounded-xl shadow-sm overflow-hidden mt-8")
+        .class("bg-white dark:bg-gray-800 rounded-xl shadow-sm overflow-hidden")
         .children((
             div()
-                .class("p-6 border-b border-gray-100 dark:border-gray-700")
-                .children(
-                    h2().class("text-lg font-semibold text-gray-800 dark:text-gray-100")
-                        .children(i18n.t("providers_table_title")),
-                ),
+                .class("p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between")
+                .children((
+                    div().class("flex items-center gap-3").children((
+                        h2().class("text-xl font-semibold text-gray-800 dark:text-gray-100")
+                            .children(i18n.t("provider_title")),
+                        span().class(
+                            "text-sm text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-3 py-1 rounded-full",
+                        )
+                        .children(i18n.t_replace("total_count", "count", &count.to_string())),
+button()
+    .class("text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors cursor-pointer")
+                            .on(events::click, |_| {
+                                sycamore::web::console_log!("Refresh providers");
+                            })
+                            .children(i().class("fas fa-sync-alt")),
+                    )),
+                    View::from_dynamic::<View>({
+                        let i18n = i18n.clone();
+                        move || {
+                            if is_admin.get() {
+button()
+    .class("px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors flex items-center gap-2 text-sm font-medium cursor-pointer")
+                                    .on(events::click, |_| {
+                                        sycamore::web::console_log!("Add provider");
+                                    })
+                                    .children((
+                                        i().class("fas fa-plus"),
+                                        span().children(i18n.t("provider_add")),
+                                    ))
+                                    .into()
+                            } else {
+                                View::new()
+                            }
+                        }
+                    }),
+                )),
             div().class("overflow-x-auto").children(
                 table().class("w-full text-sm").children((
                     thead().children(
@@ -150,22 +207,27 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
                             th().class(
                                 "text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
                             )
-                            .children(i18n.t("providers_table_name")),
+                            .children(i18n.t("name")),
                             th().class(
                                 "text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
                             )
-                            .children(i18n.t("providers_table_api_type")),
+                            .children(i18n.t("provider_api_type")),
                             th().class(
                                 "text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
                             )
-                            .children(i18n.t("providers_table_base_url")),
+                            .children(i18n.t("provider_base_url")),
                             th().class(
                                 "text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
                             )
-                            .children(i18n.t("providers_table_status")),
+                            .children(i18n.t("table_status")),
                             th().class(
-                                "text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
-                            ),
+                                "text-center px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
+                            )
+                            .children(i18n.t("provider_detail")),
+                            th().class(
+                                "text-center px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
+                            )
+                            .children(i18n.t("provider_actions")),
                         )),
                     ),
                     tbody().children(rows),

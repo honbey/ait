@@ -94,6 +94,7 @@ pub struct LayoutProps {
     pub route: Signal<Route>,
     pub authenticated: Signal<bool>,
     pub username: Signal<Option<String>>,
+    pub role: Signal<Option<String>>,
 }
 
 #[component]
@@ -102,6 +103,7 @@ pub fn Layout(props: LayoutProps) -> View {
     let route = props.route;
     let authenticated = props.authenticated;
     let username = props.username;
+    let role = props.role;
     let sidebar_open = create_signal(false);
     let i18n = use_context::<I18n>();
 
@@ -215,7 +217,8 @@ pub fn Layout(props: LayoutProps) -> View {
                                         crate::views::dashboard::render_dashboard_view(&i18n_view, d)
                                     }
                                     Some(RouteData::Providers(p)) => {
-                                        crate::views::providers::render_providers_view(&i18n_view, p)
+                                        let is_admin = create_signal(role.get_clone().as_deref() == Some("admin"));
+                                        crate::views::providers::render_providers_view(p, is_admin)
                                     }
                                     Some(RouteData::Models(m)) => {
                                         crate::views::models::render_models_view(&i18n_view, m)

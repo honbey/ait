@@ -15,7 +15,7 @@ pub fn render_models_view(i18n: &I18n, models: Vec<Model>) -> View {
                     .class("flex items-center justify-between")
                     .children((
                         h1().class("text-2xl font-bold text-gray-800 dark:text-gray-100")
-                            .children(i18n.t("models_management")),
+                            .children(i18n.t("model_management")),
                         span().class(
                             "text-sm text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-3 py-1 rounded-full",
                         )

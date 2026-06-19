@@ -95,7 +95,7 @@ pub fn render_dashboard_view(i18n: &I18n, data: DashboardData) -> View {
                                         ),
                                 )),
                         )),
-                    ProviderTable(ProviderTableProps { providers }),
+                    ProviderTable(ProviderTableProps { providers, is_admin: create_signal(false) }),
                 )),
         )
         .into()
