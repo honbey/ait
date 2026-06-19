@@ -55,5 +55,17 @@
   "delete_confirm_title": "确认删除",
   "delete_confirm_message": "确定要删除 {{ name }} 吗？",
   "cancel": "取消",
-  "save": "保存"
+  "save": "保存",
+  "model_add": "添加模型",
+  "model_delete": "删除模型",
+  "api_key_title": "API 密钥列表",
+  "api_key_create": "创建密钥",
+  "api_key_created": "密钥已创建",
+  "api_key_name": "密钥名称",
+  "api_key_key": "API 密钥",
+  "api_key_raw_key_hint": "请立即复制此密钥 — 关闭后将不再显示",
+  "api_key_delete_confirm": "确定要删除密钥 \"{{ name }}\" 吗？",
+  "expires_at": "过期时间",
+  "close": "关闭",
+  "save_create": "创建"
 }

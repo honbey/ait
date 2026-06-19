@@ -23,6 +23,22 @@ pub struct Model {
     pub created_at: f64,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ApiKeyListItem {
+    pub key: String,
+    pub name: String,
+    pub created_at: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateApiKeyResponse {
+    pub key: String,
+    pub name: String,
+    #[allow(dead_code)]
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct DashboardData {
     pub providers: Vec<Provider>,

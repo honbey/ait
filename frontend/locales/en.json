@@ -55,5 +55,17 @@
   "delete_confirm_title": "Confirm Delete",
   "delete_confirm_message": "Are you sure you want to delete {{ name }}?",
   "cancel": "Cancel",
-  "save": "Save"
+  "save": "Save",
+  "model_add": "Add Model",
+  "model_delete": "Delete Model",
+  "api_key_title": "API Key List",
+  "api_key_create": "Create API Key",
+  "api_key_created": "API Key Created",
+  "api_key_name": "Key Name",
+  "api_key_key": "API Key",
+  "api_key_raw_key_hint": "Copy this key now — it will not be shown again",
+  "api_key_delete_confirm": "Are you sure you want to delete key \"{{ name }}\"?",
+  "expires_at": "Expires At",
+  "close": "Close",
+  "save_create": "Create"
 }

@@ -3,9 +3,9 @@ use sycamore::web::create_client_resource;
 use sycamore::web::events;
 use sycamore::web::tags::*;
 
-use crate::api::{fetch_dashboard, fetch_models, fetch_providers};
+use crate::api::{fetch_api_keys, fetch_dashboard, fetch_models, fetch_providers};
 use crate::i18n::I18n;
-use crate::models::{DashboardData, Model, Provider};
+use crate::models::{ApiKeyListItem, DashboardData, Model, Provider};
 use crate::route::Route;
 
 use crate::components::sidebar::{Sidebar, SidebarProps};
@@ -63,7 +63,8 @@ pub fn render_error_view(i18n: &I18n, msg: String) -> View {
 enum RouteData {
     Dashboard(DashboardData),
     Providers(Vec<Provider>),
-    Models(Vec<Model>),
+    Models(Vec<Model>, Vec<Provider>),
+    ApiKeys(Vec<ApiKeyListItem>),
     Placeholder,
     Error(String),
 }
@@ -116,10 +117,23 @@ pub fn Layout(props: LayoutProps) -> View {
 
     let provider_refresh = create_signal(0usize);
     let provider_refreshing = create_signal(false);
-    let dep = create_memo(move || (route.get(), provider_refresh.get()));
-    let refreshing_capture = provider_refreshing;
+    let model_refresh = create_signal(0usize);
+    let model_refreshing = create_signal(false);
+    let api_key_refresh = create_signal(0usize);
+    let api_key_refreshing = create_signal(false);
+    let dep = create_memo(move || {
+        (
+            route.get(),
+            provider_refresh.get(),
+            model_refresh.get(),
+            api_key_refresh.get(),
+        )
+    });
     let data = create_client_resource(on(dep, move || {
-        let r = refreshing_capture;
+        let pr = provider_refreshing;
+        let mr = model_refreshing;
+        let ar = api_key_refreshing;
+        let uname = username;
         async move {
             let result = match route.get() {
                 Route::Dashboard => fetch_dashboard()
@@ -130,13 +144,29 @@ pub fn Layout(props: LayoutProps) -> View {
                     .await
                     .map(RouteData::Providers)
                     .unwrap_or_else(|e| RouteData::Error(e.to_string())),
-                Route::Models => fetch_models()
-                    .await
-                    .map(RouteData::Models)
-                    .unwrap_or_else(|e| RouteData::Error(e.to_string())),
+                Route::Models => {
+                    let models = fetch_models().await;
+                    let providers = fetch_providers().await;
+                    match (models, providers) {
+                        (Ok(m), Ok(p)) => RouteData::Models(m, p),
+                        (Err(e), _) | (_, Err(e)) => RouteData::Error(e.to_string()),
+                    }
+                }
+                Route::ApiKeys => match uname.get_clone() {
+                    Some(u) => fetch_api_keys(&u)
+                        .await
+                        .map(RouteData::ApiKeys)
+                        .unwrap_or_else(|e| RouteData::Error(e.to_string())),
+                    None => RouteData::Placeholder,
+                },
                 _ => RouteData::Placeholder,
             };
-            r.set(false);
+            match route.get() {
+                Route::Providers => pr.set(false),
+                Route::Models => mr.set(false),
+                Route::ApiKeys => ar.set(false),
+                _ => {}
+            }
             result
         }
     }));
@@ -229,8 +259,13 @@ pub fn Layout(props: LayoutProps) -> View {
                                         let is_admin = create_signal(role.get_clone().as_deref() == Some("admin"));
                                         crate::views::providers::render_providers_view(p, is_admin, provider_refresh, provider_refreshing)
                                     }
-                                    Some(RouteData::Models(m)) => {
-                                        crate::views::models::render_models_view(&i18n_view, m)
+                                    Some(RouteData::Models(m, p)) => {
+                                        let is_admin = create_signal(role.get_clone().as_deref() == Some("admin"));
+                                        crate::views::models::render_models_view(m, p, is_admin, model_refresh, model_refreshing)
+                                    }
+                                    Some(RouteData::ApiKeys(k)) => {
+                                        let uname = username.get_clone().unwrap_or_default();
+                                        crate::views::api_keys::render_api_keys_view(k, uname, api_key_refresh, api_key_refreshing)
                                     }
                                     Some(RouteData::Placeholder) => match route.get() {
                                         Route::ApiKeys => {

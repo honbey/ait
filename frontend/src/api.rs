@@ -3,7 +3,7 @@ use serde::de::DeserializeOwned;
 use gloo_net::http::{Headers, Request};
 use gloo_net::Error as NetError;
 
-use crate::models::{DashboardData, Model, Provider};
+use crate::models::{ApiKeyListItem, CreateApiKeyResponse, DashboardData, Model, Provider};
 
 /// Get base URL from window.location.origin at runtime
 fn get_base_url() -> String {
@@ -44,6 +44,97 @@ async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
     }
 
     resp.json().await
+}
+
+// --- Model CRUD ---
+
+pub async fn create_model(
+    name: &str,
+    provider_id: &str,
+    upstream_model: &str,
+    enabled: bool,
+) -> Result<Model, NetError> {
+    let url = format!("{}/admin/models", get_base_url());
+    let body = serde_json::json!({
+        "id": "",
+        "name": name,
+        "provider_id": provider_id,
+        "upstream_model": upstream_model,
+        "enabled": enabled,
+    });
+    let resp = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .map_err(|e| NetError::GlooError(e.to_string()))?
+        .send()
+        .await?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        return Err(NetError::GlooError(format!(
+            "HTTP {} creating model",
+            status
+        )));
+    }
+
+    resp.json().await
+}
+
+pub async fn delete_model(name: &str) -> Result<(), NetError> {
+    let url = format!("{}/admin/models/{}", get_base_url(), name);
+    let resp = Request::delete(&url).send().await?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        return Err(NetError::GlooError(format!(
+            "HTTP {} deleting model",
+            status
+        )));
+    }
+
+    Ok(())
+}
+
+// --- API Key CRUD ---
+
+pub async fn fetch_api_keys(username: &str) -> Result<Vec<ApiKeyListItem>, NetError> {
+    api_get(&format!("users/{}/api-keys", username)).await
+}
+
+pub async fn create_api_key(username: &str, name: &str) -> Result<CreateApiKeyResponse, NetError> {
+    let url = format!("{}/admin/users/{}/api-keys", get_base_url(), username);
+    let body = serde_json::json!({ "name": name });
+    let resp = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .map_err(|e| NetError::GlooError(e.to_string()))?
+        .send()
+        .await?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        return Err(NetError::GlooError(format!(
+            "HTTP {} creating API key",
+            status
+        )));
+    }
+
+    resp.json().await
+}
+
+pub async fn delete_api_key(username: &str, key: &str) -> Result<(), NetError> {
+    let url = format!("{}/admin/users/{}/api-keys/{}", get_base_url(), username, key);
+    let resp = Request::delete(&url).send().await?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        return Err(NetError::GlooError(format!(
+            "HTTP {} deleting API key",
+            status
+        )));
+    }
+
+    Ok(())
 }
 
 // --- Auth API ---
