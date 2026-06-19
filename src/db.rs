@@ -109,13 +109,9 @@ pub struct ApiKeyInfo {
 impl ApiKey {
     pub fn masked(&self) -> String {
         let chars: Vec<char> = self.key.chars().collect();
-        if chars.len() <= 10 {
-            "sk-******".to_string()
-        } else {
-            let prefix: String = chars[..6].iter().collect();
-            let suffix: String = chars[chars.len() - 4..].iter().collect();
-            format!("{}******{}", prefix, suffix)
-        }
+        let prefix: String = chars[..6].iter().collect();
+        let suffix: String = chars[chars.len() - 4..].iter().collect();
+        format!("{}******{}", prefix, suffix)
     }
 }
 
