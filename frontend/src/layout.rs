@@ -189,12 +189,18 @@ pub fn Layout(props: LayoutProps) -> View {
                         .children(View::from_dynamic(move || {
                             match route.get() {
                                 Route::Index => {
-                                    crate::views::index::render_index_view(&i18n_view)
+                                    crate::views::index::render_index_view(&i18n_view, route)
                                 }
                                 Route::Login => {
                                     crate::views::login::render_login_view(
                                         &i18n_view,
                                         authenticated,
+                                        route,
+                                    )
+                                }
+                                Route::Register => {
+                                    crate::views::register::render_register_view(
+                                        &i18n_view,
                                         route,
                                     )
                                 }

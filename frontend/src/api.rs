@@ -48,6 +48,38 @@ async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
 
 // --- Auth API ---
 
+pub async fn register_api(
+    username: &str,
+    password: &str,
+    registration_code: &str,
+) -> Result<(), String> {
+    let url = format!("{}/admin/register", get_base_url());
+    let body = serde_json::json!({
+        "username": username,
+        "password": password,
+        "registration_code": registration_code
+    });
+    let req = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .map_err(|e| e.to_string())?;
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        if let Some(msg) = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
+        {
+            return Err(msg);
+        }
+        return Err(format!("Registration failed (HTTP {})", status));
+    }
+
+    Ok(())
+}
+
 pub async fn login_api(username: &str, password: &str) -> Result<(), String> {
     let url = format!("{}/admin/login", get_base_url());
     let body = serde_json::json!({ "username": username, "password": password });
@@ -60,10 +92,11 @@ pub async fn login_api(username: &str, password: &str) -> Result<(), String> {
     if !resp.ok() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        if let Ok(err) = serde_json::from_str::<serde_json::Value>(&text) {
-            if let Some(msg) = err.get("message").and_then(|m| m.as_str()) {
-                return Err(msg.to_string());
-            }
+        if let Some(msg) = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
+        {
+            return Err(msg);
         }
         return Err(format!("Login failed (HTTP {})", status));
     }
@@ -80,14 +113,15 @@ pub async fn check_session() -> Result<bool, String> {
         .map_err(|e| e.to_string())?;
 
     let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(json.get("authenticated").and_then(|v| v.as_bool()).unwrap_or(false))
+    Ok(json
+        .get("authenticated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false))
 }
 
 pub async fn logout_api() -> Result<(), String> {
     let url = format!("{}/admin/logout", get_base_url());
-    let req = Request::post(&url)
-        .body("")
-        .map_err(|e| e.to_string())?;
+    let req = Request::post(&url).body("").map_err(|e| e.to_string())?;
     req.send().await.map_err(|e| e.to_string())?;
     Ok(())
 }

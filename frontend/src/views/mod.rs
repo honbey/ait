@@ -3,3 +3,4 @@ pub mod index;
 pub mod login;
 pub mod models;
 pub mod providers;
+pub mod register;

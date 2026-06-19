@@ -7,9 +7,10 @@ use sycamore_futures::spawn_local_scoped;
 use crate::i18n::I18n;
 use crate::route::Route;
 
-pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal<Route>) -> View {
+pub fn render_register_view(i18n: &I18n, route: Signal<Route>) -> View {
     let username = create_signal(String::new());
     let password = create_signal(String::new());
+    let registration_code = create_signal(String::new());
     let error = create_signal(String::new());
     let loading = create_signal(false);
 
@@ -22,23 +23,24 @@ pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal
         }
 
         if username.get_clone().is_empty() || password.get_clone().is_empty() {
-            error.set(i18n_submit.t("login_required"));
+            error.set(i18n_submit.t("register_required"));
             return;
         }
 
         loading.set(true);
         let u = username.get_clone();
         let p = password.get_clone();
+        let c = registration_code.get_clone();
         let i18n_async = i18n_submit.clone();
+        let route_async = route;
         let loading_async = loading;
         spawn_local_scoped(async move {
-            match crate::api::login_api(&u, &p).await {
+            match crate::api::register_api(&u, &p, &c).await {
                 Ok(()) => {
-                    authenticated.set(true);
-                    route.set(Route::Dashboard);
+                    route_async.set(Route::Login);
                 }
                 Err(e) => {
-                    error.set(i18n_async.t_replace("login_error", "msg", &e));
+                    error.set(i18n_async.t_replace("register_error", "msg", &e));
                     loading_async.set(false);
                 }
             }
@@ -54,7 +56,7 @@ pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal
                 .children((
                     h2()
                         .class("text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6 text-center")
-                        .children(i18n.t("login")),
+                        .children(i18n.t("register")),
                     div().class("mb-4").children((
                         label()
                             .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
@@ -66,7 +68,7 @@ pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal
                             .bind(bind::value, username)
                             .on(events::input, move |_| error.set(String::new())),
                     )),
-                    div().class("mb-6").children((
+                    div().class("mb-4").children((
                         label()
                             .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
                             .children(i18n.t("password")),
@@ -75,6 +77,17 @@ pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal
                             .attr("type", "password")
                             .attr("placeholder", i18n.t("password"))
                             .bind(bind::value, password)
+                            .on(events::input, move |_| error.set(String::new())),
+                    )),
+                    div().class("mb-6").children((
+                        label()
+                            .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
+                            .children(i18n.t("registration_code")),
+                        input()
+                            .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
+                            .attr("type", "text")
+                            .attr("placeholder", i18n.t("registration_code"))
+                            .bind(bind::value, registration_code)
                             .on(events::input, move |_| error.set(String::new())),
                     )),
                     View::from_dynamic(move || {
@@ -95,20 +108,20 @@ pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal
                                 if loading.get() {
                                     div().class("flex items-center gap-2").children((
                                         i().class("fas fa-spinner animate-spin"),
-                                        span().children(i18n_btn.t("login_btn")),
+                                        span().children(i18n_btn.t("register_btn")),
                                     )).into()
                                 } else {
-                                    span().children(i18n_btn.t("login_btn")).into()
+                                    span().children(i18n_btn.t("register_btn")).into()
                                 }
                             }))
                     },
                     div().class("mt-4 text-center").children((
                         span().class("text-sm text-gray-500 dark:text-gray-400")
-                            .children(i18n.t("no_account_register")),
+                            .children(i18n.t("have_account_login")),
                         button()
                             .class("ml-1 text-sm text-indigo-600 dark:text-indigo-400 hover:underline")
-                            .on(events::click, move |_| route.set(Route::Register))
-                            .children(i18n.t("register")),
+                            .on(events::click, move |_| route.set(Route::Login))
+                            .children(i18n.t("login")),
                     )),
                 )),
         )

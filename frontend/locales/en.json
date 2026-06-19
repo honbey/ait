@@ -39,7 +39,6 @@
   "models": "Models",
   "api_key": "API Key",
   "text_generation": "Text Generation",
-  "version": "v0.1.0",
   "total_count": "{{ count }} total",
   "load_failed": "Load Failed",
   "in_development": "In Development",
@@ -47,5 +46,12 @@
   "provider_detail": "Provider Detail",
   "model_detail": "Model Detail",
   "created_at": "Created At",
-  "updated_at": "Updated At"
+  "updated_at": "Updated At",
+  "register": "Register",
+  "register_btn": "Register",
+  "registration_code": "Registration Code",
+  "register_required": "Please fill in all fields",
+  "register_error": "Registration failed: {{ msg }}",
+  "have_account_login": "Already have an account?",
+  "no_account_register": "No account?"
 }

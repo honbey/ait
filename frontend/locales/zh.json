@@ -39,7 +39,6 @@
   "models": "模型",
   "api_key": "API 密钥",
   "text_generation": "文本生成",
-  "version": "v0.1.0",
   "total_count": "共 {{ count }} 个",
   "load_failed": "加载失败",
   "in_development": "开发中",
@@ -47,5 +46,12 @@
   "provider_detail": "提供商详情",
   "model_detail": "模型详情",
   "created_at": "创建时间",
-  "updated_at": "更新时间"
+  "updated_at": "更新时间",
+  "register": "注册",
+  "register_btn": "注 册",
+  "registration_code": "注册码",
+  "register_required": "请填写所有字段",
+  "register_error": "注册失败：{{ msg }}",
+  "have_account_login": "已有账号？",
+  "no_account_register": "没有账号？"
 }
