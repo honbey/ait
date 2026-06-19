@@ -1,7 +1,7 @@
 use serde::de::DeserializeOwned;
 
-use gloo_net::http::{Headers, Request};
 use gloo_net::Error as NetError;
+use gloo_net::http::{Headers, Request};
 
 use crate::models::{ApiKeyListItem, CreateApiKeyResponse, DashboardData, Model, Provider};
 
@@ -123,7 +123,12 @@ pub async fn create_api_key(username: &str, name: &str) -> Result<CreateApiKeyRe
 }
 
 pub async fn delete_api_key(username: &str, key: &str) -> Result<(), NetError> {
-    let url = format!("{}/admin/users/{}/api-keys/{}", get_base_url(), username, key);
+    let url = format!(
+        "{}/admin/users/{}/api-keys/{}",
+        get_base_url(),
+        username,
+        key
+    );
     let resp = Request::delete(&url).send().await?;
 
     if !resp.ok() {
@@ -295,9 +300,7 @@ pub async fn update_provider(
 
 pub async fn delete_provider(id: &str) -> Result<(), NetError> {
     let url = format!("{}/admin/providers/{}", get_base_url(), id);
-    let resp = Request::delete(&url)
-        .send()
-        .await?;
+    let resp = Request::delete(&url).send().await?;
 
     if !resp.ok() {
         let status = resp.status();
@@ -318,7 +321,8 @@ pub async fn create_provider(
     enabled: bool,
 ) -> Result<Provider, NetError> {
     let url = format!("{}/admin/providers", get_base_url());
-    let api_key_value = api_key.as_deref()
+    let api_key_value = api_key
+        .as_deref()
         .map(|k| serde_json::Value::String(k.to_string()))
         .unwrap_or(serde_json::Value::Null);
     let body = serde_json::json!({

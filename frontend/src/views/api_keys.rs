@@ -10,8 +10,13 @@ pub fn render_api_keys_view(
     api_key_refresh: sycamore::reactive::Signal<usize>,
     api_key_refreshing: sycamore::reactive::Signal<bool>,
 ) -> View {
-    div().class("p-4 sm:p-8").children(
-        ApiKeyTable(ApiKeyTableProps { keys, username, api_key_refresh, api_key_refreshing }),
-    )
-    .into()
+    div()
+        .class("p-4 sm:p-8")
+        .children(ApiKeyTable(ApiKeyTableProps {
+            keys,
+            username,
+            api_key_refresh,
+            api_key_refreshing,
+        }))
+        .into()
 }

@@ -3,7 +3,10 @@ use sycamore::web::bind;
 use sycamore::web::events;
 use sycamore::web::tags::*;
 
-pub fn modal_dialog(children: impl Into<View>, on_close: impl Fn(web_sys::MouseEvent) + 'static) -> View {
+pub fn modal_dialog(
+    children: impl Into<View>,
+    on_close: impl Fn(web_sys::MouseEvent) + 'static,
+) -> View {
     let content: View = children.into();
     div()
         .class("fixed inset-0 z-50 flex items-center justify-center")
@@ -44,13 +47,14 @@ pub fn detail_row(label: String, value: String) -> View {
 }
 
 pub fn form_field(label_text: String, input: View) -> View {
-    div().children((
-        label()
-            .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
-            .children(label_text),
-        input,
-    ))
-    .into()
+    div()
+        .children((
+            label()
+                .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
+                .children(label_text),
+            input,
+        ))
+        .into()
 }
 
 pub fn form_input(placeholder: String, value: Signal<String>) -> View {
@@ -63,17 +67,19 @@ pub fn form_input(placeholder: String, value: Signal<String>) -> View {
 }
 
 pub fn form_checkbox(id: String, label_text: String, checked: Signal<bool>) -> View {
-    div().class("flex items-center gap-2").children((
-        input()
-            .attr("type", "checkbox")
-            .attr("id", id.clone())
-            .bind(bind::checked, checked),
-        label()
-            .attr("for", id)
-            .class("text-sm text-gray-700 dark:text-gray-300")
-            .children(label_text),
-    ))
-    .into()
+    div()
+        .class("flex items-center gap-2")
+        .children((
+            input()
+                .attr("type", "checkbox")
+                .attr("id", id.clone())
+                .bind(bind::checked, checked),
+            label()
+                .attr("for", id)
+                .class("text-sm text-gray-700 dark:text-gray-300")
+                .children(label_text),
+        ))
+        .into()
 }
 
 pub fn form_error(error: Signal<String>) -> View {
