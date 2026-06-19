@@ -48,8 +48,12 @@
   "have_account_login": "Already have an account?",
   "no_account_register": "No account?",
   "provider_add": "Add Provider",
+  "provider_edit": "Edit Provider",
   "provider_detail": "Detail",
   "provider_actions": "Actions",
+  "delete": "Delete",
+  "delete_confirm_title": "Confirm Delete",
+  "delete_confirm_message": "Are you sure you want to delete {{ name }}?",
   "cancel": "Cancel",
   "save": "Save"
 }

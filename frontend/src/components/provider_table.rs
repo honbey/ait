@@ -1,11 +1,12 @@
+use gloo_timers::callback::Timeout;
 use sycamore::prelude::*;
 use sycamore::web::bind;
 use sycamore::web::events;
 use sycamore::web::tags::*;
 use sycamore_futures::spawn_local_scoped;
-use gloo_timers::callback::Timeout;
+use web_sys::wasm_bindgen::JsCast;
 
-use crate::api::create_provider;
+use crate::api::{create_provider, delete_provider, update_provider};
 use crate::i18n::I18n;
 use crate::models::Provider;
 
@@ -227,11 +228,277 @@ fn render_add_modal(
         .into()
 }
 
+fn render_edit_modal(
+    i18n: &I18n,
+    provider_refresh: sycamore::reactive::Signal<usize>,
+    show_edit_modal: sycamore::reactive::Signal<Option<Provider>>,
+    prov: Provider,
+) -> View {
+    let form_name = create_signal(prov.name.clone());
+    let form_type = create_signal(prov.provider_type.clone());
+    let form_base_url = create_signal(prov.base_url.clone());
+    let form_api_key = create_signal(String::new());
+    let form_enabled = create_signal(prov.enabled);
+    let form_error = create_signal(String::new());
+    let form_loading = create_signal(false);
+
+    let on_submit = move |ev: web_sys::SubmitEvent| {
+        ev.prevent_default();
+        if form_loading.get() {
+            return;
+        }
+        let n = form_name.get_clone();
+        let u = form_base_url.get_clone();
+        if n.is_empty() || u.is_empty() {
+            form_error.set("Name and Base URL are required".to_string());
+            return;
+        }
+        form_loading.set(true);
+        form_error.set(String::new());
+
+        let pid = prov.id.clone();
+        let name = n;
+        let ptype = form_type.get_clone();
+        let base_url = u;
+        let api_key = {
+            let raw = form_api_key.get_clone();
+            if raw.is_empty() { None } else { Some(raw) }
+        };
+        let enabled = form_enabled.get();
+        let refresh = provider_refresh;
+        let loading = form_loading;
+        let err = form_error;
+        spawn_local_scoped(async move {
+            match update_provider(&pid, &name, &ptype, &base_url, api_key, enabled).await {
+                Ok(_) => {
+                    refresh.update(|v| *v += 1);
+                }
+                Err(e) => {
+                    loading.set(false);
+                    err.set(e.to_string());
+                }
+            }
+        });
+    };
+
+    let i18n_save = i18n.clone();
+
+    div()
+        .class("fixed inset-0 z-50 flex items-center justify-center")
+        .children((
+            div()
+                .class("absolute inset-0 bg-black/50")
+                .on(events::click, move |_| show_edit_modal.set(None)),
+            div()
+                .class("relative z-10 bg-white dark:bg-gray-800 rounded-xl p-6 shadow-2xl max-w-md w-full mx-4")
+                .children(
+                    form()
+                        .on(events::submit, on_submit)
+                        .class("space-y-4")
+                        .children((
+                            div()
+                                .class("flex items-center justify-between")
+                                .children((
+                                    h2().class("text-lg font-semibold text-gray-800 dark:text-gray-100")
+                                        .children(i18n.t("provider_edit")),
+                                    button()
+                                        .attr("type", "button")
+                                        .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+                                        .on(events::click, move |_| show_edit_modal.set(None))
+                                        .children(i().class("fas fa-times")),
+                                )),
+                            div().children((
+                                label()
+                                    .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
+                                    .children(i18n.t("name")),
+                                input()
+                                    .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
+                                    .attr("type", "text")
+                                    .attr("placeholder", i18n.t("name"))
+                                    .bind(bind::value, form_name),
+                            )),
+                            div().children((
+                                label()
+                                    .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
+                                    .children(i18n.t("provider_api_type")),
+                                select()
+                                    .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
+                                    .on(events::change, move |ev: web_sys::Event| {
+                                        form_type.set(ev.target().unwrap().unchecked_into::<web_sys::HtmlSelectElement>().value());
+                                    })
+                                    .children((
+                                        option().attr("value", "open_ai_compat")
+                                            .bool_attr("selected", move || form_type.get_clone() == "open_ai_compat")
+                                            .children("OpenAI Compatible"),
+                                        option().attr("value", "deep_seek")
+                                            .bool_attr("selected", move || form_type.get_clone() == "deep_seek")
+                                            .children("DeepSeek"),
+                                        option().attr("value", "zhipu")
+                                            .bool_attr("selected", move || form_type.get_clone() == "zhipu")
+                                            .children("Zhipu"),
+                                        option().attr("value", "ollama")
+                                            .bool_attr("selected", move || form_type.get_clone() == "ollama")
+                                            .children("Ollama"),
+                                        option().attr("value", "llama_cpp")
+                                            .bool_attr("selected", move || form_type.get_clone() == "llama_cpp")
+                                            .children("Llama.cpp"),
+                                    )),
+                            )),
+                            div().children((
+                                label()
+                                    .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
+                                    .children(i18n.t("provider_base_url")),
+                                input()
+                                    .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
+                                    .attr("type", "text")
+                                    .attr("placeholder", i18n.t("provider_base_url"))
+                                    .bind(bind::value, form_base_url),
+                            )),
+                            div().children((
+                                label()
+                                    .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
+                                    .children(i18n.t("api_key")),
+                                input()
+                                    .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
+                                    .attr("type", "text")
+                                    .attr("placeholder", i18n.t("api_key"))
+                                    .bind(bind::value, form_api_key),
+                                p().class("text-xs text-gray-400 dark:text-gray-500 mt-1")
+                                    .children("Leave empty to keep current key"),
+                            )),
+                            div().class("flex items-center gap-2").children((
+                                input()
+                                    .attr("type", "checkbox")
+                                    .attr("id", "edit-enabled")
+                                    .bind(bind::checked, form_enabled),
+                                label()
+                                    .attr("for", "edit-enabled")
+                                    .class("text-sm text-gray-700 dark:text-gray-300")
+                                    .children(i18n.t("status_enabled")),
+                            )),
+                            View::from_dynamic(move || {
+                                let err = form_error.get_clone();
+                                if err.is_empty() {
+                                    View::new()
+                                } else {
+                                    p().class("text-red-500 text-sm").children(err).into()
+                                }
+                            }),
+                            div().class("flex items-center justify-end gap-3").children((
+                                button()
+                                    .attr("type", "button")
+                                    .class("px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 cursor-pointer transition-colors")
+                                    .on(events::click, move |_| show_edit_modal.set(None))
+                                    .children(i18n.t("cancel")),
+                                button()
+                                    .attr("type", "submit")
+                                    .disabled(move || form_loading.get())
+                                    .class("px-4 py-2 bg-blue-500 hover:enabled:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2")
+                                    .children(View::from_dynamic(move || -> View {
+                                        if form_loading.get() {
+                                            div().class("flex items-center gap-2").children((
+                                                i().class("fas fa-spinner animate-spin"),
+                                                span().children(i18n_save.t("save")),
+                                            )).into()
+                                        } else {
+                                            span().children(i18n_save.t("save")).into()
+                                        }
+                                    })),
+                            )),
+                        )),
+                ),
+        ))
+        .into()
+}
+
+fn render_delete_confirm(
+    i18n: &I18n,
+    provider_refresh: sycamore::reactive::Signal<usize>,
+    show_delete_confirm: sycamore::reactive::Signal<Option<Provider>>,
+    prov: Provider,
+) -> View {
+    let deleting = create_signal(false);
+    let prov_id = prov.id.clone();
+
+    let on_delete = move |_| {
+        if deleting.get() {
+            return;
+        }
+        deleting.set(true);
+        let pid = prov_id.clone();
+        let refresh = provider_refresh;
+        let d = deleting;
+        spawn_local_scoped(async move {
+            match delete_provider(&pid).await {
+                Ok(_) => {
+                    refresh.update(|v| *v += 1);
+                }
+                Err(e) => {
+                    d.set(false);
+                    sycamore::web::console_log!("Failed to delete provider: {}", e);
+                }
+            }
+        });
+    };
+
+    let i18n_del = i18n.clone();
+
+    div()
+        .class("fixed inset-0 z-50 flex items-center justify-center")
+        .children((
+            div()
+                .class("absolute inset-0 bg-black/50")
+                .on(events::click, move |_| show_delete_confirm.set(None)),
+            div()
+                .class("relative z-10 bg-white dark:bg-gray-800 rounded-xl p-6 shadow-2xl max-w-md w-full mx-4")
+                .children((
+                    div()
+                        .class("flex items-center justify-between mb-4")
+                        .children((
+                            h2().class("text-lg font-semibold text-gray-800 dark:text-gray-100")
+                                .children(i18n.t("delete_confirm_title")),
+                            button()
+                                .attr("type", "button")
+                                .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+                                .on(events::click, move |_| show_delete_confirm.set(None))
+                                .children(i().class("fas fa-times")),
+                        )),
+                    p().class("text-gray-600 dark:text-gray-400 text-sm mb-6")
+                        .children(i18n.t_replace("delete_confirm_message", "name", &prov.name)),
+                    div().class("flex items-center justify-end gap-3").children((
+                        button()
+                            .attr("type", "button")
+                            .class("px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 cursor-pointer transition-colors")
+                            .on(events::click, move |_| show_delete_confirm.set(None))
+                            .children(i18n.t("cancel")),
+                        button()
+                            .attr("type", "button")
+                            .disabled(move || deleting.get())
+                            .class("px-4 py-2 bg-red-500 hover:enabled:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2")
+                            .on(events::click, on_delete)
+                            .children(View::from_dynamic(move || -> View {
+                                if deleting.get() {
+                                    div().class("flex items-center gap-2").children((
+                                        i().class("fas fa-spinner animate-spin"),
+                                        span().children(i18n_del.t("delete")),
+                                    )).into()
+                                } else {
+                                    span().children(i18n_del.t("delete")).into()
+                                }
+                            })),
+                    )),
+                )),
+        ))
+        .into()
+}
+
 fn make_provider_rows(
     providers: Vec<Provider>,
     i18n: &I18n,
     show_detail: Signal<Option<usize>>,
     is_admin: sycamore::reactive::Signal<bool>,
+    show_edit_modal: sycamore::reactive::Signal<Option<Provider>>,
+    show_delete_confirm: sycamore::reactive::Signal<Option<Provider>>,
 ) -> Vec<View> {
     let enabled_text = i18n.t("status_enabled");
     let disabled_text = i18n.t("status_disabled");
@@ -254,9 +521,9 @@ fn make_provider_rows(
             } else {
                 "bg-gray-50 dark:bg-gray-800/50"
             };
-            let name = prov.name;
-            let ptype = prov.provider_type;
-            let url = prov.base_url;
+            let name = prov.name.clone();
+            let ptype = prov.provider_type.clone();
+            let url = prov.base_url.clone();
             let span_class = format!(
                 "inline-block px-2 py-1 rounded-full text-xs font-medium {}",
                 ec
@@ -281,20 +548,24 @@ fn make_provider_rows(
                     td().class("px-6 py-4 text-center whitespace-nowrap").children(
                         View::from_dynamic::<View>(move || {
                             if is_admin.get() {
-                                div().class("flex items-center justify-center gap-3").children((
-                                    button()
-                                        .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
-                                        .on(events::click, move |_| {
-                                            sycamore::web::console_log!("Edit provider {}", idx);
-                                        })
-                                        .children(i().class("fas fa-pen text-xs")),
-                                    button()
-                                        .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
-                                        .on(events::click, move |_| {
-                                            sycamore::web::console_log!("Delete provider {}", idx);
-                                        })
-                                        .children(i().class("fas fa-trash text-xs")),
-                                )).into()
+                                    div().class("flex items-center justify-center gap-3").children((
+                                        button()
+                                            .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+                                            .on(events::click, {
+                                                let show = show_edit_modal;
+                                                let p = prov.clone();
+                                                move |_| show.set(Some(p.clone()))
+                                            })
+                                            .children(i().class("fas fa-pen text-xs")),
+                                        button()
+                                            .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+                                            .on(events::click, {
+                                                let show = show_delete_confirm;
+                                                let p = prov.clone();
+                                                move |_| show.set(Some(p.clone()))
+                                            })
+                                            .children(i().class("fas fa-trash text-xs")),
+                                    )).into()
                             } else {
                                 i().class("fas fa-ban text-gray-300 dark:text-gray-600 cursor-not-allowed").into()
                             }
@@ -318,11 +589,20 @@ pub struct ProviderTableProps {
 pub fn ProviderTable(props: ProviderTableProps) -> View {
     let i18n = use_context::<I18n>();
     let show_detail = create_signal::<Option<usize>>(None);
+    let show_edit_modal = create_signal::<Option<Provider>>(None);
+    let show_delete_confirm = create_signal::<Option<Provider>>(None);
     let providers = props.providers;
     let is_admin = props.is_admin;
     let provider_refresh = props.provider_refresh;
     let provider_refreshing = props.provider_refreshing;
-    let rows = make_provider_rows(providers.clone(), &i18n, show_detail, is_admin);
+    let rows = make_provider_rows(
+        providers.clone(),
+        &i18n,
+        show_detail,
+        is_admin,
+        show_edit_modal,
+        show_delete_confirm,
+    );
 
     let count = providers.len();
     let i18n_modal = i18n.clone();
@@ -341,6 +621,20 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
         } else {
             View::new()
         }
+    });
+
+    let i18n_edit = i18n.clone();
+    let edit_modal = View::from_dynamic(move || match show_edit_modal.get_clone() {
+        Some(prov) => render_edit_modal(&i18n_edit, provider_refresh, show_edit_modal, prov),
+        None => View::new(),
+    });
+
+    let i18n_delete = i18n.clone();
+    let delete_confirm = View::from_dynamic(move || match show_delete_confirm.get_clone() {
+        Some(prov) => {
+            render_delete_confirm(&i18n_delete, provider_refresh, show_delete_confirm, prov)
+        }
+        None => View::new(),
     });
 
     div()
@@ -425,6 +719,8 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
             ),
             modal,
             add_modal,
+            edit_modal,
+            delete_confirm,
         ))
         .into()
 }
