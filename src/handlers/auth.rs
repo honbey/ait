@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use axum::{
     Json,
     extract::State,
@@ -72,6 +74,8 @@ pub async fn login_handler(
                     "No users configured. Please check server configuration.",
                 ));
             }
+            // Constant-time comparison: always bcrypt verify to prevent timing side-channel
+            let _ = bcrypt::verify(&input.password, &dummy_hash());
             return Err(unauthorized("Invalid credentials"));
         }
         Err(_) => return Err(internal_error("Database error")),
@@ -216,6 +220,13 @@ fn generate_session_key() -> String {
     (0..32)
         .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
         .collect()
+}
+
+fn dummy_hash() -> String {
+    static HASH: OnceLock<String> = OnceLock::new();
+    HASH.get_or_init(|| {
+        bcrypt::hash("dummy", bcrypt::DEFAULT_COST).expect("dummy hash")
+    }).clone()
 }
 
 fn unauthorized(msg: &str) -> (StatusCode, Json<AitError>) {
