@@ -2,6 +2,7 @@ use chrono::serde::ts_seconds;
 use chrono::{DateTime, Utc};
 use rocksdb::{DB as RocksDB, IteratorMode, Options};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -90,6 +91,7 @@ pub struct Model {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
     pub key: String,
+    pub display: String,
     pub name: String,
     #[serde(with = "ts_seconds", default)]
     pub created_at: DateTime<chrono::Utc>,
@@ -108,7 +110,11 @@ pub struct ApiKeyInfo {
 
 impl ApiKey {
     pub fn masked(&self) -> String {
-        let chars: Vec<char> = self.key.chars().collect();
+        self.display.clone()
+    }
+
+    fn mask_key(key: &str) -> String {
+        let chars: Vec<char> = key.chars().collect();
         let prefix: String = chars[..6].iter().collect();
         let suffix: String = chars[chars.len() - 4..].iter().collect();
         format!("{}******{}", prefix, suffix)
@@ -137,6 +143,12 @@ pub struct Session {
     pub created_at: DateTime<chrono::Utc>,
     #[serde(with = "ts_seconds")]
     pub expires_at: DateTime<chrono::Utc>,
+}
+
+fn hash_key(key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 pub struct Database {
@@ -385,7 +397,9 @@ impl Database {
 
     pub fn insert_session(&self, mut session: Session) -> Result<Session, String> {
         session.created_at = Utc::now();
-        let key = format!("sess:{}", session.session_key);
+        let hash = hash_key(&session.session_key);
+        session.session_key = hash.clone();
+        let key = format!("sess:{}", hash);
         let val = serde_json::to_string(&session).map_err(|e| e.to_string())?;
         let cf = self
             .db
@@ -396,7 +410,8 @@ impl Database {
     }
 
     pub fn get_session(&self, session_key: &str) -> Result<Option<Session>, String> {
-        let key = format!("sess:{}", session_key);
+        let hash = hash_key(session_key);
+        let key = format!("sess:{}", hash);
         let cf = self
             .db
             .cf_handle(SESSIONS_CF)
@@ -409,7 +424,8 @@ impl Database {
     }
 
     pub fn delete_session(&self, session_key: &str) -> Result<bool, String> {
-        let key = format!("sess:{}", session_key);
+        let hash = hash_key(session_key);
+        let key = format!("sess:{}", hash);
         let cf = self
             .db
             .cf_handle(SESSIONS_CF)
@@ -430,11 +446,15 @@ impl Database {
         format!("sk-{}", random)
     }
 
-    pub fn insert_api_key(&self, username: &str, name: &str) -> Result<ApiKey, String> {
-        let key = Self::generate_api_key();
+    pub fn insert_api_key(&self, username: &str, name: &str) -> Result<(ApiKey, String), String> {
+        let raw_key = Self::generate_api_key();
+        let hash = hash_key(&raw_key);
         let now = Utc::now();
-        let api_key = ApiKey {
-            key: key.clone(),
+
+        // Stored ApiKey (key is hash, display is masked raw key)
+        let stored = ApiKey {
+            key: hash.clone(),
+            display: ApiKey::mask_key(&raw_key),
             name: name.to_string(),
             created_at: now,
             enabled: true,
@@ -453,7 +473,7 @@ impl Database {
         self.db
             .put_cf(
                 &cf,
-                &key,
+                &hash,
                 serde_json::to_string(&info).map_err(|e| e.to_string())?,
             )
             .map_err(|e| e.to_string())?;
@@ -462,19 +482,20 @@ impl Database {
         let mut user = self
             .get_user(username)?
             .ok_or_else(|| format!("User '{}' not found", username))?;
-        user.api_keys.push(api_key.clone());
+        user.api_keys.push(stored.clone());
         self.update_user(username, user)?;
 
-        Ok(api_key)
+        Ok((stored, raw_key))
     }
 
     pub fn get_user_by_api_key(&self, api_key: &str) -> Result<Option<String>, String> {
+        let hash = hash_key(api_key);
         let cf = self
             .db
             .cf_handle(API_KEYS_CF)
             .ok_or("api_keys CF not found")?;
         self.db
-            .get_cf(&cf, api_key)
+            .get_cf(&cf, &hash)
             .map_err(|e| e.to_string())?
             .map(|val| {
                 let info: ApiKeyInfo = serde_json::from_slice(&val).map_err(|e| e.to_string())?;
@@ -484,16 +505,17 @@ impl Database {
     }
 
     pub fn delete_api_key(&self, username: &str, api_key: &str) -> Result<bool, String> {
+        let hash = hash_key(api_key);
         let cf = self
             .db
             .cf_handle(API_KEYS_CF)
             .ok_or("api_keys CF not found")?;
-        self.db.delete_cf(&cf, api_key).map_err(|e| e.to_string())?;
+        self.db.delete_cf(&cf, &hash).map_err(|e| e.to_string())?;
 
         let mut user = self
             .get_user(username)?
             .ok_or_else(|| format!("User '{}' not found", username))?;
-        user.api_keys.retain(|k| k.key != api_key);
+        user.api_keys.retain(|k| k.key != hash);
         self.update_user(username, user)?;
 
         Ok(true)
