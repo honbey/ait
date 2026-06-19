@@ -16,13 +16,25 @@ pub struct SessionUser {
     pub allowed: Vec<Permission>,
 }
 
-/// Extract `session_key` from Authorization header (Bearer) or Cookie header.
-fn extract_session_key(headers: &HeaderMap) -> Option<&str> {
-    if let Some(key) = headers
+fn full_access(username: &str) -> SessionUser {
+    SessionUser {
+        username: username.to_string(),
+        role: UserRole::Admin,
+        allowed: vec![],
+    }
+}
+
+/// Extract Bearer token from Authorization header.
+fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-    {
+}
+
+/// Extract `session_key` from Authorization header (Bearer) or Cookie header.
+pub fn extract_session_key(headers: &HeaderMap) -> Option<&str> {
+    if let Some(key) = extract_bearer_token(headers) {
         return Some(key);
     }
     let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
@@ -37,16 +49,70 @@ fn extract_session_key(headers: &HeaderMap) -> Option<&str> {
 
 pub async fn auth_middleware(
     State(state): State<AppState>,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     if !state.config.auth.enabled {
+        req.extensions_mut().insert(full_access("anonymous"));
         return Ok(next.run(req).await);
     }
 
-    let expected_token = state.config.auth.token.as_deref().unwrap_or("");
-    check_bearer_token(req.headers(), expected_token)?;
+    let token = extract_bearer_token(req.headers())
+        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
+    // Check if token is a session key
+    if let Ok(Some(session)) = state.db.get_session(token) {
+        if session.expires_at <= chrono::Utc::now() {
+            return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
+        }
+        let user = state
+            .db
+            .get_user(&session.username)
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(AitError::internal_error("Database error")),
+                )
+            })?
+            .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+
+        req.extensions_mut().insert(SessionUser {
+            username: user.username,
+            role: user.role,
+            allowed: user.allowed,
+        });
+        return Ok(next.run(req).await);
+    }
+
+    // Check if token is an API key
+    let username = state
+        .db
+        .get_user_by_api_key(token)
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AitError::internal_error("Database error")),
+            )
+        })?
+        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+
+    let user = state
+        .db
+        .get_user(&username)
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AitError::internal_error("Database error")),
+            )
+        })?
+        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+
+    // API key users are always User role (never Admin)
+    req.extensions_mut().insert(SessionUser {
+        username: user.username,
+        role: UserRole::User,
+        allowed: user.allowed,
+    });
     Ok(next.run(req).await)
 }
 
@@ -62,7 +128,12 @@ pub async fn admin_auth_middleware(
     let session = state
         .db
         .get_session(session_key)
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(AitError::internal_error("Database error"))))?
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AitError::internal_error("Database error")),
+            )
+        })?
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
     if session.expires_at <= chrono::Utc::now() {
@@ -72,7 +143,12 @@ pub async fn admin_auth_middleware(
     let user = state
         .db
         .get_user(&session.username)
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(AitError::internal_error("Database error"))))?
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AitError::internal_error("Database error")),
+            )
+        })?
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
     let session_user = SessionUser {
@@ -83,20 +159,4 @@ pub async fn admin_auth_middleware(
 
     req.extensions_mut().insert(session_user);
     Ok(next.run(req).await)
-}
-
-fn check_bearer_token(
-    headers: &HeaderMap,
-    expected_token: &str,
-) -> Result<(), (StatusCode, Json<AitError>)> {
-    let auth_header = headers
-        .get("Authorization")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("");
-
-    if !auth_header.starts_with("Bearer ") || &auth_header[7..] != expected_token {
-        return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
-    }
-
-    Ok(())
 }
