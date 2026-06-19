@@ -32,6 +32,13 @@ pub struct AuthConfig {
     /// Password for the bootstrapped admin user.
     #[serde(default = "default_bootstrap_password")]
     pub bootstrap_password: String,
+    /// Whether to allow user registration via the register endpoint.
+    #[serde(default)]
+    pub allow_registration: bool,
+    /// Registration code required when allow_registration is enabled.
+    /// If empty, no code is required (registration is open).
+    #[serde(default)]
+    pub registration_code: String,
 }
 
 fn default_session_ttl() -> u64 {
@@ -70,6 +77,8 @@ impl ConfigApp {
             .set_default("auth.bootstrap_admin", false)?
             .set_default("auth.bootstrap_username", "admin")?
             .set_default("auth.bootstrap_password", "admin123")?
+            .set_default("auth.allow_registration", false)?
+            .set_default("auth.registration_code", "")?
             .set_default("database.path", "./data/ait.rocksdb")?
             .set_default("proxy.timeout_secs", 300u64)?
             .set_default("proxy.stream", true)?

@@ -13,6 +13,10 @@ session_ttl_secs = 86400
 bootstrap_admin = true
 bootstrap_username = "admin"
 bootstrap_password = "admin123"
+# 是否允许用户自行注册
+# allow_registration = false
+# 注册码，不为空时注册需匹配此码
+# registration_code = ""
 
 [database]
 path = "./data/ait.rocksdb"

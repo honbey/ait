@@ -8,7 +8,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{Session, UserRole, Permission};
+use crate::db::{Session, User, UserRole, Permission};
 use crate::error::AitError;
 
 #[derive(Deserialize)]
@@ -22,6 +22,13 @@ pub struct LoginResponse {
     pub ok: bool,
     pub session_key: String,
     pub role: UserRole,
+}
+
+#[derive(Deserialize)]
+pub struct RegisterRequest {
+    pub username: String,
+    pub password: String,
+    pub registration_code: String,
 }
 
 #[derive(Serialize)]
@@ -107,6 +114,41 @@ pub async fn login_handler(
     ))
 }
 
+pub async fn register_handler(
+    State(state): State<AppState>,
+    Json(input): Json<RegisterRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<AitError>)> {
+    if !state.config.auth.allow_registration {
+        return Err(forbidden("Registration is disabled"));
+    }
+
+    if !state.config.auth.registration_code.is_empty()
+        && state.config.auth.registration_code != input.registration_code
+    {
+        return Err(forbidden("Invalid registration code"));
+    }
+
+    if state.db.get_user(&input.username).map_err(|_| internal_error("Database error"))?.is_some() {
+        return Err(conflict("Username already exists"));
+    }
+
+    let password_hash = bcrypt::hash(&input.password, bcrypt::DEFAULT_COST)
+        .map_err(|_| internal_error("Failed to hash password"))?;
+
+    let user = User {
+        username: input.username,
+        password_hash,
+        role: UserRole::User,
+        allowed: vec![],
+        api_keys: vec![],
+        created_at: chrono::Utc::now(),
+    };
+
+    state.db.insert_user(user).map_err(|_| internal_error("Failed to create user"))?;
+
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
 pub async fn logout_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -182,6 +224,28 @@ fn unauthorized(msg: &str) -> (StatusCode, Json<AitError>) {
         Json(AitError {
             message: msg.to_string(),
             code: 401,
+            r#type: "auth_error".to_string(),
+        }),
+    )
+}
+
+fn forbidden(msg: &str) -> (StatusCode, Json<AitError>) {
+    (
+        StatusCode::FORBIDDEN,
+        Json(AitError {
+            message: msg.to_string(),
+            code: 403,
+            r#type: "auth_error".to_string(),
+        }),
+    )
+}
+
+fn conflict(msg: &str) -> (StatusCode, Json<AitError>) {
+    (
+        StatusCode::CONFLICT,
+        Json(AitError {
+            message: msg.to_string(),
+            code: 409,
             r#type: "auth_error".to_string(),
         }),
     )

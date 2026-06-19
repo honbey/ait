@@ -22,7 +22,7 @@ use handlers::admin::{
 use handlers::apikeys::{
     create_api_key_handler, delete_api_key_handler, list_api_keys_handler,
 };
-use handlers::auth::{login_handler, logout_handler, session_check};
+use handlers::auth::{login_handler, logout_handler, register_handler, session_check};
 use handlers::proxy::{chat_completions, completions, embeddings, health, list_models_proxy};
 use handlers::users::{
     change_password_handler, delete_user_handler, list_users_handler, update_user_handler,
@@ -87,6 +87,7 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
     // Auth routes (no admin middleware — they handle their own auth logic)
     let auth_route = Router::new()
         .route("/admin/login", post(login_handler))
+        .route("/admin/register", post(register_handler))
         .route("/admin/logout", post(logout_handler))
         .route("/admin/session", get(session_check));
 
