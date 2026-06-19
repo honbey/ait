@@ -1,4 +1,6 @@
+pub mod api_key_table;
 pub mod dark_mode_toggle;
+pub mod modal;
 pub mod model_table;
 pub mod provider_table;
 pub mod sidebar;

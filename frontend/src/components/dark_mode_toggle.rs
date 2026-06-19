@@ -11,7 +11,7 @@ pub struct DarkModeToggleProps {
 pub fn DarkModeToggle(props: DarkModeToggleProps) -> View {
     button()
         .class(
-            "px-2 py-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors",
+            "px-2 py-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors",
         )
         .on(events::click, move |_| {
             props.dark.set(!props.dark.get());

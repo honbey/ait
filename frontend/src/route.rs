@@ -2,6 +2,7 @@
 pub enum Route {
     Index,
     Login,
+    Register,
     Dashboard,
     Providers,
     Models,

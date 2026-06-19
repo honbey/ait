@@ -68,20 +68,21 @@ fn App() -> View {
         .unwrap_or_else(|| "zh".to_string());
     let i18n = i18n::I18n::new(&initial_lang);
 
+    let username = create_signal(None::<String>);
+    let role = create_signal(None::<String>);
+
     // On mount, check if we have a valid session cookie
-    let auth_check = authenticated;
     spawn_local_scoped(async move {
-        if crate::api::check_session().await.unwrap_or(false) {
-            auth_check.set(true);
+        if let Ok(Some((uname, r))) = crate::api::check_session().await {
+            username.set(Some(uname));
+            role.set(Some(r));
+            authenticated.set(true);
         }
     });
 
     let i18n_clone = i18n.clone();
-    let storage_for_lang = storage.clone();
     create_effect(move || {
-        storage_for_lang.set_item(LANG_KEY, &i18n_clone.lang());
-    });
-    create_effect(move || {
+        storage.set_item(LANG_KEY, &i18n_clone.lang());
         storage.set_item(THEME_KEY, if dark.get() { "dark" } else { "light" });
     });
 
@@ -91,6 +92,8 @@ fn App() -> View {
         dark,
         route,
         authenticated,
+        username,
+        role,
     })
 }
 
