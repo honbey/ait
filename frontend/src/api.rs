@@ -1,7 +1,7 @@
 use serde::de::DeserializeOwned;
 
-use gloo_net::Error as NetError;
 use gloo_net::http::{Headers, Request};
+use gloo_net::Error as NetError;
 
 use crate::models::{DashboardData, Model, Provider};
 
@@ -104,7 +104,7 @@ pub async fn login_api(username: &str, password: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn check_session() -> Result<bool, String> {
+pub async fn check_session() -> Result<Option<String>, String> {
     let url = format!("{}/admin/session", get_base_url());
     let resp = Request::get(&url)
         .headers(Headers::new())
@@ -113,10 +113,18 @@ pub async fn check_session() -> Result<bool, String> {
         .map_err(|e| e.to_string())?;
 
     let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(json
+    let authenticated = json
         .get("authenticated")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false))
+        .unwrap_or(false);
+    if authenticated {
+        Ok(json
+            .get("username")
+            .and_then(|v| v.as_str())
+            .map(String::from))
+    } else {
+        Ok(None)
+    }
 }
 
 pub async fn logout_api() -> Result<(), String> {

@@ -1,9 +1,9 @@
 use sycamore::prelude::*;
 use sycamore::web::tags::*;
 
-use crate::i18n::I18n;
 use crate::components::model_table::ModelTable;
 use crate::components::model_table::ModelTableProps;
+use crate::i18n::I18n;
 use crate::models::Model;
 
 pub fn render_models_view(i18n: &I18n, models: Vec<Model>) -> View {

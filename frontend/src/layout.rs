@@ -93,6 +93,7 @@ pub struct LayoutProps {
     pub dark: Signal<bool>,
     pub route: Signal<Route>,
     pub authenticated: Signal<bool>,
+    pub username: Signal<Option<String>>,
 }
 
 #[component]
@@ -100,6 +101,7 @@ pub fn Layout(props: LayoutProps) -> View {
     let dark = props.dark;
     let route = props.route;
     let authenticated = props.authenticated;
+    let username = props.username;
     let sidebar_open = create_signal(false);
     let i18n = use_context::<I18n>();
 
@@ -137,7 +139,7 @@ pub fn Layout(props: LayoutProps) -> View {
             div()
                 .class("min-h-screen bg-gray-50 dark:bg-gray-900")
                 .children((
-                    Topbar(TopbarProps { dark, route, authenticated }),
+                    Topbar(TopbarProps { dark, route, authenticated, username }),
                     // Mobile overlay backdrop
                     View::from_dynamic(move || {
                         if route.get().is_console() {
@@ -189,7 +191,11 @@ pub fn Layout(props: LayoutProps) -> View {
                         .children(View::from_dynamic(move || {
                             match route.get() {
                                 Route::Index => {
-                                    crate::views::index::render_index_view(&i18n_view, route)
+                                    crate::views::index::render_index_view(
+                                        &i18n_view,
+                                        route,
+                                        authenticated,
+                                    )
                                 }
                                 Route::Login => {
                                     crate::views::login::render_login_view(

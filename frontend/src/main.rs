@@ -68,10 +68,14 @@ fn App() -> View {
         .unwrap_or_else(|| "zh".to_string());
     let i18n = i18n::I18n::new(&initial_lang);
 
+    let username = create_signal(None::<String>);
+
     // On mount, check if we have a valid session cookie
     let auth_check = authenticated;
+    let username_check = username.clone();
     spawn_local_scoped(async move {
-        if crate::api::check_session().await.unwrap_or(false) {
+        if let Ok(Some(uname)) = crate::api::check_session().await {
+            username_check.set(Some(uname));
             auth_check.set(true);
         }
     });
@@ -91,6 +95,7 @@ fn App() -> View {
         dark,
         route,
         authenticated,
+        username,
     })
 }
 

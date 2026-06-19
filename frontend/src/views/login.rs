@@ -106,7 +106,7 @@ pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal
                         span().class("text-sm text-gray-500 dark:text-gray-400")
                             .children(i18n.t("no_account_register")),
                         button()
-                            .class("ml-1 text-sm text-indigo-600 dark:text-indigo-400 hover:underline")
+                            .class("ml-1 text-sm text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer")
                             .on(events::click, move |_| route.set(Route::Register))
                             .children(i18n.t("register")),
                     )),

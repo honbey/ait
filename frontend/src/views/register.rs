@@ -119,7 +119,7 @@ pub fn render_register_view(i18n: &I18n, route: Signal<Route>) -> View {
                         span().class("text-sm text-gray-500 dark:text-gray-400")
                             .children(i18n.t("have_account_login")),
                         button()
-                            .class("ml-1 text-sm text-indigo-600 dark:text-indigo-400 hover:underline")
+                            .class("ml-1 text-sm text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer")
                             .on(events::click, move |_| route.set(Route::Login))
                             .children(i18n.t("login")),
                     )),

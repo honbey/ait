@@ -73,8 +73,16 @@ fn make_provider_rows(
             } else {
                 "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
             };
-            let st = if prov.enabled { &enabled_text } else { &disabled_text };
-            let bg = if idx % 2 == 0 { "" } else { "bg-gray-50 dark:bg-gray-800/50" };
+            let st = if prov.enabled {
+                &enabled_text
+            } else {
+                &disabled_text
+            };
+            let bg = if idx % 2 == 0 {
+                ""
+            } else {
+                "bg-gray-50 dark:bg-gray-800/50"
+            };
             let name = prov.name;
             let ptype = prov.provider_type;
             let url = prov.base_url;
@@ -93,13 +101,12 @@ fn make_provider_rows(
                         .children(url),
                     td().class("px-6 py-4")
                         .children(span().class(span_class).children(st.clone())),
-                    td().class("px-6 py-4 text-center")
-                        .children(
-                            button()
-                                .class("cursor-pointer text-gray-400")
-                                .on(events::click, move |_| show.set(Some(idx)))
-                                .children(i().class("fas fa-ellipsis-h")),
-                        ),
+                    td().class("px-6 py-4 text-center").children(
+                        button()
+                            .class("cursor-pointer text-gray-400")
+                            .on(events::click, move |_| show.set(Some(idx)))
+                            .children(i().class("fas fa-ellipsis-h")),
+                    ),
                 ))
                 .into()
         })
@@ -156,9 +163,9 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
                                 "text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
                             )
                             .children(i18n.t("providers_table_status")),
-                                th().class(
-                                    "text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
-                                ),
+                            th().class(
+                                "text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium",
+                            ),
                         )),
                     ),
                     tbody().children(rows),

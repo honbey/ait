@@ -1,9 +1,9 @@
 use sycamore::prelude::*;
 use sycamore::web::tags::*;
 
-use crate::i18n::I18n;
 use crate::components::provider_table::ProviderTable;
 use crate::components::provider_table::ProviderTableProps;
+use crate::i18n::I18n;
 use crate::models::Provider;
 
 pub fn render_providers_view(i18n: &I18n, providers: Vec<Provider>) -> View {

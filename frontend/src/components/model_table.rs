@@ -18,7 +18,11 @@ fn detail_row(label: String, value: String) -> View {
 fn render_detail_modal(i18n: &I18n, model: Model, show_detail: Signal<Option<usize>>) -> View {
     let enabled_text = i18n.t("providers_status_enabled");
     let disabled_text = i18n.t("providers_status_disabled");
-    let status = if model.enabled { enabled_text } else { disabled_text };
+    let status = if model.enabled {
+        enabled_text
+    } else {
+        disabled_text
+    };
 
     div()
         .class("fixed inset-0 z-50 flex items-center justify-center")
@@ -66,8 +70,16 @@ fn make_model_rows(
             } else {
                 "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
             };
-            let st = if m.enabled { &enabled_text } else { &disabled_text };
-            let bg = if idx % 2 == 0 { "" } else { "bg-gray-50 dark:bg-gray-800/50" };
+            let st = if m.enabled {
+                &enabled_text
+            } else {
+                &disabled_text
+            };
+            let bg = if idx % 2 == 0 {
+                ""
+            } else {
+                "bg-gray-50 dark:bg-gray-800/50"
+            };
             let span_class = format!(
                 "inline-block px-2 py-1 rounded-full text-xs font-medium {}",
                 ec
@@ -83,13 +95,12 @@ fn make_model_rows(
                         .children(m.upstream_model),
                     td().class("px-6 py-4")
                         .children(span().class(span_class).children(st.clone())),
-                    td().class("px-6 py-4 text-center")
-                        .children(
-                            button()
-                                .class("cursor-pointer text-gray-400")
-                                .on(events::click, move |_| show.set(Some(idx)))
-                                .children(i().class("fas fa-ellipsis-h")),
-                        ),
+                    td().class("px-6 py-4 text-center").children(
+                        button()
+                            .class("cursor-pointer text-gray-400")
+                            .on(events::click, move |_| show.set(Some(idx)))
+                            .children(i().class("fas fa-ellipsis-h")),
+                    ),
                 ))
                 .into()
         })

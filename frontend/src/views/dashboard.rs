@@ -1,12 +1,12 @@
 use sycamore::prelude::*;
 use sycamore::web::tags::*;
 
-use crate::i18n::I18n;
-use crate::models::DashboardData;
 use crate::components::provider_table::ProviderTable;
 use crate::components::provider_table::ProviderTableProps;
 use crate::components::stat_card::StatCard;
 use crate::components::stat_card::StatCardProps;
+use crate::i18n::I18n;
+use crate::models::DashboardData;
 
 pub fn render_dashboard_view(i18n: &I18n, data: DashboardData) -> View {
     let provider_count = data.providers.len();
