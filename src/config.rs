@@ -13,55 +13,20 @@ pub struct ConfigApp {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
-    /// Whether the health check endpoint returns detailed information
     pub health_detail: bool,
-    /// Interval in seconds for the background expired-session cleanup task.
-    #[serde(default = "default_session_cleanup_interval")]
     pub session_cleanup_interval_secs: u64,
-}
-
-fn default_session_cleanup_interval() -> u64 {
-    3600
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AuthConfig {
     pub enabled: bool,
-    /// Session TTL in seconds for web login sessions.
-    #[serde(default = "default_session_ttl")]
     pub session_ttl_secs: u64,
-    /// Whether to bootstrap an admin user on first startup.
-    #[serde(default)]
     pub bootstrap_admin: bool,
-    /// Username for the bootstrapped admin user.
-    #[serde(default = "default_bootstrap_username")]
     pub bootstrap_username: String,
-    /// Password for the bootstrapped admin user.
-    #[serde(default = "default_bootstrap_password")]
     pub bootstrap_password: String,
-    /// Whether to allow user registration via the register endpoint.
-    #[serde(default)]
     pub allow_registration: bool,
-    /// Registration code required when allow_registration is enabled.
-    /// If empty, no code is required (registration is open).
-    #[serde(default)]
     pub registration_code: String,
-    /// Maximum number of API keys a single user can create.
-    #[serde(default = "default_max_api_keys")]
     pub max_api_keys_per_user: u64,
-}
-
-fn default_session_ttl() -> u64 {
-    86400
-}
-fn default_bootstrap_username() -> String {
-    "admin".to_string()
-}
-fn default_bootstrap_password() -> String {
-    "admin123".to_string()
-}
-fn default_max_api_keys() -> u64 {
-    10
 }
 
 #[derive(Debug, Deserialize, Clone)]
