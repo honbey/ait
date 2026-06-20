@@ -3,6 +3,8 @@ host = "127.0.0.1"
 port = 8000
 # 健康检查是否返回详细信息（版本、运行时间等）
 health_detail = false
+# 过期 session 自动清理间隔（秒）
+session_cleanup_interval_secs = 3600
 
 [auth]
 # 仅控制 /v1/* 代理接口的认证开关，Admin 接口始终需要认证
@@ -17,6 +19,8 @@ bootstrap_password = "admin123"
 # allow_registration = false
 # 注册码，不为空时注册需匹配此码
 # registration_code = ""
+# 每个用户最大 API key 数量
+# max_api_keys_per_user = 10
 
 [database]
 path = "./data/ait.rocksdb"

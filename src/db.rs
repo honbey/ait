@@ -181,6 +181,7 @@ fn hash_key(key: &str) -> String {
 
 pub struct Database {
     db: Arc<RocksDB>,
+    max_api_keys_per_user: usize,
 }
 
 #[derive(Debug)]
@@ -203,7 +204,10 @@ impl std::fmt::Display for DbError {
 impl std::error::Error for DbError {}
 
 impl Database {
-    pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new(
+        path: &str,
+        max_api_keys_per_user: usize,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(parent) = Path::new(path).parent() {
             fs::create_dir_all(parent)?;
         }
@@ -215,7 +219,10 @@ impl Database {
         let cf_names = vec![PROVIDERS_CF, MODELS_CF, USERS_CF, SESSIONS_CF, API_KEYS_CF];
         let db = RocksDB::open_cf(&db_opts, path, &cf_names)?;
 
-        Ok(Self { db: Arc::new(db) })
+        Ok(Self {
+            db: Arc::new(db),
+            max_api_keys_per_user,
+        })
     }
 
     fn cf(&self, name: &str) -> Result<&rocksdb::ColumnFamily, DbError> {
@@ -476,10 +483,11 @@ impl Database {
         let mut user = self
             .get_user(username)?
             .ok_or_else(|| DbError::NotFound(format!("User '{}' not found", username)))?;
-        if user.api_keys.len() >= 10 {
-            return Err(DbError::LimitExceeded(
-                "Maximum of 10 API keys per user".to_string(),
-            ));
+        if user.api_keys.len() >= self.max_api_keys_per_user {
+            return Err(DbError::LimitExceeded(format!(
+                "Maximum of {} API keys per user",
+                self.max_api_keys_per_user
+            )));
         }
 
         let raw_key = Self::generate_api_key();

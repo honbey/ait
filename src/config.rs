@@ -15,6 +15,13 @@ pub struct ServerConfig {
     pub port: u16,
     /// Whether the health check endpoint returns detailed information
     pub health_detail: bool,
+    /// Interval in seconds for the background expired-session cleanup task.
+    #[serde(default = "default_session_cleanup_interval")]
+    pub session_cleanup_interval_secs: u64,
+}
+
+fn default_session_cleanup_interval() -> u64 {
+    3600
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -39,6 +46,9 @@ pub struct AuthConfig {
     /// If empty, no code is required (registration is open).
     #[serde(default)]
     pub registration_code: String,
+    /// Maximum number of API keys a single user can create.
+    #[serde(default = "default_max_api_keys")]
+    pub max_api_keys_per_user: u64,
 }
 
 fn default_session_ttl() -> u64 {
@@ -49,6 +59,9 @@ fn default_bootstrap_username() -> String {
 }
 fn default_bootstrap_password() -> String {
     "admin123".to_string()
+}
+fn default_max_api_keys() -> u64 {
+    10
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -72,6 +85,7 @@ impl ConfigApp {
             .set_default("server.host", "127.0.0.1")?
             .set_default("server.port", 8000u16)?
             .set_default("server.health_detail", false)?
+            .set_default("server.session_cleanup_interval_secs", 3600u64)?
             .set_default("auth.enabled", true)?
             .set_default("auth.session_ttl_secs", 86400u64)?
             .set_default("auth.bootstrap_admin", false)?
@@ -79,6 +93,7 @@ impl ConfigApp {
             .set_default("auth.bootstrap_password", "admin123")?
             .set_default("auth.allow_registration", false)?
             .set_default("auth.registration_code", "")?
+            .set_default("auth.max_api_keys_per_user", 10u64)?
             .set_default("database.path", "./data/ait.rocksdb")?
             .set_default("proxy.timeout_secs", 300u64)?
             .set_default("proxy.stream", true)?
@@ -100,7 +115,9 @@ mod tests {
         let config = ConfigApp::new(None).unwrap();
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 8000);
+        assert_eq!(config.server.session_cleanup_interval_secs, 3600);
         assert!(config.auth.enabled);
+        assert_eq!(config.auth.max_api_keys_per_user, 10);
         assert_eq!(config.database.path, "./data/ait.rocksdb");
     }
 }

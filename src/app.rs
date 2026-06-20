@@ -13,7 +13,10 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: ConfigApp) -> Self {
-        let db = match Database::new(&config.database.path) {
+        let db = match Database::new(
+            &config.database.path,
+            config.auth.max_api_keys_per_user as usize,
+        ) {
             Ok(d) => Arc::new(d),
             Err(e) => {
                 eprintln!("Failed to open database: {}", e);
@@ -51,10 +54,11 @@ impl AppState {
             }
         }
 
-        // Hourly cleanup of expired sessions
+        // Periodic cleanup of expired sessions
+        let interval_secs = config.server.session_cleanup_interval_secs;
         let cleanup_db = db.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             loop {
                 interval.tick().await;
                 match cleanup_db.cleanup_expired_sessions() {
