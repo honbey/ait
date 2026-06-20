@@ -23,6 +23,7 @@ pub struct ApiKeyResponse {
 
 #[derive(serde::Serialize)]
 pub struct ApiKeyListItem {
+    pub id: String,
     pub key: String,
     pub name: String,
     pub created_at: String,
@@ -70,6 +71,7 @@ pub async fn list_api_keys_handler(
         .api_keys
         .into_iter()
         .map(|k| ApiKeyListItem {
+            id: k.id.clone(),
             key: k.masked(),
             name: k.name,
             created_at: k.created_at.to_rfc3339(),

@@ -25,6 +25,7 @@ pub struct Model {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ApiKeyListItem {
+    pub id: String,
     pub key: String,
     pub name: String,
     pub created_at: String,
