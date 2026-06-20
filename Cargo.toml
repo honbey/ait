@@ -85,7 +85,8 @@ async-trait = "0.1"
 rand = "0.10"
 
 # Password hashing
-bcrypt = "0.16"
+bcrypt = "0.19"
 
 # Key hashing
-sha2 = "0.10"
+sha2 = "0.11"
+hex = "0.4"
