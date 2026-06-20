@@ -259,10 +259,10 @@ impl Database {
         Ok(provider)
     }
 
-    pub fn update_provider(&self, id: &str, updates: &Provider) -> Result<Provider, DbError> {
+    pub fn update_provider(&self, updates: &Provider) -> Result<Provider, DbError> {
         let mut provider = self
-            .get_provider(id)?
-            .ok_or_else(|| DbError::NotFound(format!("Provider '{}' not found", id)))?;
+            .get_provider(&updates.id)?
+            .ok_or_else(|| DbError::NotFound(format!("Provider '{}' not found", &updates.id)))?;
 
         provider.name = updates.name.clone();
         provider.provider_type = updates.provider_type.clone();
@@ -273,7 +273,7 @@ impl Database {
         provider.enabled = updates.enabled;
         provider.updated_at = Utc::now();
 
-        self.cf_put(PROVIDERS_CF, format!("prov:{}", id), &provider)?;
+        self.cf_put(PROVIDERS_CF, format!("prov:{}", &updates.id), &provider)?;
         Ok(provider)
     }
 
@@ -328,17 +328,17 @@ impl Database {
         Ok(model)
     }
 
-    pub fn update_model(&self, name: &str, updates: &Model) -> Result<Model, DbError> {
+    pub fn update_model(&self, updates: &Model) -> Result<Model, DbError> {
         let mut model = self
-            .get_model(name)?
-            .ok_or_else(|| DbError::NotFound(format!("Model '{}' not found", name)))?;
+            .get_model(&updates.name)?
+            .ok_or_else(|| DbError::NotFound(format!("Model '{}' not found", &updates.name)))?;
 
         model.provider_id = updates.provider_id.clone();
         model.upstream_model = updates.upstream_model.clone();
         model.enabled = updates.enabled;
         model.updated_at = Utc::now();
 
-        self.cf_put(MODELS_CF, format!("model:{}", name), &model)?;
+        self.cf_put(MODELS_CF, format!("model:{}", &updates.name), &model)?;
         Ok(model)
     }
 

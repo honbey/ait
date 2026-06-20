@@ -3,7 +3,6 @@ use axum::{
     extract::{Json, Path, State},
     http::StatusCode,
 };
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
@@ -105,6 +104,66 @@ pub struct UpdateModelRequest {
     pub enabled: bool,
 }
 
+// --- From request types ---
+
+impl From<CreateProviderRequest> for Provider {
+    fn from(input: CreateProviderRequest) -> Self {
+        Provider {
+            id: Default::default(),
+            name: input.name,
+            provider_type: input.provider_type,
+            base_url: input.base_url,
+            api_key: input.api_key,
+            enabled: input.enabled,
+            created_at: Default::default(),
+            updated_at: Default::default(),
+        }
+    }
+}
+
+impl From<UpdateProviderRequest> for Provider {
+    fn from(input: UpdateProviderRequest) -> Self {
+        Provider {
+            id: Default::default(),
+            name: input.name,
+            provider_type: input.provider_type,
+            base_url: input.base_url,
+            api_key: input.api_key,
+            enabled: input.enabled,
+            created_at: Default::default(),
+            updated_at: Default::default(),
+        }
+    }
+}
+
+impl From<CreateModelRequest> for Model {
+    fn from(input: CreateModelRequest) -> Self {
+        Model {
+            id: Default::default(),
+            name: input.name,
+            provider_id: input.provider_id,
+            upstream_model: input.upstream_model,
+            enabled: input.enabled,
+            created_at: Default::default(),
+            updated_at: Default::default(),
+        }
+    }
+}
+
+impl From<UpdateModelRequest> for Model {
+    fn from(input: UpdateModelRequest) -> Self {
+        Model {
+            id: Default::default(),
+            name: Default::default(),
+            provider_id: input.provider_id,
+            upstream_model: input.upstream_model,
+            enabled: input.enabled,
+            created_at: Default::default(),
+            updated_at: Default::default(),
+        }
+    }
+}
+
 // --- Provider CRUD ---
 
 pub async fn create_provider(
@@ -113,17 +172,7 @@ pub async fn create_provider(
     Json(input): Json<CreateProviderRequest>,
 ) -> Result<(StatusCode, Json<ProviderResponse>), (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
-    let provider = Provider {
-        id: String::new(),
-        name: input.name,
-        provider_type: input.provider_type,
-        base_url: input.base_url,
-        api_key: input.api_key,
-        enabled: input.enabled,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-    };
-    let inserted = state.db.insert_provider(provider)?;
+    let inserted = state.db.insert_provider(input.into())?;
 
     Ok((StatusCode::CREATED, Json(ProviderResponse::from(inserted))))
 }
@@ -190,17 +239,9 @@ pub async fn update_provider(
     Json(input): Json<UpdateProviderRequest>,
 ) -> Result<Json<ProviderResponse>, (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
-    let updates = Provider {
-        id: id.clone(),
-        name: input.name,
-        provider_type: input.provider_type,
-        base_url: input.base_url,
-        api_key: input.api_key,
-        enabled: input.enabled,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-    };
-    let provider = state.db.update_provider(&id, &updates)?;
+    let mut updates: Provider = input.into();
+    updates.id = id;
+    let provider = state.db.update_provider(&updates)?;
 
     Ok(Json(ProviderResponse::from(provider)))
 }
@@ -223,16 +264,7 @@ pub async fn create_model(
     Json(input): Json<CreateModelRequest>,
 ) -> Result<(StatusCode, Json<ModelResponse>), (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
-    let model = Model {
-        id: String::new(),
-        name: input.name,
-        provider_id: input.provider_id,
-        upstream_model: input.upstream_model,
-        enabled: input.enabled,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-    };
-    let inserted = state.db.insert_model(model)?;
+    let inserted = state.db.insert_model(input.into())?;
 
     Ok((StatusCode::CREATED, Json(ModelResponse::from(inserted))))
 }
@@ -275,15 +307,8 @@ pub async fn update_model(
     Json(input): Json<UpdateModelRequest>,
 ) -> Result<Json<ModelResponse>, (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
-    let updates = Model {
-        id: String::new(),
-        name: name.clone(),
-        provider_id: input.provider_id,
-        upstream_model: input.upstream_model,
-        enabled: input.enabled,
-        created_at: Default::default(),
-        updated_at: Default::default(),
-    };
-    let model = state.db.update_model(&name, &updates)?;
+    let mut updates: Model = input.into();
+    updates.name = name;
+    let model = state.db.update_model(&updates)?;
     Ok(Json(ModelResponse::from(model)))
 }
