@@ -558,7 +558,3 @@ impl Database {
         Ok(result)
     }
 }
-
-// Database is safe to share across threads (Arc internally)
-unsafe impl Send for Database {}
-unsafe impl Sync for Database {}
