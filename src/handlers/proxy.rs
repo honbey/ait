@@ -113,7 +113,7 @@ fn check_model_access(
         UserRole::User => {
             let has_access = session.allowed.iter().any(|a: &Permission| {
                 a.provider_id == model_provider_id
-                    && (a.model_names.is_empty() || a.model_names.contains(&model_name.to_string()))
+                    && (a.model_names.is_empty() || a.model_names.iter().any(|n| n == model_name))
             });
             if has_access {
                 Ok(())

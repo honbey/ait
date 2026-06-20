@@ -100,11 +100,11 @@ pub async fn delete_api_key(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Path((username, key)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
+) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
     require_admin_or_self(&session, &username)?;
 
     state.db.delete_api_key(&username, &key)?;
-    Ok(Json(serde_json::json!({"ok": true})))
+    Ok((StatusCode::NO_CONTENT,))
 }
 
 #[derive(Deserialize)]

@@ -86,18 +86,7 @@ pub fn not_found(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
     (StatusCode::NOT_FOUND, Json(AitError::not_found(msg)))
 }
 
-pub fn forbidden() -> (StatusCode, Json<AitError>) {
-    (
-        StatusCode::FORBIDDEN,
-        Json(AitError {
-            message: "Admin privileges required".to_string(),
-            code: 403,
-            r#type: "forbidden".to_string(),
-        }),
-    )
-}
-
-pub fn forbidden_msg(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
+pub fn forbidden(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
     (
         StatusCode::FORBIDDEN,
         Json(AitError {
@@ -132,7 +121,7 @@ pub fn conflict(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
 
 pub fn require_admin(session: &SessionUser) -> Result<(), (StatusCode, Json<AitError>)> {
     if session.role != UserRole::Admin {
-        return Err(forbidden());
+        return Err(forbidden("Admin privileges required"));
     }
     Ok(())
 }
@@ -142,7 +131,7 @@ pub fn require_admin_or_self(
     username: &str,
 ) -> Result<(), (StatusCode, Json<AitError>)> {
     if session.role != UserRole::Admin && session.username != username {
-        return Err(forbidden());
+        return Err(forbidden("Admin privileges required"));
     }
     Ok(())
 }

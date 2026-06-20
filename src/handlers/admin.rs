@@ -206,7 +206,7 @@ pub async fn get_provider(
     if session.role != UserRole::Admin
         && !session.allowed.iter().any(|a| a.provider_id == provider.id)
     {
-        return Err(forbidden());
+        return Err(forbidden("Admin privileges required"));
     }
 
     Ok(Json(ProviderResponse::from(provider)))

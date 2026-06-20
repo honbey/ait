@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::db::{Permission, SessionUser, User, UserRole};
-use crate::error::{AitError, forbidden_msg, internal_error, not_found, require_admin};
+use crate::error::{AitError, forbidden, internal_error, not_found, require_admin};
 
 #[derive(Serialize)]
 pub struct UserInfoResponse {
@@ -58,11 +58,11 @@ pub async fn update_user(
     Json(input): Json<UpdateUserRequest>,
 ) -> Result<Json<UserInfoResponse>, (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
-    let mut user = match state.db.get_user(&username) {
-        Ok(Some(u)) => u,
-        Ok(None) => return Err(not_found(format!("User '{}' not found", username))),
-        Err(e) => return Err(internal_error(e)),
-    };
+    let mut user = state
+        .db
+        .get_user(&username)
+        .map_err(internal_error)?
+        .ok_or_else(|| not_found(format!("User '{}' not found", username)))?;
 
     if let Some(role) = input.role {
         user.role = role;
@@ -80,10 +80,10 @@ pub async fn delete_user(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
+) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
     state.db.delete_user(&username)?;
-    Ok(Json(serde_json::json!({"ok": true})))
+    Ok((StatusCode::NO_CONTENT,))
 }
 
 pub async fn change_password(
@@ -94,7 +94,7 @@ pub async fn change_password(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
     // Can only change own password, unless Admin
     if session.role != UserRole::Admin && session.username != username {
-        return Err(forbidden_msg("You can only change your own password"));
+        return Err(forbidden("You can only change your own password"));
     }
 
     let mut user = state
@@ -108,7 +108,7 @@ pub async fn change_password(
         let valid = bcrypt::verify(&input.current_password, &user.password_hash)
             .map_err(|_| internal_error("Password verification error"))?;
         if !valid {
-            return Err(forbidden_msg("Current password is incorrect"));
+            return Err(forbidden("Current password is incorrect"));
         }
     }
 
