@@ -40,6 +40,7 @@ impl AppState {
                     allowed: vec![],
                     api_keys: vec![],
                     created_at: Utc::now(),
+                    updated_at: Default::default(),
                 };
                 db.insert_user(user)
                     .expect("Failed to bootstrap admin user");

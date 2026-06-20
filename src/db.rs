@@ -88,6 +88,8 @@ pub struct Model {
     pub enabled: bool,
     #[serde(with = "ts_seconds", default)]
     pub created_at: DateTime<chrono::Utc>,
+    #[serde(with = "ts_seconds", default)]
+    pub updated_at: DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +101,8 @@ pub struct ApiKey {
     pub name: String,
     #[serde(with = "ts_seconds", default)]
     pub created_at: DateTime<chrono::Utc>,
+    #[serde(with = "ts_seconds", default)]
+    pub updated_at: DateTime<chrono::Utc>,
     #[serde(default)]
     pub enabled: bool,
     #[serde(
@@ -141,6 +145,8 @@ pub struct User {
     pub api_keys: Vec<ApiKey>,
     #[serde(with = "ts_seconds", default)]
     pub created_at: DateTime<chrono::Utc>,
+    #[serde(with = "ts_seconds", default)]
+    pub updated_at: DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,6 +320,7 @@ impl Database {
             model.id = Uuid::new_v4().to_string();
         }
         model.created_at = Utc::now();
+        model.updated_at = Utc::now();
 
         // Check provider exists
         if !model.provider_id.is_empty() {
@@ -338,6 +345,7 @@ impl Database {
         model.provider_id = updates.provider_id.clone();
         model.upstream_model = updates.upstream_model.clone();
         model.enabled = updates.enabled;
+        model.updated_at = Utc::now();
 
         self.cf_put(MODELS_CF, format!("model:{}", name), &model)?;
         Ok(model)
@@ -376,6 +384,7 @@ impl Database {
 
     pub fn insert_user(&self, mut user: User) -> Result<User, DbError> {
         user.created_at = Utc::now();
+        user.updated_at = Utc::now();
         self.cf_put(USERS_CF, format!("user:{}", user.username), &user)?;
         Ok(user)
     }
@@ -393,6 +402,7 @@ impl Database {
         match existing {
             Some(existing_user) => {
                 user.created_at = existing_user.created_at;
+                user.updated_at = Utc::now();
                 self.cf_put(USERS_CF, format!("user:{}", username), &user)?;
                 Ok(user)
             }
@@ -464,6 +474,7 @@ impl Database {
             display: ApiKey::mask_key(&raw_key),
             name: name.to_string(),
             created_at: now,
+            updated_at: now,
             enabled: true,
             expires_at,
         };
@@ -524,6 +535,7 @@ impl Database {
             .ok_or_else(|| DbError::NotFound("API key not found".to_string()))?;
 
         api_key.enabled = enabled;
+        api_key.updated_at = Utc::now();
         let result = api_key.clone();
         self.update_user(username, user)?;
 

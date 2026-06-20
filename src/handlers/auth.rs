@@ -150,7 +150,8 @@ pub async fn register(
         role: UserRole::User,
         allowed: vec![],
         api_keys: vec![],
-        created_at: chrono::Utc::now(),
+        created_at: Default::default(),
+        updated_at: Default::default(),
     };
 
     state

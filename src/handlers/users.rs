@@ -16,6 +16,7 @@ pub struct UserInfoResponse {
     pub role: UserRole,
     pub allowed: Vec<Permission>,
     pub created_at: i64,
+    pub updated_at: i64,
 }
 
 impl From<User> for UserInfoResponse {
@@ -25,6 +26,7 @@ impl From<User> for UserInfoResponse {
             role: u.role,
             allowed: u.allowed,
             created_at: u.created_at.timestamp(),
+            updated_at: u.updated_at.timestamp(),
         }
     }
 }

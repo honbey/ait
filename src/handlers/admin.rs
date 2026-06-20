@@ -72,6 +72,7 @@ pub struct ModelResponse {
     pub upstream_model: String,
     pub enabled: bool,
     pub created_at: i64,
+    pub updated_at: i64,
 }
 
 impl From<Model> for ModelResponse {
@@ -83,6 +84,7 @@ impl From<Model> for ModelResponse {
             upstream_model: m.upstream_model,
             enabled: m.enabled,
             created_at: m.created_at.timestamp(),
+            updated_at: m.updated_at.timestamp(),
         }
     }
 }
@@ -228,6 +230,7 @@ pub async fn create_model(
         upstream_model: input.upstream_model,
         enabled: input.enabled,
         created_at: Utc::now(),
+        updated_at: Utc::now(),
     };
     let inserted = state.db.insert_model(model)?;
 
@@ -278,7 +281,8 @@ pub async fn update_model(
         provider_id: input.provider_id,
         upstream_model: input.upstream_model,
         enabled: input.enabled,
-        created_at: Utc::now(),
+        created_at: Default::default(),
+        updated_at: Default::default(),
     };
     let model = state.db.update_model(&name, &updates)?;
     Ok(Json(ModelResponse::from(model)))

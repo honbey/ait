@@ -31,6 +31,7 @@ pub struct ApiKeyListItem {
     pub key: String,
     pub name: String,
     pub created_at: i64,
+    pub updated_at: i64,
     pub enabled: bool,
     pub expires_at: Option<i64>,
 }
@@ -92,6 +93,7 @@ pub async fn list_api_keys(
             key: k.masked(),
             name: k.name,
             created_at: k.created_at.timestamp(),
+            updated_at: k.updated_at.timestamp(),
             enabled: k.enabled,
             expires_at: k.expires_at.map(|dt| dt.timestamp()),
         })
@@ -132,6 +134,7 @@ pub async fn toggle_api_key(
         key: updated.masked(),
         name: updated.name,
         created_at: updated.created_at.timestamp(),
+        updated_at: updated.updated_at.timestamp(),
         enabled: updated.enabled,
         expires_at: updated.expires_at.map(|dt| dt.timestamp()),
     }))
