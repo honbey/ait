@@ -228,6 +228,11 @@ impl Database {
     }
 
     pub fn delete_provider(&self, id: &str) -> Result<bool, String> {
+        let existing = self.get_provider(id)?;
+        if existing.is_none() {
+            return Ok(false);
+        }
+
         let key = format!("prov:{}", id);
         let cf = self.cf(PROVIDERS_CF)?;
         self.db.delete_cf(&cf, &key).map_err(|e| e.to_string())?;
