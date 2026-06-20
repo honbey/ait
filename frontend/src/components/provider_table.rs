@@ -49,7 +49,7 @@ fn render_add_modal(
     show_add_modal: Signal<bool>,
 ) -> View {
     let form_name = create_signal(String::new());
-    let form_type = create_signal("open_ai_compat".to_string());
+    let form_type = create_signal("openai_compat".to_string());
     let form_base_url = create_signal(String::new());
     let form_api_key = create_signal(String::new());
     let form_enabled = create_signal(true);
@@ -104,11 +104,11 @@ fn render_add_modal(
                         .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
                         .bind(bind::value, form_type)
                         .children((
-                            option().attr("value", "open_ai_compat").children("OpenAI Compatible"),
-                            option().attr("value", "deep_seek").children("DeepSeek"),
+                            option().attr("value", "openai_compat").children("OpenAI Compatible"),
+                            option().attr("value", "deepseek").children("DeepSeek"),
                             option().attr("value", "zhipu").children("Zhipu"),
                             option().attr("value", "ollama").children("Ollama"),
-                            option().attr("value", "llama_cpp").children("Llama.cpp"),
+                            option().attr("value", "llamacpp").children("llama.cpp"),
                         )).into()),
                 form_field(i18n.t("provider_base_url"), form_input(i18n.t("provider_base_url"), form_base_url)),
                 form_field(i18n.t("api_key"), form_input(i18n.t("api_key"), form_api_key)),
@@ -191,11 +191,11 @@ fn render_edit_modal(
                             form_type.set(ev.target().unwrap().unchecked_into::<web_sys::HtmlSelectElement>().value());
                         })
                         .children((
-                            option().attr("value", "open_ai_compat")
-                                .bool_attr("selected", move || form_type.get_clone() == "open_ai_compat")
+                            option().attr("value", "openai_compat")
+                                .bool_attr("selected", move || form_type.get_clone() == "openai_compat")
                                 .children("OpenAI Compatible"),
-                            option().attr("value", "deep_seek")
-                                .bool_attr("selected", move || form_type.get_clone() == "deep_seek")
+                            option().attr("value", "deepseek")
+                                .bool_attr("selected", move || form_type.get_clone() == "deepseek")
                                 .children("DeepSeek"),
                             option().attr("value", "zhipu")
                                 .bool_attr("selected", move || form_type.get_clone() == "zhipu")
@@ -203,9 +203,9 @@ fn render_edit_modal(
                             option().attr("value", "ollama")
                                 .bool_attr("selected", move || form_type.get_clone() == "ollama")
                                 .children("Ollama"),
-                            option().attr("value", "llama_cpp")
-                                .bool_attr("selected", move || form_type.get_clone() == "llama_cpp")
-                                .children("Llama.cpp"),
+                            option().attr("value", "llamacpp")
+                                .bool_attr("selected", move || form_type.get_clone() == "llamacpp")
+                                .children("llama.cpp"),
                         )).into()),
                 form_field(i18n.t("provider_base_url"), form_input(i18n.t("provider_base_url"), form_base_url)),
                 div().children((
