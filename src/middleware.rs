@@ -168,6 +168,16 @@ pub async fn admin_auth_middleware(
         allowed: user.allowed,
     };
 
+    if session_user.role != UserRole::Admin {
+        tracing::warn!(
+            "Non-admin user '{}' (role: {:?}) accessing admin endpoint: {} {}",
+            session_user.username,
+            session_user.role,
+            req.method(),
+            req.uri().path()
+        );
+    }
+
     req.extensions_mut().insert(session_user);
     Ok(next.run(req).await)
 }
