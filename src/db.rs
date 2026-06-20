@@ -396,8 +396,8 @@ impl Database {
 
         let existing = self.get_user(username)?;
         match existing {
-            Some(_) => {
-                user.created_at = Utc::now();
+            Some(existing_user) => {
+                user.created_at = existing_user.created_at;
                 let val = serde_json::to_string(&user).map_err(|e| e.to_string())?;
                 self.db.put_cf(&cf, &key, &val).map_err(|e| e.to_string())?;
                 Ok(user)
