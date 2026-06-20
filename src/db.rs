@@ -315,15 +315,13 @@ impl Database {
         self.cf_del(PROVIDERS_CF, format!("prov:{}", id))?;
 
         // Also delete associated models
-        let mut deleted_models = 0;
         for item in self.cf_list::<Model>(MODELS_CF)? {
             if item.provider_id == id {
                 self.cf_del(MODELS_CF, format!("model:{}", item.name))?;
-                deleted_models += 1;
             }
         }
 
-        Ok(deleted_models >= 0)
+        Ok(true)
     }
 
     pub fn get_provider(&self, id: &str) -> Result<Option<Provider>, DbError> {
@@ -430,6 +428,11 @@ impl Database {
         Ok(true)
     }
 
+    fn get_user_or_err(&self, username: &str) -> Result<User, DbError> {
+        self.get_user(username)?
+            .ok_or_else(|| DbError::NotFound(format!("User '{}' not found", username)))
+    }
+
     // --- Session CRUD ---
 
     pub fn insert_session(&self, mut session: Session) -> Result<Session, DbError> {
@@ -480,9 +483,7 @@ impl Database {
         expires_at: Option<DateTime<Utc>>,
     ) -> Result<(ApiKey, String), DbError> {
         // Check user exists and key limit
-        let mut user = self
-            .get_user(username)?
-            .ok_or_else(|| DbError::NotFound(format!("User '{}' not found", username)))?;
+        let mut user = self.get_user_or_err(username)?;
         if user.api_keys.len() >= self.max_api_keys_per_user {
             return Err(DbError::LimitExceeded(format!(
                 "Maximum of {} API keys per user",
@@ -527,23 +528,31 @@ impl Database {
     }
 
     pub fn delete_api_key(&self, username: &str, key_id: &str) -> Result<bool, DbError> {
-        let mut user = self
-            .get_user(username)?
-            .ok_or_else(|| DbError::NotFound(format!("User '{}' not found", username)))?;
+        let mut user = self.get_user_or_err(username)?;
 
-        let hash = user
+        let idx = user
             .api_keys
             .iter()
-            .find(|k| k.id == key_id)
-            .map(|k| k.key.clone())
+            .position(|k| k.id == key_id)
             .ok_or_else(|| DbError::NotFound("API key not found".to_string()))?;
+        let hash = user.api_keys[idx].key.clone();
+        user.api_keys.remove(idx);
 
         self.cf_del(API_KEYS_CF, &hash)?;
 
-        user.api_keys.retain(|k| k.id != key_id);
         self.update_user(&user)?;
 
         Ok(true)
+    }
+
+    fn find_api_key_mut<'a>(
+        api_keys: &'a mut Vec<ApiKey>,
+        key_id: &str,
+    ) -> Result<&'a mut ApiKey, DbError> {
+        api_keys
+            .iter_mut()
+            .find(|k| k.id == key_id)
+            .ok_or_else(|| DbError::NotFound("API key not found".to_string()))
     }
 
     pub fn toggle_api_key(
@@ -552,15 +561,9 @@ impl Database {
         key_id: &str,
         enabled: bool,
     ) -> Result<ApiKey, DbError> {
-        let mut user = self
-            .get_user(username)?
-            .ok_or_else(|| DbError::NotFound(format!("User '{}' not found", username)))?;
+        let mut user = self.get_user_or_err(username)?;
 
-        let api_key = user
-            .api_keys
-            .iter_mut()
-            .find(|k| k.id == key_id)
-            .ok_or_else(|| DbError::NotFound("API key not found".to_string()))?;
+        let api_key = Self::find_api_key_mut(&mut user.api_keys, key_id)?;
 
         api_key.enabled = enabled;
         api_key.updated_at = Utc::now();
