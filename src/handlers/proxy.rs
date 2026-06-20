@@ -141,12 +141,7 @@ pub async fn proxy_request(
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     // Extract model name
     let model_name = body.get("model").and_then(|m| m.as_str()).ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(AitError::bad_request(
-                "Missing 'model' field in request body",
-            )),
-        )
+        AitError::bad_request("Missing 'model' field in request body").into_response()
     })?;
 
     info!("Routing request for model: {}", model_name);
@@ -155,16 +150,14 @@ pub async fn proxy_request(
     let (model, provider) = match state.db.resolve_model(model_name) {
         Ok(Some((m, p))) => (m, p),
         Ok(None) => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(AitError::not_found(format!(
-                    "Model '{}' not found or disabled",
-                    model_name
-                ))),
-            ));
+            return Err(AitError::not_found(format!(
+                "Model '{}' not found or disabled",
+                model_name
+            ))
+            .into_response());
         }
         Err(e) => {
-            return Err(AitError::from_db_error(e));
+            return Err(AitError::from_db_error(e).into_response());
         }
     };
 
@@ -189,7 +182,7 @@ pub async fn proxy_request(
             upstream_path,
         )
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(AitError::bad_request(e))))?;
+        .map_err(|e| AitError::bad_request(e).into_response())?;
 
     info!(
         "Proxying to provider '{}' for model '{}' -> upstream '{}', base_url: {}",
@@ -215,31 +208,25 @@ async fn proxy_non_streamed(
     _model: &crate::db::Model,
 ) -> Result<impl IntoResponse + use<>, (StatusCode, Json<AitError>)> {
     let response = state.http_client.execute(request).await.map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(AitError::upstream_error(
-                502,
-                format!("Failed to connect to provider '{}': {}", provider.name, e),
-            )),
+        AitError::upstream_error(
+            502,
+            format!("Failed to connect to provider '{}': {}", provider.name, e),
         )
+        .into_response()
     })?;
 
     let status = response.status();
-    let bytes = response.bytes().await.map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(AitError::upstream_error(502, e.to_string())),
-        )
-    })?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| AitError::upstream_error(502, e.to_string()).into_response())?;
 
     if !status.is_success() {
-        return Err((
-            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            Json(AitError::upstream_error(
-                status.as_u16(),
-                String::from_utf8_lossy(&bytes).to_string(),
-            )),
-        ));
+        return Err(AitError::upstream_error(
+            status.as_u16(),
+            String::from_utf8_lossy(&bytes).to_string(),
+        )
+        .into_response());
     }
 
     let mut headers = HeaderMap::new();
@@ -257,22 +244,17 @@ async fn proxy_streamed(
     _model: &crate::db::Model,
 ) -> Result<impl IntoResponse + use<>, (StatusCode, Json<AitError>)> {
     let response = state.http_client.execute(request).await.map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(AitError::upstream_error(
-                502,
-                format!("Failed to connect to provider '{}': {}", provider.name, e),
-            )),
+        AitError::upstream_error(
+            502,
+            format!("Failed to connect to provider '{}': {}", provider.name, e),
         )
+        .into_response()
     })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err((
-            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            Json(AitError::upstream_error(status.as_u16(), body)),
-        ));
+        return Err(AitError::upstream_error(status.as_u16(), body).into_response());
     }
 
     let mut stream_builder = axum::response::Response::builder()

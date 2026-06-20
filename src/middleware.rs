@@ -51,18 +51,18 @@ pub async fn auth_middleware(
     }
 
     let token = extract_bearer_token(req.headers())
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
     // Check if token is a session key
     if let Ok(Some(session)) = state.db.get_session(token) {
         if session.is_expired() {
-            return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
+            return Err(AitError::unauthorized().into_response());
         }
         let user = state
             .db
             .get_user(&session.username)
             .map_err(|_| db_error())?
-            .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+            .ok_or_else(|| AitError::unauthorized().into_response())?;
 
         req.extensions_mut().insert(user.to_session_user());
         return Ok(next.run(req).await);
@@ -73,23 +73,23 @@ pub async fn auth_middleware(
         .db
         .get_user_by_api_key(token)
         .map_err(|_| db_error())?
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
     let user = state
         .db
         .get_user(&key_info.username)
         .map_err(|_| db_error())?
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
     // Check that the specific API key is enabled and not expired
     let key = user
         .api_keys
         .iter()
         .find(|k| k.id == key_info.id && k.enabled)
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
     if key.expires_at.is_some_and(|exp| exp <= chrono::Utc::now()) {
-        return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
+        return Err(AitError::unauthorized().into_response());
     }
 
     // API key users are always User role (never Admin)
@@ -108,23 +108,23 @@ pub async fn admin_auth_middleware(
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     // Admin endpoints always require authentication
     let session_key = extract_session_key(req.headers())
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
     let session = state
         .db
         .get_session(session_key)
         .map_err(|_| db_error())?
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
     if session.is_expired() {
-        return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
+        return Err(AitError::unauthorized().into_response());
     }
 
     let user = state
         .db
         .get_user(&session.username)
         .map_err(|_| db_error())?
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
     let session_user = user.to_session_user();
 
