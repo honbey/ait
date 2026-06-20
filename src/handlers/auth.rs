@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppState;
 use crate::db::{Permission, Session, User, UserRole};
 use crate::error::{AitError, conflict, forbidden_msg, internal_error, unauthorized};
+use crate::middleware::extract_session_key;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -39,18 +40,6 @@ pub struct SessionResponse {
     pub username: Option<String>,
     pub role: Option<UserRole>,
     pub allowed: Option<Vec<Permission>>,
-}
-
-/// Extract `session_key` from the Cookie header.
-fn extract_session_key(headers: &HeaderMap) -> Option<&str> {
-    let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
-    for pair in cookie.split(';') {
-        let pair = pair.trim();
-        if let Some(value) = pair.strip_prefix("session_key=") {
-            return Some(value);
-        }
-    }
-    None
 }
 
 /// Build a `Set-Cookie` header value for the session key.
