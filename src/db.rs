@@ -60,20 +60,20 @@ pub enum ProviderType {
     Llamacpp,
 }
 
+pub fn mask_api_key(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 6 {
+        "******".to_string()
+    } else {
+        let prefix: String = chars[..6].iter().collect();
+        let suffix: String = chars[chars.len() - 3..].iter().collect();
+        format!("{}******{}", prefix, suffix)
+    }
+}
+
 impl Provider {
-    /// Return a masked version of the API key for safe display.
-    /// None -> null, short keys -> "******", long keys -> first4 + "******" + last4
     pub fn masked_api_key(&self) -> Option<String> {
-        self.api_key.as_ref().map(|key| {
-            let chars: Vec<char> = key.chars().collect();
-            if chars.len() <= 6 {
-                "******".to_string()
-            } else {
-                let prefix: String = chars[..4].iter().collect();
-                let suffix: String = chars[chars.len() - 4..].iter().collect();
-                format!("{}******{}", prefix, suffix)
-            }
-        })
+        self.api_key.as_ref().map(|key| mask_api_key(key))
     }
 }
 
@@ -121,10 +121,7 @@ impl ApiKey {
     }
 
     fn mask_key(key: &str) -> String {
-        let chars: Vec<char> = key.chars().collect();
-        let prefix: String = chars[..6].iter().collect();
-        let suffix: String = chars[chars.len() - 4..].iter().collect();
-        format!("{}******{}", prefix, suffix)
+        mask_api_key(key)
     }
 }
 
