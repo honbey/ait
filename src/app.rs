@@ -13,7 +13,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: ConfigApp) -> Self {
-        let db = match Database::new(&config.database.path) {
+        let db = match Database::new(&config.database.path, config.auth.max_api_keys_per_user) {
             Ok(d) => Arc::new(d),
             Err(e) => {
                 eprintln!("Failed to open database: {}", e);
@@ -40,6 +40,7 @@ impl AppState {
                     allowed: vec![],
                     api_keys: vec![],
                     created_at: Utc::now(),
+                    updated_at: Default::default(),
                 };
                 db.insert_user(user)
                     .expect("Failed to bootstrap admin user");
@@ -50,6 +51,24 @@ impl AppState {
             }
         }
 
+        // Periodic cleanup of expired sessions
+        let interval_secs = config.server.session_cleanup_interval_secs;
+        let cleanup_db = db.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                match cleanup_db.cleanup_expired_sessions() {
+                    Ok(count) => {
+                        if count > 0 {
+                            tracing::info!("Cleaned up {} expired sessions", count);
+                        }
+                    }
+                    Err(e) => tracing::error!("Session cleanup error: {}", e),
+                }
+            }
+        });
+
         Self {
             config,
             db,
@@ -58,4 +77,3 @@ impl AppState {
         }
     }
 }
-

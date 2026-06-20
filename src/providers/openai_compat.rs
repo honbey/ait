@@ -1,23 +1,13 @@
-use super::UpstreamProvider;
-use crate::db::Provider;
+use super::{ProviderCore, UpstreamProvider};
 use reqwest::Client;
 
 pub struct OpenAICompatProvider {
-    provider: Provider,
-    client: Client,
+    core: ProviderCore,
 }
 
 impl OpenAICompatProvider {
-    pub fn new(provider: &Provider, client: Client) -> Self {
-        Self {
-            provider: provider.clone(),
-            client,
-        }
-    }
-
-    fn upstream_url(&self, path: &str) -> String {
-        let base = self.provider.base_url.trim_end_matches('/');
-        format!("{}{}", base, path)
+    pub fn new(core: ProviderCore) -> Self {
+        Self { core }
     }
 }
 
@@ -33,7 +23,6 @@ impl UpstreamProvider for OpenAICompatProvider {
     ) -> Result<reqwest::Request, String> {
         let mut body = body.clone();
 
-        // Replace model name with upstream model name
         if body.get("model").and_then(|m| m.as_str()).is_some() {
             body["model"] = serde_json::json!(upstream_model);
         }
@@ -44,16 +33,14 @@ impl UpstreamProvider for OpenAICompatProvider {
 
         let body_bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
 
-        let mut builder = self
-            .client
-            .post(self.upstream_url(upstream_path))
+        let builder = self
+            .core
+            .client()
+            .post(self.core.upstream_url(upstream_path))
             .header("Content-Type", "application/json")
             .body(body_bytes);
 
-        if let Some(ref api_key) = self.provider.api_key {
-            builder = builder.header("Authorization", format!("Bearer {}", api_key));
-        }
-
+        let builder = self.core.apply_auth_header(builder);
         let request = builder.build().map_err(|e| e.to_string())?;
         Ok(request)
     }

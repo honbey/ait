@@ -1,16 +1,13 @@
 use axum::{
-    Extension,
-    extract::{Path, State, Json},
+    Extension, Json as AxumJson,
+    extract::{Json, Path, State},
     http::StatusCode,
-    Json as AxumJson,
 };
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{Model, Provider, ProviderType, UserRole};
-use crate::error::{internal_error, not_found, forbidden, AitError};
-use crate::middleware::SessionUser;
+use crate::db::{Model, Provider, ProviderType, SessionUser, UserRole};
+use crate::error::{AitError, forbidden, internal_error, not_found, require_admin};
 
 // --- Provider request/response types ---
 
@@ -73,6 +70,7 @@ pub struct ModelResponse {
     pub upstream_model: String,
     pub enabled: bool,
     pub created_at: i64,
+    pub updated_at: i64,
 }
 
 impl From<Model> for ModelResponse {
@@ -84,6 +82,7 @@ impl From<Model> for ModelResponse {
             upstream_model: m.upstream_model,
             enabled: m.enabled,
             created_at: m.created_at.timestamp(),
+            updated_at: m.updated_at.timestamp(),
         }
     }
 }
@@ -104,6 +103,66 @@ pub struct UpdateModelRequest {
     pub enabled: bool,
 }
 
+// --- From request types ---
+
+impl From<CreateProviderRequest> for Provider {
+    fn from(input: CreateProviderRequest) -> Self {
+        Provider {
+            id: Default::default(),
+            name: input.name,
+            provider_type: input.provider_type,
+            base_url: input.base_url,
+            api_key: input.api_key,
+            enabled: input.enabled,
+            created_at: Default::default(),
+            updated_at: Default::default(),
+        }
+    }
+}
+
+impl From<UpdateProviderRequest> for Provider {
+    fn from(input: UpdateProviderRequest) -> Self {
+        Provider {
+            id: Default::default(),
+            name: input.name,
+            provider_type: input.provider_type,
+            base_url: input.base_url,
+            api_key: input.api_key,
+            enabled: input.enabled,
+            created_at: Default::default(),
+            updated_at: Default::default(),
+        }
+    }
+}
+
+impl From<CreateModelRequest> for Model {
+    fn from(input: CreateModelRequest) -> Self {
+        Model {
+            id: Default::default(),
+            name: input.name,
+            provider_id: input.provider_id,
+            upstream_model: input.upstream_model,
+            enabled: input.enabled,
+            created_at: Default::default(),
+            updated_at: Default::default(),
+        }
+    }
+}
+
+impl From<UpdateModelRequest> for Model {
+    fn from(input: UpdateModelRequest) -> Self {
+        Model {
+            id: Default::default(),
+            name: Default::default(),
+            provider_id: input.provider_id,
+            upstream_model: input.upstream_model,
+            enabled: input.enabled,
+            created_at: Default::default(),
+            updated_at: Default::default(),
+        }
+    }
+}
+
 // --- Provider CRUD ---
 
 pub async fn create_provider(
@@ -111,23 +170,8 @@ pub async fn create_provider(
     Extension(session): Extension<SessionUser>,
     Json(input): Json<CreateProviderRequest>,
 ) -> Result<(StatusCode, Json<ProviderResponse>), (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
-    let provider = Provider {
-        id: String::new(),
-        name: input.name,
-        provider_type: input.provider_type,
-        base_url: input.base_url,
-        api_key: input.api_key,
-        enabled: input.enabled,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-    };
-    let inserted = state
-        .db
-        .insert_provider(provider)
-        .map_err(internal_error)?;
+    require_admin(&session)?;
+    let inserted = state.db.insert_provider(input.into())?;
 
     Ok((StatusCode::CREATED, Json(ProviderResponse::from(inserted))))
 }
@@ -136,7 +180,7 @@ pub async fn list_providers(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
 ) -> Result<Json<Vec<ProviderResponse>>, (StatusCode, Json<AitError>)> {
-    let providers = state.db.list_providers().map_err(internal_error)?;
+    let providers = state.db.list_providers()?;
     let masked: Vec<ProviderResponse> = match session.role {
         UserRole::Admin => providers.into_iter().map(ProviderResponse::from).collect(),
         UserRole::User => providers
@@ -162,7 +206,7 @@ pub async fn get_provider(
     if session.role != UserRole::Admin
         && !session.allowed.iter().any(|a| a.provider_id == provider.id)
     {
-        return Err(forbidden());
+        return Err(forbidden("Admin privileges required"));
     }
 
     Ok(Json(ProviderResponse::from(provider)))
@@ -173,9 +217,7 @@ pub async fn get_provider_api_key(
     Extension(session): Extension<SessionUser>,
     Path(id): Path<String>,
 ) -> Result<AxumJson<serde_json::Value>, (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
+    require_admin(&session)?;
     let provider = state
         .db
         .get_provider(&id)
@@ -195,24 +237,10 @@ pub async fn update_provider(
     Path(id): Path<String>,
     Json(input): Json<UpdateProviderRequest>,
 ) -> Result<Json<ProviderResponse>, (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
-    let updates = Provider {
-        id: id.clone(),
-        name: input.name,
-        provider_type: input.provider_type,
-        base_url: input.base_url,
-        api_key: input.api_key,
-        enabled: input.enabled,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-    };
-    let provider = state
-        .db
-        .update_provider(&id, &updates)
-        .map_err(internal_error)?
-        .ok_or_else(|| not_found(format!("Provider '{}' not found", id)))?;
+    require_admin(&session)?;
+    let mut updates: Provider = input.into();
+    updates.id = id;
+    let provider = state.db.update_provider(&updates)?;
 
     Ok(Json(ProviderResponse::from(provider)))
 }
@@ -222,10 +250,8 @@ pub async fn delete_provider(
     Extension(session): Extension<SessionUser>,
     Path(id): Path<String>,
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
-    state.db.delete_provider(&id).map_err(internal_error)?;
+    require_admin(&session)?;
+    state.db.delete_provider(&id)?;
     Ok((StatusCode::NO_CONTENT,))
 }
 
@@ -236,21 +262,8 @@ pub async fn create_model(
     Extension(session): Extension<SessionUser>,
     Json(input): Json<CreateModelRequest>,
 ) -> Result<(StatusCode, Json<ModelResponse>), (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
-    let model = Model {
-        id: String::new(),
-        name: input.name,
-        provider_id: input.provider_id,
-        upstream_model: input.upstream_model,
-        enabled: input.enabled,
-        created_at: Utc::now(),
-    };
-    let inserted = state
-        .db
-        .insert_model(model)
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(AitError::bad_request(e))))?;
+    require_admin(&session)?;
+    let inserted = state.db.insert_model(input.into())?;
 
     Ok((StatusCode::CREATED, Json(ModelResponse::from(inserted))))
 }
@@ -259,7 +272,7 @@ pub async fn list_models(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
 ) -> Result<Json<Vec<ModelResponse>>, (StatusCode, Json<AitError>)> {
-    let models = state.db.list_models().map_err(internal_error)?;
+    let models = state.db.list_models()?;
     let filtered: Vec<ModelResponse> = match session.role {
         UserRole::Admin => models.into_iter().map(ModelResponse::from).collect(),
         UserRole::User => models
@@ -281,10 +294,8 @@ pub async fn delete_model(
     Extension(session): Extension<SessionUser>,
     Path(name): Path<String>,
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
-    state.db.delete_model(&name).map_err(internal_error)?;
+    require_admin(&session)?;
+    state.db.delete_model(&name)?;
     Ok((StatusCode::NO_CONTENT,))
 }
 
@@ -294,20 +305,9 @@ pub async fn update_model(
     Path(name): Path<String>,
     Json(input): Json<UpdateModelRequest>,
 ) -> Result<Json<ModelResponse>, (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
-    let updates = Model {
-        id: String::new(),
-        name: name.clone(),
-        provider_id: input.provider_id,
-        upstream_model: input.upstream_model,
-        enabled: input.enabled,
-        created_at: Utc::now(),
-    };
-    let model = state
-        .db
-        .update_model(&name, &updates)
-        .map_err(internal_error)?;
+    require_admin(&session)?;
+    let mut updates: Model = input.into();
+    updates.name = name;
+    let model = state.db.update_model(&updates)?;
     Ok(Json(ModelResponse::from(model)))
 }

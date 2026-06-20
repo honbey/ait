@@ -10,8 +10,9 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{Session, User, UserRole, Permission};
-use crate::error::{internal_error, forbidden_msg, conflict, unauthorized, AitError};
+use crate::db::{Permission, Session, User, UserRole};
+use crate::error::{AitError, conflict, forbidden, internal_error, unauthorized};
+use crate::middleware::extract_session_key;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -41,18 +42,6 @@ pub struct SessionResponse {
     pub allowed: Option<Vec<Permission>>,
 }
 
-/// Extract `session_key` from the Cookie header.
-fn extract_session_key(headers: &HeaderMap) -> Option<&str> {
-    let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
-    for pair in cookie.split(';') {
-        let pair = pair.trim();
-        if let Some(value) = pair.strip_prefix("session_key=") {
-            return Some(value);
-        }
-    }
-    None
-}
-
 /// Build a `Set-Cookie` header value for the session key.
 fn set_cookie_header(session_key: &str, max_age: i64) -> String {
     format!(
@@ -75,7 +64,7 @@ pub async fn login(
                 ));
             }
             // Constant-time comparison: always bcrypt verify to prevent timing side-channel
-            let _ = bcrypt::verify(&input.password, &dummy_hash());
+            let _ = bcrypt::verify(&input.password, dummy_hash());
             return Err(unauthorized("Invalid credentials"));
         }
         Err(_) => return Err(internal_error("Database error")),
@@ -123,16 +112,21 @@ pub async fn register(
     Json(input): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<AitError>)> {
     if !state.config.auth.allow_registration {
-        return Err(forbidden_msg("Registration is disabled"));
+        return Err(forbidden("Registration is disabled"));
     }
 
     if !state.config.auth.registration_code.is_empty()
         && state.config.auth.registration_code != input.registration_code
     {
-        return Err(forbidden_msg("Invalid registration code"));
+        return Err(forbidden("Invalid registration code"));
     }
 
-    if state.db.get_user(&input.username).map_err(|_| internal_error("Database error"))?.is_some() {
+    if state
+        .db
+        .get_user(&input.username)
+        .map_err(|_| internal_error("Database error"))?
+        .is_some()
+    {
         return Err(conflict("Username already exists"));
     }
 
@@ -145,10 +139,14 @@ pub async fn register(
         role: UserRole::User,
         allowed: vec![],
         api_keys: vec![],
-        created_at: chrono::Utc::now(),
+        created_at: Default::default(),
+        updated_at: Default::default(),
     };
 
-    state.db.insert_user(user).map_err(|_| internal_error("Failed to create user"))?;
+    state
+        .db
+        .insert_user(user)
+        .map_err(|_| internal_error("Failed to create user"))?;
 
     Ok(Json(serde_json::json!({"ok": true})))
 }
@@ -187,7 +185,7 @@ pub async fn session_check(
     };
 
     match state.db.get_session(session_key) {
-        Ok(Some(session)) if session.expires_at > Utc::now() => {
+        Ok(Some(session)) if !session.is_expired() => {
             let user = state.db.get_user(&session.username).ok().flatten();
             match user {
                 Some(u) => Json(SessionResponse {
@@ -222,9 +220,7 @@ fn generate_session_key() -> String {
         .collect()
 }
 
-fn dummy_hash() -> String {
+fn dummy_hash() -> &'static str {
     static HASH: OnceLock<String> = OnceLock::new();
-    HASH.get_or_init(|| {
-        bcrypt::hash("dummy", bcrypt::DEFAULT_COST).expect("dummy hash")
-    }).clone()
+    HASH.get_or_init(|| bcrypt::hash("dummy", bcrypt::DEFAULT_COST).expect("dummy hash"))
 }

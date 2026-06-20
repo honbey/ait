@@ -1,18 +1,16 @@
 use axum::{
-    Extension,
-    extract::{State, Json},
+    Extension, Json as AxumJson,
+    extract::{Json, State},
     http::{HeaderMap, HeaderName, StatusCode},
-    response::{sse::Event, IntoResponse, Response, Sse},
-    Json as AxumJson,
+    response::{IntoResponse, Response},
 };
 use chrono::Utc;
 use futures_util::StreamExt;
 use tracing::{info, warn};
 
 use crate::app::AppState;
-use crate::db::{UserRole, Permission};
+use crate::db::{Permission, SessionUser, UserRole};
 use crate::error::AitError;
-use crate::middleware::SessionUser;
 use crate::providers::create_provider;
 
 pub async fn chat_completions(
@@ -70,13 +68,9 @@ pub async fn list_models_proxy(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
-    let models = state.db.list_models().map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(AitError::internal_error(e)))
-    })?;
+    let models = state.db.list_models()?;
 
-    let providers = state.db.list_providers().map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(AitError::internal_error(e)))
-    })?;
+    let providers = state.db.list_providers()?;
 
     let data: Vec<serde_json::Value> = models
         .into_iter()
@@ -109,13 +103,17 @@ pub async fn list_models_proxy(
     })))
 }
 
-fn check_model_access(model_provider_id: &str, model_name: &str, session: &SessionUser) -> Result<(), (StatusCode, Json<AitError>)> {
+fn check_model_access(
+    model_provider_id: &str,
+    model_name: &str,
+    session: &SessionUser,
+) -> Result<(), (StatusCode, Json<AitError>)> {
     match session.role {
         UserRole::Admin => Ok(()),
         UserRole::User => {
             let has_access = session.allowed.iter().any(|a: &Permission| {
                 a.provider_id == model_provider_id
-                    && (a.model_names.is_empty() || a.model_names.contains(&model_name.to_string()))
+                    && (a.model_names.is_empty() || a.model_names.iter().any(|n| n == model_name))
             });
             if has_access {
                 Ok(())
@@ -142,15 +140,9 @@ pub async fn proxy_request(
     upstream_path: &str,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     // Extract model name
-    let model_name = body
-        .get("model")
-        .and_then(|m| m.as_str())
-        .ok_or_else(|| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(AitError::bad_request("Missing 'model' field in request body")),
-            )
-        })?;
+    let model_name = body.get("model").and_then(|m| m.as_str()).ok_or_else(|| {
+        AitError::bad_request("Missing 'model' field in request body").into_response()
+    })?;
 
     info!("Routing request for model: {}", model_name);
 
@@ -158,19 +150,14 @@ pub async fn proxy_request(
     let (model, provider) = match state.db.resolve_model(model_name) {
         Ok(Some((m, p))) => (m, p),
         Ok(None) => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(AitError::not_found(format!(
-                    "Model '{}' not found or disabled",
-                    model_name
-                ))),
-            ));
+            return Err(AitError::not_found(format!(
+                "Model '{}' not found or disabled",
+                model_name
+            ))
+            .into_response());
         }
         Err(e) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(AitError::internal_error(e)),
-            ));
+            return Err(AitError::from_db_error(e).into_response());
         }
     };
 
@@ -187,18 +174,22 @@ pub async fn proxy_request(
     // Build upstream request
     let upstream = create_provider(&provider, state.http_client.clone());
     let request = upstream
-        .build_request(&state.http_client, &body, stream, &model.upstream_model, upstream_path)
+        .build_request(
+            &state.http_client,
+            &body,
+            stream,
+            &model.upstream_model,
+            upstream_path,
+        )
         .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(AitError::bad_request(e)),
-            )
-        })?;
+        .map_err(|e| AitError::bad_request(e).into_response())?;
 
     info!(
         "Proxying to provider '{}' for model '{}' -> upstream '{}', base_url: {}",
-        provider.name, model.name, model.upstream_model, request.url()
+        provider.name,
+        model.name,
+        model.upstream_model,
+        request.url()
     );
 
     if stream {
@@ -216,36 +207,26 @@ async fn proxy_non_streamed(
     provider: &crate::db::Provider,
     _model: &crate::db::Model,
 ) -> Result<impl IntoResponse + use<>, (StatusCode, Json<AitError>)> {
-    let response = state
-        .http_client
-        .execute(request)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(AitError::upstream_error(
-                    502,
-                    format!("Failed to connect to provider '{}': {}", provider.name, e),
-                )),
-            )
-        })?;
-
-    let status = response.status();
-    let bytes = response.bytes().await.map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(AitError::upstream_error(502, e.to_string())),
+    let response = state.http_client.execute(request).await.map_err(|e| {
+        AitError::upstream_error(
+            502,
+            format!("Failed to connect to provider '{}': {}", provider.name, e),
         )
+        .into_response()
     })?;
 
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| AitError::upstream_error(502, e.to_string()).into_response())?;
+
     if !status.is_success() {
-        return Err((
-            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            Json(AitError::upstream_error(
-                status.as_u16(),
-                String::from_utf8_lossy(&bytes).to_string(),
-            )),
-        ));
+        return Err(AitError::upstream_error(
+            status.as_u16(),
+            String::from_utf8_lossy(&bytes).to_string(),
+        )
+        .into_response());
     }
 
     let mut headers = HeaderMap::new();
@@ -262,42 +243,42 @@ async fn proxy_streamed(
     provider: &crate::db::Provider,
     _model: &crate::db::Model,
 ) -> Result<impl IntoResponse + use<>, (StatusCode, Json<AitError>)> {
-    let response = state
-        .http_client
-        .execute(request)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(AitError::upstream_error(
-                    502,
-                    format!("Failed to connect to provider '{}': {}", provider.name, e),
-                )),
-            )
-        })?;
+    let response = state.http_client.execute(request).await.map_err(|e| {
+        AitError::upstream_error(
+            502,
+            format!("Failed to connect to provider '{}': {}", provider.name, e),
+        )
+        .into_response()
+    })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err((
-            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            Json(AitError::upstream_error(status.as_u16(), body)),
-        ));
+        return Err(AitError::upstream_error(status.as_u16(), body).into_response());
     }
 
-    let stream = Sse::new(
-        response
-            .bytes_stream()
-            .map(|result| match result {
-                Ok(bytes) => Ok(Event::default().data(String::from_utf8_lossy(&bytes))),
-                Err(e) => {
-                    warn!("Stream error: {}", e);
-                    Ok::<Event, std::convert::Infallible>(
-                        Event::default().event("error").data(e.to_string()),
-                    )
-                }
-            }),
-    );
+    let mut stream_builder = axum::response::Response::builder()
+        .header("content-type", "text/event-stream")
+        .header("cache-control", "no-cache");
 
-    Ok(stream)
+    for (name, value) in response.headers() {
+        if name.as_str().to_ascii_lowercase().starts_with("x-") {
+            stream_builder = stream_builder.header(name.clone(), value.clone());
+        }
+    }
+
+    let stream = response.bytes_stream().map(|result| {
+        result.map_err(|e| {
+            warn!("Stream error: {}", e);
+            std::io::Error::other(e)
+        })
+    });
+
+    let body = axum::body::Body::from_stream(stream);
+
+    let resp = stream_builder
+        .body(body)
+        .expect("static SSE headers are valid");
+
+    Ok(resp)
 }

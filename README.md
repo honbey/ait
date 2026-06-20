@@ -33,15 +33,17 @@ cp config/ait.toml.example config/ait.toml
 host = "127.0.0.1"
 port = 8000
 health_detail = false
+session_cleanup_interval_secs = 3600
 
 [auth]
 enabled = true
-token = "your-proxy-token"
-admin_token = "your-admin-token"
 session_ttl_secs = 86400
 bootstrap_admin = true
 bootstrap_username = "admin"
 bootstrap_password = "admin123"
+# allow_registration = false
+# registration_code = ""
+# max_api_keys_per_user = 10
 
 [database]
 path = "./data/ait.rocksdb"
@@ -55,7 +57,7 @@ stream = true
 
 ```bash
 export AIT_SERVER_PORT=9000
-export AIT_AUTH_TOKEN=my-token
+export AIT_AUTH_ENABLED=true
 ```
 
 ### 启动

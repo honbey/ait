@@ -1,6 +1,6 @@
 use crate::app::AppState;
-use crate::db::{Permission, UserRole};
-use crate::error::AitError;
+use crate::db::{SessionUser, UserRole};
+use crate::error::{AitError, db_error};
 use axum::{
     Json,
     extract::{Request, State},
@@ -8,13 +8,6 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-
-#[derive(Clone)]
-pub struct SessionUser {
-    pub username: String,
-    pub role: UserRole,
-    pub allowed: Vec<Permission>,
-}
 
 fn full_access(username: &str) -> SessionUser {
     SessionUser {
@@ -58,29 +51,20 @@ pub async fn auth_middleware(
     }
 
     let token = extract_bearer_token(req.headers())
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
     // Check if token is a session key
     if let Ok(Some(session)) = state.db.get_session(token) {
-        if session.expires_at <= chrono::Utc::now() {
-            return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
+        if session.is_expired() {
+            return Err(AitError::unauthorized().into_response());
         }
         let user = state
             .db
             .get_user(&session.username)
-            .map_err(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(AitError::internal_error("Database error")),
-                )
-            })?
-            .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+            .map_err(|_| db_error())?
+            .ok_or_else(|| AitError::unauthorized().into_response())?;
 
-        req.extensions_mut().insert(SessionUser {
-            username: user.username,
-            role: user.role,
-            allowed: user.allowed,
-        });
+        req.extensions_mut().insert(user.to_session_user());
         return Ok(next.run(req).await);
     }
 
@@ -88,34 +72,24 @@ pub async fn auth_middleware(
     let key_info = state
         .db
         .get_user_by_api_key(token)
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(AitError::internal_error("Database error")),
-            )
-        })?
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .map_err(|_| db_error())?
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
     let user = state
         .db
         .get_user(&key_info.username)
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(AitError::internal_error("Database error")),
-            )
-        })?
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .map_err(|_| db_error())?
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
     // Check that the specific API key is enabled and not expired
     let key = user
         .api_keys
         .iter()
         .find(|k| k.id == key_info.id && k.enabled)
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
     if key.expires_at.is_some_and(|exp| exp <= chrono::Utc::now()) {
-        return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
+        return Err(AitError::unauthorized().into_response());
     }
 
     // API key users are always User role (never Admin)
@@ -134,39 +108,35 @@ pub async fn admin_auth_middleware(
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     // Admin endpoints always require authentication
     let session_key = extract_session_key(req.headers())
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
     let session = state
         .db
         .get_session(session_key)
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(AitError::internal_error("Database error")),
-            )
-        })?
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .map_err(|_| db_error())?
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
-    if session.expires_at <= chrono::Utc::now() {
-        return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
+    if session.is_expired() {
+        return Err(AitError::unauthorized().into_response());
     }
 
     let user = state
         .db
         .get_user(&session.username)
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(AitError::internal_error("Database error")),
-            )
-        })?
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+        .map_err(|_| db_error())?
+        .ok_or_else(|| AitError::unauthorized().into_response())?;
 
-    let session_user = SessionUser {
-        username: user.username,
-        role: user.role,
-        allowed: user.allowed,
-    };
+    let session_user = user.to_session_user();
+
+    if session_user.role != UserRole::Admin {
+        tracing::warn!(
+            "Non-admin user '{}' (role: {:?}) accessing admin endpoint: {} {}",
+            session_user.username,
+            session_user.role,
+            req.method(),
+            req.uri().path()
+        );
+    }
 
     req.extensions_mut().insert(session_user);
     Ok(next.run(req).await)
