@@ -1,8 +1,8 @@
-pub mod openai_compat;
 pub mod ollama;
+pub mod openai_compat;
 
-pub use openai_compat::OpenAICompatProvider;
 pub use ollama::OllamaProvider;
+pub use openai_compat::OpenAICompatProvider;
 
 use crate::db::{Provider, ProviderType};
 use reqwest::Client;
@@ -27,4 +27,3 @@ pub fn create_provider(provider: &Provider, http_client: Client) -> Box<dyn Upst
         _ => Box::new(OpenAICompatProvider::new(provider, http_client)), // OpenAICompat, DeepSeek, Zhipu, LlamaCpp
     }
 }
-

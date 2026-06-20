@@ -7,28 +7,22 @@ mod middleware;
 mod providers;
 
 use axum::{
-    routing::{delete, get, post, put, Router},
     Extension,
+    routing::{Router, delete, get, post, put},
 };
-use tower_http::services::ServeDir;
 use std::net::SocketAddr;
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
 use handlers::admin::{
-    create_model, create_provider, delete_model, delete_provider,
-    get_provider, get_provider_api_key, list_models, list_providers,
-    update_model, update_provider,
+    create_model, create_provider, delete_model, delete_provider, get_provider,
+    get_provider_api_key, list_models, list_providers, update_model, update_provider,
 };
-use handlers::apikeys::{
-    create_api_key, delete_api_key, list_api_keys,
-    toggle_api_key,
-};
+use handlers::apikeys::{create_api_key, delete_api_key, list_api_keys, toggle_api_key};
 use handlers::auth::{login, logout, register, session_check};
 use handlers::proxy::{chat_completions, completions, embeddings, health, list_models_proxy};
-use handlers::users::{
-    change_password, delete_user, list_users, update_user,
-};
+use handlers::users::{change_password, delete_user, list_users, update_user};
 use middleware::{admin_auth_middleware, auth_middleware};
 
 #[tokio::main]
@@ -48,10 +42,9 @@ async fn main() {
 
     let app = build_app(state, &config);
 
-    let addr: SocketAddr =
-        format!("{}:{}", config.server.host, config.server.port)
-            .parse()
-            .expect("Invalid host:port");
+    let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
+        .parse()
+        .expect("Invalid host:port");
 
     info!("ait starting on http://{}", addr);
 
@@ -115,16 +108,21 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
         // API key management
         .route("/admin/users/{username}/api-keys", get(list_api_keys))
         .route("/admin/users/{username}/api-keys", post(create_api_key))
-        .route("/admin/users/{username}/api-keys/{key}", put(toggle_api_key))
-        .route("/admin/users/{username}/api-keys/{key}", delete(delete_api_key))
+        .route(
+            "/admin/users/{username}/api-keys/{key}",
+            put(toggle_api_key),
+        )
+        .route(
+            "/admin/users/{username}/api-keys/{key}",
+            delete(delete_api_key),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             admin_auth_middleware,
         ));
 
     // Health check (no auth required)
-    let health_route = Router::new()
-        .route("/v1/health", get(health));
+    let health_route = Router::new().route("/v1/health", get(health));
 
     // OpenAI-compatible proxy routes (auth required)
     let proxy_api = Router::new()

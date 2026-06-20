@@ -1,15 +1,14 @@
 use axum::{
-    Extension,
-    extract::{Path, State, Json},
+    Extension, Json as AxumJson,
+    extract::{Json, Path, State},
     http::StatusCode,
-    Json as AxumJson,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::db::{Model, Provider, ProviderType, UserRole};
-use crate::error::{internal_error, not_found, forbidden, AitError};
+use crate::error::{AitError, forbidden, internal_error, not_found};
 use crate::middleware::SessionUser;
 
 // --- Provider request/response types ---
@@ -124,10 +123,7 @@ pub async fn create_provider(
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    let inserted = state
-        .db
-        .insert_provider(provider)
-        .map_err(internal_error)?;
+    let inserted = state.db.insert_provider(provider).map_err(internal_error)?;
 
     Ok((StatusCode::CREATED, Json(ProviderResponse::from(inserted))))
 }

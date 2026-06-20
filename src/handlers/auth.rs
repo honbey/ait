@@ -10,8 +10,8 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{Session, User, UserRole, Permission};
-use crate::error::{internal_error, forbidden_msg, conflict, unauthorized, AitError};
+use crate::db::{Permission, Session, User, UserRole};
+use crate::error::{AitError, conflict, forbidden_msg, internal_error, unauthorized};
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -132,7 +132,12 @@ pub async fn register(
         return Err(forbidden_msg("Invalid registration code"));
     }
 
-    if state.db.get_user(&input.username).map_err(|_| internal_error("Database error"))?.is_some() {
+    if state
+        .db
+        .get_user(&input.username)
+        .map_err(|_| internal_error("Database error"))?
+        .is_some()
+    {
         return Err(conflict("Username already exists"));
     }
 
@@ -148,7 +153,10 @@ pub async fn register(
         created_at: chrono::Utc::now(),
     };
 
-    state.db.insert_user(user).map_err(|_| internal_error("Failed to create user"))?;
+    state
+        .db
+        .insert_user(user)
+        .map_err(|_| internal_error("Failed to create user"))?;
 
     Ok(Json(serde_json::json!({"ok": true})))
 }
@@ -224,7 +232,6 @@ fn generate_session_key() -> String {
 
 fn dummy_hash() -> String {
     static HASH: OnceLock<String> = OnceLock::new();
-    HASH.get_or_init(|| {
-        bcrypt::hash("dummy", bcrypt::DEFAULT_COST).expect("dummy hash")
-    }).clone()
+    HASH.get_or_init(|| bcrypt::hash("dummy", bcrypt::DEFAULT_COST).expect("dummy hash"))
+        .clone()
 }

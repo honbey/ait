@@ -1,16 +1,15 @@
 use axum::{
-    Extension,
-    extract::{State, Json},
+    Extension, Json as AxumJson,
+    extract::{Json, State},
     http::{HeaderMap, HeaderName, StatusCode},
-    response::{sse::Event, IntoResponse, Response, Sse},
-    Json as AxumJson,
+    response::{IntoResponse, Response, Sse, sse::Event},
 };
 use chrono::Utc;
 use futures_util::StreamExt;
 use tracing::{info, warn};
 
 use crate::app::AppState;
-use crate::db::{UserRole, Permission};
+use crate::db::{Permission, UserRole};
 use crate::error::AitError;
 use crate::middleware::SessionUser;
 use crate::providers::create_provider;
@@ -71,11 +70,17 @@ pub async fn list_models_proxy(
     Extension(session): Extension<SessionUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
     let models = state.db.list_models().map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(AitError::internal_error(e)))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AitError::internal_error(e)),
+        )
     })?;
 
     let providers = state.db.list_providers().map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(AitError::internal_error(e)))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AitError::internal_error(e)),
+        )
     })?;
 
     let data: Vec<serde_json::Value> = models
@@ -109,7 +114,11 @@ pub async fn list_models_proxy(
     })))
 }
 
-fn check_model_access(model_provider_id: &str, model_name: &str, session: &SessionUser) -> Result<(), (StatusCode, Json<AitError>)> {
+fn check_model_access(
+    model_provider_id: &str,
+    model_name: &str,
+    session: &SessionUser,
+) -> Result<(), (StatusCode, Json<AitError>)> {
     match session.role {
         UserRole::Admin => Ok(()),
         UserRole::User => {
@@ -142,15 +151,14 @@ pub async fn proxy_request(
     upstream_path: &str,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     // Extract model name
-    let model_name = body
-        .get("model")
-        .and_then(|m| m.as_str())
-        .ok_or_else(|| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(AitError::bad_request("Missing 'model' field in request body")),
-            )
-        })?;
+    let model_name = body.get("model").and_then(|m| m.as_str()).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(AitError::bad_request(
+                "Missing 'model' field in request body",
+            )),
+        )
+    })?;
 
     info!("Routing request for model: {}", model_name);
 
@@ -187,18 +195,22 @@ pub async fn proxy_request(
     // Build upstream request
     let upstream = create_provider(&provider, state.http_client.clone());
     let request = upstream
-        .build_request(&state.http_client, &body, stream, &model.upstream_model, upstream_path)
+        .build_request(
+            &state.http_client,
+            &body,
+            stream,
+            &model.upstream_model,
+            upstream_path,
+        )
         .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(AitError::bad_request(e)),
-            )
-        })?;
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(AitError::bad_request(e))))?;
 
     info!(
         "Proxying to provider '{}' for model '{}' -> upstream '{}', base_url: {}",
-        provider.name, model.name, model.upstream_model, request.url()
+        provider.name,
+        model.name,
+        model.upstream_model,
+        request.url()
     );
 
     if stream {
@@ -216,19 +228,15 @@ async fn proxy_non_streamed(
     provider: &crate::db::Provider,
     _model: &crate::db::Model,
 ) -> Result<impl IntoResponse + use<>, (StatusCode, Json<AitError>)> {
-    let response = state
-        .http_client
-        .execute(request)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(AitError::upstream_error(
-                    502,
-                    format!("Failed to connect to provider '{}': {}", provider.name, e),
-                )),
-            )
-        })?;
+    let response = state.http_client.execute(request).await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(AitError::upstream_error(
+                502,
+                format!("Failed to connect to provider '{}': {}", provider.name, e),
+            )),
+        )
+    })?;
 
     let status = response.status();
     let bytes = response.bytes().await.map_err(|e| {
@@ -262,19 +270,15 @@ async fn proxy_streamed(
     provider: &crate::db::Provider,
     _model: &crate::db::Model,
 ) -> Result<impl IntoResponse + use<>, (StatusCode, Json<AitError>)> {
-    let response = state
-        .http_client
-        .execute(request)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(AitError::upstream_error(
-                    502,
-                    format!("Failed to connect to provider '{}': {}", provider.name, e),
-                )),
-            )
-        })?;
+    let response = state.http_client.execute(request).await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(AitError::upstream_error(
+                502,
+                format!("Failed to connect to provider '{}': {}", provider.name, e),
+            )),
+        )
+    })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -285,19 +289,15 @@ async fn proxy_streamed(
         ));
     }
 
-    let stream = Sse::new(
-        response
-            .bytes_stream()
-            .map(|result| match result {
-                Ok(bytes) => Ok(Event::default().data(String::from_utf8_lossy(&bytes))),
-                Err(e) => {
-                    warn!("Stream error: {}", e);
-                    Ok::<Event, std::convert::Infallible>(
-                        Event::default().event("error").data(e.to_string()),
-                    )
-                }
-            }),
-    );
+    let stream = Sse::new(response.bytes_stream().map(|result| match result {
+        Ok(bytes) => Ok(Event::default().data(String::from_utf8_lossy(&bytes))),
+        Err(e) => {
+            warn!("Stream error: {}", e);
+            Ok::<Event, std::convert::Infallible>(
+                Event::default().event("error").data(e.to_string()),
+            )
+        }
+    }));
 
     Ok(stream)
 }

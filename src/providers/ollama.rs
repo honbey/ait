@@ -70,7 +70,8 @@ impl UpstreamProvider for OllamaProvider {
 
         let body_bytes = serde_json::to_vec(&ollama_body).map_err(|e| e.to_string())?;
 
-        let mut builder = self.client
+        let mut builder = self
+            .client
             .post(self.upstream_url(ollama_path))
             .header("Content-Type", "application/json")
             .body(body_bytes);
