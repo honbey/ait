@@ -41,7 +41,7 @@ pub struct ChangePasswordRequest {
     pub new_password: String,
 }
 
-pub async fn list_users_handler(
+pub async fn list_users(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
 ) -> Result<Json<Vec<UserInfoResponse>>, (StatusCode, Json<AitError>)> {
@@ -52,7 +52,7 @@ pub async fn list_users_handler(
     Ok(Json(users.into_iter().map(Into::into).collect()))
 }
 
-pub async fn update_user_handler(
+pub async fn update_user(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,
@@ -88,7 +88,7 @@ pub async fn update_user_handler(
     Ok(Json(updated.into()))
 }
 
-pub async fn delete_user_handler(
+pub async fn delete_user(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,
@@ -100,7 +100,7 @@ pub async fn delete_user_handler(
     Ok(Json(serde_json::json!({"ok": true})))
 }
 
-pub async fn change_password_handler(
+pub async fn change_password(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,

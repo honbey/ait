@@ -21,13 +21,13 @@ use handlers::admin::{
     update_model, update_provider,
 };
 use handlers::apikeys::{
-    create_api_key_handler, delete_api_key_handler, list_api_keys_handler,
-    toggle_api_key_handler,
+    create_api_key, delete_api_key, list_api_keys,
+    toggle_api_key,
 };
-use handlers::auth::{login_handler, logout_handler, register_handler, session_check};
+use handlers::auth::{login, logout, register, session_check};
 use handlers::proxy::{chat_completions, completions, embeddings, health, list_models_proxy};
 use handlers::users::{
-    change_password_handler, delete_user_handler, list_users_handler, update_user_handler,
+    change_password, delete_user, list_users, update_user,
 };
 use middleware::{admin_auth_middleware, auth_middleware};
 
@@ -88,9 +88,9 @@ fn init_logging() {
 fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
     // Auth routes (no admin middleware — they handle their own auth logic)
     let auth_route = Router::new()
-        .route("/admin/login", post(login_handler))
-        .route("/admin/register", post(register_handler))
-        .route("/admin/logout", post(logout_handler))
+        .route("/admin/login", post(login))
+        .route("/admin/register", post(register))
+        .route("/admin/logout", post(logout))
         .route("/admin/session", get(session_check));
 
     // Admin API routes (admin auth required)
@@ -108,15 +108,15 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
         .route("/admin/models/{name}", put(update_model))
         .route("/admin/models/{name}", delete(delete_model))
         // User management
-        .route("/admin/users", get(list_users_handler))
-        .route("/admin/users/{username}", put(update_user_handler))
-        .route("/admin/users/{username}", delete(delete_user_handler))
-        .route("/admin/users/{username}/password", put(change_password_handler))
+        .route("/admin/users", get(list_users))
+        .route("/admin/users/{username}", put(update_user))
+        .route("/admin/users/{username}", delete(delete_user))
+        .route("/admin/users/{username}/password", put(change_password))
         // API key management
-        .route("/admin/users/{username}/api-keys", get(list_api_keys_handler))
-        .route("/admin/users/{username}/api-keys", post(create_api_key_handler))
-        .route("/admin/users/{username}/api-keys/{key}", put(toggle_api_key_handler))
-        .route("/admin/users/{username}/api-keys/{key}", delete(delete_api_key_handler))
+        .route("/admin/users/{username}/api-keys", get(list_api_keys))
+        .route("/admin/users/{username}/api-keys", post(create_api_key))
+        .route("/admin/users/{username}/api-keys/{key}", put(toggle_api_key))
+        .route("/admin/users/{username}/api-keys/{key}", delete(delete_api_key))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             admin_auth_middleware,

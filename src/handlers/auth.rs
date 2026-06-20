@@ -61,7 +61,7 @@ fn set_cookie_header(session_key: &str, max_age: i64) -> String {
     )
 }
 
-pub async fn login_handler(
+pub async fn login(
     State(state): State<AppState>,
     Json(input): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<AitError>)> {
@@ -118,7 +118,7 @@ pub async fn login_handler(
     ))
 }
 
-pub async fn register_handler(
+pub async fn register(
     State(state): State<AppState>,
     Json(input): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<AitError>)> {
@@ -153,7 +153,7 @@ pub async fn register_handler(
     Ok(Json(serde_json::json!({"ok": true})))
 }
 
-pub async fn logout_handler(
+pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<AitError>)> {

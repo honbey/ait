@@ -35,7 +35,7 @@ pub struct ApiKeyListItem {
     pub expires_at: Option<i64>,
 }
 
-pub async fn create_api_key_handler(
+pub async fn create_api_key(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,
@@ -70,7 +70,7 @@ pub async fn create_api_key_handler(
     }))
 }
 
-pub async fn list_api_keys_handler(
+pub async fn list_api_keys(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,
@@ -100,7 +100,7 @@ pub async fn list_api_keys_handler(
     Ok(Json(items))
 }
 
-pub async fn delete_api_key_handler(
+pub async fn delete_api_key(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Path((username, key)): Path<(String, String)>,
@@ -121,7 +121,7 @@ pub struct ToggleApiKeyRequest {
     pub enabled: bool,
 }
 
-pub async fn toggle_api_key_handler(
+pub async fn toggle_api_key(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Path((username, key_id)): Path<(String, String)>,
