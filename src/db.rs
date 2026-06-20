@@ -51,11 +51,13 @@ pub struct Provider {
 #[serde(rename_all = "snake_case")]
 pub enum ProviderType {
     #[default]
+    #[serde(rename = "openai_compat")]
     OpenAICompat,
+    #[serde(rename = "deepseek")]
     DeepSeek,
     Zhipu,
     Ollama,
-    LlamaCpp,
+    Llamacpp,
 }
 
 impl Provider {
