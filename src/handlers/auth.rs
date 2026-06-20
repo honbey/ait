@@ -185,7 +185,7 @@ pub async fn session_check(
     };
 
     match state.db.get_session(session_key) {
-        Ok(Some(session)) if session.expires_at > Utc::now() => {
+        Ok(Some(session)) if !session.is_expired() => {
             let user = state.db.get_user(&session.username).ok().flatten();
             match user {
                 Some(u) => Json(SessionResponse {

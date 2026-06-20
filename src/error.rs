@@ -125,7 +125,7 @@ pub fn conflict(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
         Json(AitError {
             message: msg.into(),
             code: 409,
-            r#type: "auth_error".to_string(),
+            r#type: "invalid_request_error".to_string(),
         }),
     )
 }
@@ -135,4 +135,21 @@ pub fn require_admin(session: &SessionUser) -> Result<(), (StatusCode, Json<AitE
         return Err(forbidden());
     }
     Ok(())
+}
+
+pub fn require_admin_or_self(
+    session: &SessionUser,
+    username: &str,
+) -> Result<(), (StatusCode, Json<AitError>)> {
+    if session.role != UserRole::Admin && session.username != username {
+        return Err(forbidden());
+    }
+    Ok(())
+}
+
+pub fn db_error() -> (StatusCode, Json<AitError>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(AitError::internal_error("Database error")),
+    )
 }
