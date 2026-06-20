@@ -101,7 +101,11 @@ pub struct ApiKey {
     pub created_at: DateTime<chrono::Utc>,
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default, with = "ts_seconds_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        with = "ts_seconds_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub expires_at: Option<DateTime<chrono::Utc>>,
 }
 
@@ -176,7 +180,9 @@ impl Database {
     }
 
     fn cf(&self, name: &str) -> Result<&rocksdb::ColumnFamily, String> {
-        self.db.cf_handle(name).ok_or_else(|| format!("CF '{}' not found", name))
+        self.db
+            .cf_handle(name)
+            .ok_or_else(|| format!("CF '{}' not found", name))
     }
 
     // --- Provider CRUD ---
@@ -551,8 +557,6 @@ impl Database {
 
         Ok(result)
     }
-
-
 }
 
 // Database is safe to share across threads (Arc internally)

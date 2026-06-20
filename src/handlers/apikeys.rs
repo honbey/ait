@@ -8,21 +8,21 @@ use serde::Deserialize;
 
 use crate::app::AppState;
 use crate::db::UserRole;
-use crate::error::{internal_error, not_found, forbidden, AitError};
+use crate::error::{AitError, forbidden, internal_error, not_found};
 use crate::middleware::SessionUser;
 
 #[derive(Deserialize)]
 pub struct CreateApiKeyRequest {
     pub name: String,
-    pub expires_at: Option<String>,
+    pub expires_at: Option<i64>,
 }
 
 #[derive(serde::Serialize)]
 pub struct ApiKeyResponse {
     pub key: String,
     pub name: String,
-    pub created_at: String,
-    pub expires_at: Option<String>,
+    pub created_at: i64,
+    pub expires_at: Option<i64>,
 }
 
 #[derive(serde::Serialize)]
@@ -30,9 +30,9 @@ pub struct ApiKeyListItem {
     pub id: String,
     pub key: String,
     pub name: String,
-    pub created_at: String,
+    pub created_at: i64,
     pub enabled: bool,
-    pub expires_at: Option<String>,
+    pub expires_at: Option<i64>,
 }
 
 pub async fn create_api_key_handler(
@@ -47,16 +47,13 @@ pub async fn create_api_key_handler(
 
     let expires_at: Option<DateTime<Utc>> = input
         .expires_at
-        .as_deref()
-        .map(|s| {
-            DateTime::parse_from_rfc3339(s)
-                .map(|dt| dt.with_timezone(&Utc))
-                .map_err(|e| {
-                    (
-                        StatusCode::BAD_REQUEST,
-                        Json(AitError::bad_request(format!("Invalid expires_at: {}", e))),
-                    )
-                })
+        .map(|ts| {
+            DateTime::from_timestamp(ts, 0).ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(AitError::bad_request("Invalid expires_at")),
+                )
+            })
         })
         .transpose()?;
 
@@ -68,8 +65,8 @@ pub async fn create_api_key_handler(
     Ok(Json(ApiKeyResponse {
         key: raw_key,
         name: stored.name,
-        created_at: stored.created_at.to_rfc3339(),
-        expires_at: stored.expires_at.map(|dt| dt.to_rfc3339()),
+        created_at: stored.created_at.timestamp(),
+        expires_at: stored.expires_at.map(|dt| dt.timestamp()),
     }))
 }
 
@@ -95,9 +92,9 @@ pub async fn list_api_keys_handler(
             id: k.id.clone(),
             key: k.masked(),
             name: k.name,
-            created_at: k.created_at.to_rfc3339(),
+            created_at: k.created_at.timestamp(),
             enabled: k.enabled,
-            expires_at: k.expires_at.map(|dt| dt.to_rfc3339()),
+            expires_at: k.expires_at.map(|dt| dt.timestamp()),
         })
         .collect();
     Ok(Json(items))
@@ -141,8 +138,8 @@ pub async fn toggle_api_key_handler(
         id: updated.id.clone(),
         key: updated.masked(),
         name: updated.name,
-        created_at: updated.created_at.to_rfc3339(),
+        created_at: updated.created_at.timestamp(),
         enabled: updated.enabled,
-        expires_at: updated.expires_at.map(|dt| dt.to_rfc3339()),
+        expires_at: updated.expires_at.map(|dt| dt.timestamp()),
     }))
 }

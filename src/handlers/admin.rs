@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     Json as AxumJson,
 };
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
@@ -23,8 +23,8 @@ pub struct ProviderResponse {
     pub base_url: String,
     pub api_key: Option<String>,
     pub enabled: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 impl From<Provider> for ProviderResponse {
@@ -36,8 +36,8 @@ impl From<Provider> for ProviderResponse {
             provider_type: p.provider_type,
             base_url: p.base_url,
             enabled: p.enabled,
-            created_at: p.created_at,
-            updated_at: p.updated_at,
+            created_at: p.created_at.timestamp(),
+            updated_at: p.updated_at.timestamp(),
         }
     }
 }
@@ -72,7 +72,7 @@ pub struct ModelResponse {
     pub provider_id: String,
     pub upstream_model: String,
     pub enabled: bool,
-    pub created_at: DateTime<Utc>,
+    pub created_at: i64,
 }
 
 impl From<Model> for ModelResponse {
@@ -83,7 +83,7 @@ impl From<Model> for ModelResponse {
             provider_id: m.provider_id,
             upstream_model: m.upstream_model,
             enabled: m.enabled,
-            created_at: m.created_at,
+            created_at: m.created_at.timestamp(),
         }
     }
 }

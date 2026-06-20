@@ -55,7 +55,7 @@ pub async fn health(State(state): State<AppState>) -> AxumJson<serde_json::Value
             "version": env!("CARGO_PKG_VERSION"),
             "uptime": format!("{}h{}m{}s", hours, mins, secs),
             "uptime_secs": total_secs,
-            "start_time": state.start_time.to_rfc3339(),
+            "start_time": state.start_time.timestamp(),
             "providers_count": providers_count,
             "models_count": models_count,
         }))

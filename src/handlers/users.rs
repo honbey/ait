@@ -3,7 +3,6 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
@@ -16,7 +15,7 @@ pub struct UserInfo {
     pub username: String,
     pub role: UserRole,
     pub allowed: Vec<Permission>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: i64,
 }
 
 impl From<User> for UserInfo {
@@ -25,7 +24,7 @@ impl From<User> for UserInfo {
             username: u.username,
             role: u.role,
             allowed: u.allowed,
-            created_at: u.created_at,
+            created_at: u.created_at.timestamp(),
         }
     }
 }
