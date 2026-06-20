@@ -175,6 +175,10 @@ impl Database {
         Ok(Self { db: Arc::new(db) })
     }
 
+    fn cf(&self, name: &str) -> Result<&rocksdb::ColumnFamily, String> {
+        self.db.cf_handle(name).ok_or_else(|| format!("CF '{}' not found", name))
+    }
+
     // --- Provider CRUD ---
 
     pub fn insert_provider(&self, mut provider: Provider) -> Result<Provider, String> {
@@ -187,10 +191,7 @@ impl Database {
 
         let key = format!("prov:{}", provider.id);
         let val = serde_json::to_string(&provider).map_err(|e| e.to_string())?;
-        let cf = self
-            .db
-            .cf_handle(PROVIDERS_CF)
-            .ok_or("providers CF not found")?;
+        let cf = self.cf(PROVIDERS_CF)?;
         self.db.put_cf(&cf, &key, &val).map_err(|e| e.to_string())?;
         Ok(provider)
     }
@@ -214,10 +215,7 @@ impl Database {
 
         let key = format!("prov:{}", provider.id);
         let val = serde_json::to_string(&provider).map_err(|e| e.to_string())?;
-        let cf = self
-            .db
-            .cf_handle(PROVIDERS_CF)
-            .ok_or("providers CF not found")?;
+        let cf = self.cf(PROVIDERS_CF)?;
         self.db.put_cf(&cf, &key, &val).map_err(|e| e.to_string())?;
 
         Ok(Some(provider))
@@ -225,15 +223,12 @@ impl Database {
 
     pub fn delete_provider(&self, id: &str) -> Result<bool, String> {
         let key = format!("prov:{}", id);
-        let cf = self
-            .db
-            .cf_handle(PROVIDERS_CF)
-            .ok_or("providers CF not found")?;
+        let cf = self.cf(PROVIDERS_CF)?;
         self.db.delete_cf(&cf, &key).map_err(|e| e.to_string())?;
 
         // Also delete associated models
         let mut deleted_models = 0;
-        let cf_models = self.db.cf_handle(MODELS_CF).ok_or("models CF not found")?;
+        let cf_models = self.cf(MODELS_CF)?;
         for item in self
             .db
             .iterator_cf(&cf_models, IteratorMode::Start)
@@ -253,10 +248,7 @@ impl Database {
 
     pub fn get_provider(&self, id: &str) -> Result<Option<Provider>, String> {
         let key = format!("prov:{}", id);
-        let cf = self
-            .db
-            .cf_handle(PROVIDERS_CF)
-            .ok_or("providers CF not found")?;
+        let cf = self.cf(PROVIDERS_CF)?;
         self.db
             .get_cf(&cf, &key)
             .map_err(|e| e.to_string())?
@@ -265,10 +257,7 @@ impl Database {
     }
 
     pub fn list_providers(&self) -> Result<Vec<Provider>, String> {
-        let cf = self
-            .db
-            .cf_handle(PROVIDERS_CF)
-            .ok_or("providers CF not found")?;
+        let cf = self.cf(PROVIDERS_CF)?;
         let mut providers = Vec::new();
         for item in self.db.iterator_cf(&cf, IteratorMode::Start).flatten() {
             let provider: Provider = serde_json::from_slice(&item.1).map_err(|e| e.to_string())?;
@@ -295,7 +284,7 @@ impl Database {
 
         let key = format!("model:{}", model.name);
         let val = serde_json::to_string(&model).map_err(|e| e.to_string())?;
-        let cf = self.db.cf_handle(MODELS_CF).ok_or("models CF not found")?;
+        let cf = self.cf(MODELS_CF)?;
         self.db.put_cf(&cf, &key, &val).map_err(|e| e.to_string())?;
         Ok(model)
     }
@@ -311,20 +300,20 @@ impl Database {
 
         let key = format!("model:{}", model.name);
         let val = serde_json::to_string(&model).map_err(|e| e.to_string())?;
-        let cf = self.db.cf_handle(MODELS_CF).ok_or("models CF not found")?;
+        let cf = self.cf(MODELS_CF)?;
         self.db.put_cf(&cf, &key, &val).map_err(|e| e.to_string())?;
         Ok(model)
     }
 
     pub fn delete_model(&self, name: &str) -> Result<(), String> {
         let key = format!("model:{}", name);
-        let cf = self.db.cf_handle(MODELS_CF).ok_or("models CF not found")?;
+        let cf = self.cf(MODELS_CF)?;
         self.db.delete_cf(&cf, &key).map_err(|e| e.to_string())
     }
 
     pub fn get_model(&self, name: &str) -> Result<Option<Model>, String> {
         let key = format!("model:{}", name);
-        let cf = self.db.cf_handle(MODELS_CF).ok_or("models CF not found")?;
+        let cf = self.cf(MODELS_CF)?;
         self.db
             .get_cf(&cf, &key)
             .map_err(|e| e.to_string())?
@@ -333,7 +322,7 @@ impl Database {
     }
 
     pub fn list_models(&self) -> Result<Vec<Model>, String> {
-        let cf = self.db.cf_handle(MODELS_CF).ok_or("models CF not found")?;
+        let cf = self.cf(MODELS_CF)?;
         let mut models = Vec::new();
         for item in self.db.iterator_cf(&cf, IteratorMode::Start).flatten() {
             let model: Model = serde_json::from_slice(&item.1).map_err(|e| e.to_string())?;
@@ -365,14 +354,14 @@ impl Database {
         user.created_at = Utc::now();
         let key = format!("user:{}", user.username);
         let val = serde_json::to_string(&user).map_err(|e| e.to_string())?;
-        let cf = self.db.cf_handle(USERS_CF).ok_or("users CF not found")?;
+        let cf = self.cf(USERS_CF)?;
         self.db.put_cf(&cf, &key, &val).map_err(|e| e.to_string())?;
         Ok(user)
     }
 
     pub fn get_user(&self, username: &str) -> Result<Option<User>, String> {
         let key = format!("user:{}", username);
-        let cf = self.db.cf_handle(USERS_CF).ok_or("users CF not found")?;
+        let cf = self.cf(USERS_CF)?;
         self.db
             .get_cf(&cf, &key)
             .map_err(|e| e.to_string())?
@@ -381,7 +370,7 @@ impl Database {
     }
 
     pub fn list_users(&self) -> Result<Vec<User>, String> {
-        let cf = self.db.cf_handle(USERS_CF).ok_or("users CF not found")?;
+        let cf = self.cf(USERS_CF)?;
         let mut users = Vec::new();
         for item in self.db.iterator_cf(&cf, IteratorMode::Start).flatten() {
             let user: User = serde_json::from_slice(&item.1).map_err(|e| e.to_string())?;
@@ -392,7 +381,7 @@ impl Database {
 
     pub fn update_user(&self, username: &str, mut user: User) -> Result<User, String> {
         let key = format!("user:{}", username);
-        let cf = self.db.cf_handle(USERS_CF).ok_or("users CF not found")?;
+        let cf = self.cf(USERS_CF)?;
 
         let existing = self.get_user(username)?;
         match existing {
@@ -408,7 +397,7 @@ impl Database {
 
     pub fn delete_user(&self, username: &str) -> Result<bool, String> {
         let key = format!("user:{}", username);
-        let cf = self.db.cf_handle(USERS_CF).ok_or("users CF not found")?;
+        let cf = self.cf(USERS_CF)?;
         self.db.delete_cf(&cf, &key).map_err(|e| e.to_string())?;
         Ok(true)
     }
@@ -421,10 +410,7 @@ impl Database {
         session.session_key = hash.clone();
         let key = format!("sess:{}", hash);
         let val = serde_json::to_string(&session).map_err(|e| e.to_string())?;
-        let cf = self
-            .db
-            .cf_handle(SESSIONS_CF)
-            .ok_or("sessions CF not found")?;
+        let cf = self.cf(SESSIONS_CF)?;
         self.db.put_cf(&cf, &key, &val).map_err(|e| e.to_string())?;
         Ok(session)
     }
@@ -432,10 +418,7 @@ impl Database {
     pub fn get_session(&self, session_key: &str) -> Result<Option<Session>, String> {
         let hash = hash_key(session_key);
         let key = format!("sess:{}", hash);
-        let cf = self
-            .db
-            .cf_handle(SESSIONS_CF)
-            .ok_or("sessions CF not found")?;
+        let cf = self.cf(SESSIONS_CF)?;
         self.db
             .get_cf(&cf, &key)
             .map_err(|e| e.to_string())?
@@ -446,10 +429,7 @@ impl Database {
     pub fn delete_session(&self, session_key: &str) -> Result<bool, String> {
         let hash = hash_key(session_key);
         let key = format!("sess:{}", hash);
-        let cf = self
-            .db
-            .cf_handle(SESSIONS_CF)
-            .ok_or("sessions CF not found")?;
+        let cf = self.cf(SESSIONS_CF)?;
         self.db.delete_cf(&cf, &key).map_err(|e| e.to_string())?;
         Ok(true)
     }
@@ -503,10 +483,7 @@ impl Database {
             name: name.to_string(),
             created_at: now,
         };
-        let cf = self
-            .db
-            .cf_handle(API_KEYS_CF)
-            .ok_or("api_keys CF not found")?;
+        let cf = self.cf(API_KEYS_CF)?;
         self.db
             .put_cf(
                 &cf,
@@ -523,10 +500,7 @@ impl Database {
 
     pub fn get_user_by_api_key(&self, api_key: &str) -> Result<Option<ApiKeyInfo>, String> {
         let hash = hash_key(api_key);
-        let cf = self
-            .db
-            .cf_handle(API_KEYS_CF)
-            .ok_or("api_keys CF not found")?;
+        let cf = self.cf(API_KEYS_CF)?;
         self.db
             .get_cf(&cf, &hash)
             .map_err(|e| e.to_string())?
@@ -546,10 +520,7 @@ impl Database {
             .map(|k| k.key.clone())
             .ok_or_else(|| "API key not found".to_string())?;
 
-        let cf = self
-            .db
-            .cf_handle(API_KEYS_CF)
-            .ok_or("api_keys CF not found")?;
+        let cf = self.cf(API_KEYS_CF)?;
         self.db.delete_cf(&cf, &hash).map_err(|e| e.to_string())?;
 
         user.api_keys.retain(|k| k.id != key_id);

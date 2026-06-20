@@ -114,10 +114,8 @@ pub async fn auth_middleware(
         .find(|k| k.id == key_info.id && k.enabled)
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
-    if let Some(expires_at) = &key.expires_at {
-        if *expires_at <= chrono::Utc::now() {
-            return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
-        }
+    if key.expires_at.is_some_and(|exp| exp <= chrono::Utc::now()) {
+        return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
     }
 
     // API key users are always User role (never Admin)

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::db::{Model, Provider, ProviderType, UserRole};
-use crate::error::AitError;
+use crate::error::{internal_error, not_found, forbidden, AitError};
 use crate::middleware::SessionUser;
 
 // --- Provider request/response types ---
@@ -310,22 +310,4 @@ pub async fn update_model(
         .update_model(&name, &updates)
         .map_err(internal_error)?;
     Ok(Json(ModelResponse::from(model)))
-}
-
-// --- Helpers ---
-
-fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<AitError>) {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(AitError::internal_error(e.to_string())))
-}
-
-fn not_found(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
-    (StatusCode::NOT_FOUND, Json(AitError::not_found(msg)))
-}
-
-fn forbidden() -> (StatusCode, Json<AitError>) {
-    (StatusCode::FORBIDDEN, Json(AitError {
-        message: "Admin privileges required".to_string(),
-        code: 403,
-        r#type: "forbidden".to_string(),
-    }))
 }

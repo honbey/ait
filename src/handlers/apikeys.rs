@@ -7,7 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::app::AppState;
-use crate::error::AitError;
+use crate::db::UserRole;
+use crate::error::{internal_error, not_found, forbidden, AitError};
 use crate::middleware::SessionUser;
 
 #[derive(Deserialize)]
@@ -40,7 +41,7 @@ pub async fn create_api_key_handler(
     Path(username): Path<String>,
     Json(input): Json<CreateApiKeyRequest>,
 ) -> Result<Json<ApiKeyResponse>, (StatusCode, Json<AitError>)> {
-    if session.role != crate::db::UserRole::Admin && session.username != username {
+    if session.role != UserRole::Admin && session.username != username {
         return Err(forbidden());
     }
 
@@ -77,7 +78,7 @@ pub async fn list_api_keys_handler(
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,
 ) -> Result<Json<Vec<ApiKeyListItem>>, (StatusCode, Json<AitError>)> {
-    if session.role != crate::db::UserRole::Admin && session.username != username {
+    if session.role != UserRole::Admin && session.username != username {
         return Err(forbidden());
     }
 
@@ -107,7 +108,7 @@ pub async fn delete_api_key_handler(
     Extension(session): Extension<SessionUser>,
     Path((username, key)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
-    if session.role != crate::db::UserRole::Admin && session.username != username {
+    if session.role != UserRole::Admin && session.username != username {
         return Err(forbidden());
     }
 
@@ -129,7 +130,7 @@ pub async fn toggle_api_key_handler(
     Path((username, key_id)): Path<(String, String)>,
     Json(input): Json<ToggleApiKeyRequest>,
 ) -> Result<Json<ApiKeyListItem>, (StatusCode, Json<AitError>)> {
-    if session.role != crate::db::UserRole::Admin && session.username != username {
+    if session.role != UserRole::Admin && session.username != username {
         return Err(forbidden());
     }
     let updated = state
@@ -143,23 +144,5 @@ pub async fn toggle_api_key_handler(
         created_at: updated.created_at.to_rfc3339(),
         enabled: updated.enabled,
         expires_at: updated.expires_at.map(|dt| dt.to_rfc3339()),
-    }))
-}
-
-// --- Helpers ---
-
-fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<AitError>) {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(AitError::internal_error(e.to_string())))
-}
-
-fn not_found(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
-    (StatusCode::NOT_FOUND, Json(AitError::not_found(msg)))
-}
-
-fn forbidden() -> (StatusCode, Json<AitError>) {
-    (StatusCode::FORBIDDEN, Json(AitError {
-        message: "Admin privileges required".to_string(),
-        code: 403,
-        r#type: "forbidden".to_string(),
     }))
 }

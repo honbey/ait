@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::db::{Session, User, UserRole, Permission};
-use crate::error::AitError;
+use crate::error::{internal_error, forbidden_msg, conflict, unauthorized, AitError};
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -123,13 +123,13 @@ pub async fn register_handler(
     Json(input): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<AitError>)> {
     if !state.config.auth.allow_registration {
-        return Err(forbidden("Registration is disabled"));
+        return Err(forbidden_msg("Registration is disabled"));
     }
 
     if !state.config.auth.registration_code.is_empty()
         && state.config.auth.registration_code != input.registration_code
     {
-        return Err(forbidden("Invalid registration code"));
+        return Err(forbidden_msg("Invalid registration code"));
     }
 
     if state.db.get_user(&input.username).map_err(|_| internal_error("Database error"))?.is_some() {
@@ -227,48 +227,4 @@ fn dummy_hash() -> String {
     HASH.get_or_init(|| {
         bcrypt::hash("dummy", bcrypt::DEFAULT_COST).expect("dummy hash")
     }).clone()
-}
-
-fn unauthorized(msg: &str) -> (StatusCode, Json<AitError>) {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(AitError {
-            message: msg.to_string(),
-            code: 401,
-            r#type: "auth_error".to_string(),
-        }),
-    )
-}
-
-fn forbidden(msg: &str) -> (StatusCode, Json<AitError>) {
-    (
-        StatusCode::FORBIDDEN,
-        Json(AitError {
-            message: msg.to_string(),
-            code: 403,
-            r#type: "auth_error".to_string(),
-        }),
-    )
-}
-
-fn conflict(msg: &str) -> (StatusCode, Json<AitError>) {
-    (
-        StatusCode::CONFLICT,
-        Json(AitError {
-            message: msg.to_string(),
-            code: 409,
-            r#type: "auth_error".to_string(),
-        }),
-    )
-}
-
-fn internal_error(msg: &str) -> (StatusCode, Json<AitError>) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(AitError {
-            message: msg.to_string(),
-            code: 500,
-            r#type: "internal_error".to_string(),
-        }),
-    )
 }
