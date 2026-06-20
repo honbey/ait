@@ -69,19 +69,9 @@ pub async fn list_models_proxy(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
-    let models = state.db.list_models().map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(AitError::internal_error(e)),
-        )
-    })?;
+    let models = state.db.list_models()?;
 
-    let providers = state.db.list_providers().map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(AitError::internal_error(e)),
-        )
-    })?;
+    let providers = state.db.list_providers()?;
 
     let data: Vec<serde_json::Value> = models
         .into_iter()
@@ -175,10 +165,7 @@ pub async fn proxy_request(
             ));
         }
         Err(e) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(AitError::internal_error(e)),
-            ));
+            return Err(AitError::from_db_error(e));
         }
     };
 

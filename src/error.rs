@@ -1,6 +1,8 @@
 use axum::{Json, http::StatusCode};
 use serde::Serialize;
 
+use crate::db::DbError;
+
 #[derive(Debug, Serialize)]
 pub struct AitError {
     pub message: String,
@@ -47,6 +49,27 @@ impl AitError {
             code: 500,
             r#type: "internal_error".to_string(),
         }
+    }
+
+    pub fn from_db_error(e: DbError) -> (StatusCode, Json<AitError>) {
+        match e {
+            DbError::NotFound(msg) => not_found(msg),
+            DbError::LimitExceeded(msg) => (
+                StatusCode::CONFLICT,
+                Json(AitError {
+                    message: msg,
+                    code: 409,
+                    r#type: "invalid_request_error".to_string(),
+                }),
+            ),
+            DbError::Storage(msg) => internal_error(msg),
+        }
+    }
+}
+
+impl From<DbError> for (StatusCode, Json<AitError>) {
+    fn from(e: DbError) -> Self {
+        AitError::from_db_error(e)
     }
 }
 

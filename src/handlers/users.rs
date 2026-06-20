@@ -48,7 +48,7 @@ pub async fn list_users(
     if session.role != UserRole::Admin {
         return Err(forbidden());
     }
-    let users = state.db.list_users().map_err(internal_error)?;
+    let users = state.db.list_users()?;
     Ok(Json(users.into_iter().map(Into::into).collect()))
 }
 
@@ -74,10 +74,7 @@ pub async fn update_user(
         user.allowed = allowed;
     }
 
-    state
-        .db
-        .update_user(&username, user)
-        .map_err(internal_error)?;
+    state.db.update_user(&username, user)?;
 
     let updated = state
         .db
@@ -96,7 +93,7 @@ pub async fn delete_user(
     if session.role != UserRole::Admin {
         return Err(forbidden());
     }
-    state.db.delete_user(&username).map_err(internal_error)?;
+    state.db.delete_user(&username)?;
     Ok(Json(serde_json::json!({"ok": true})))
 }
 
@@ -130,9 +127,6 @@ pub async fn change_password(
         .map_err(|_| internal_error("Failed to hash password"))?;
     user.password_hash = new_hash;
 
-    state
-        .db
-        .update_user(&username, user)
-        .map_err(internal_error)?;
+    state.db.update_user(&username, user)?;
     Ok(Json(serde_json::json!({"ok": true})))
 }

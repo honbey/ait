@@ -123,7 +123,7 @@ pub async fn create_provider(
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    let inserted = state.db.insert_provider(provider).map_err(internal_error)?;
+    let inserted = state.db.insert_provider(provider)?;
 
     Ok((StatusCode::CREATED, Json(ProviderResponse::from(inserted))))
 }
@@ -132,7 +132,7 @@ pub async fn list_providers(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
 ) -> Result<Json<Vec<ProviderResponse>>, (StatusCode, Json<AitError>)> {
-    let providers = state.db.list_providers().map_err(internal_error)?;
+    let providers = state.db.list_providers()?;
     let masked: Vec<ProviderResponse> = match session.role {
         UserRole::Admin => providers.into_iter().map(ProviderResponse::from).collect(),
         UserRole::User => providers
@@ -204,11 +204,7 @@ pub async fn update_provider(
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    let provider = state
-        .db
-        .update_provider(&id, &updates)
-        .map_err(internal_error)?
-        .ok_or_else(|| not_found(format!("Provider '{}' not found", id)))?;
+    let provider = state.db.update_provider(&id, &updates)?;
 
     Ok(Json(ProviderResponse::from(provider)))
 }
@@ -221,7 +217,7 @@ pub async fn delete_provider(
     if session.role != UserRole::Admin {
         return Err(forbidden());
     }
-    state.db.delete_provider(&id).map_err(internal_error)?;
+    state.db.delete_provider(&id)?;
     Ok((StatusCode::NO_CONTENT,))
 }
 
@@ -243,10 +239,7 @@ pub async fn create_model(
         enabled: input.enabled,
         created_at: Utc::now(),
     };
-    let inserted = state
-        .db
-        .insert_model(model)
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(AitError::bad_request(e))))?;
+    let inserted = state.db.insert_model(model)?;
 
     Ok((StatusCode::CREATED, Json(ModelResponse::from(inserted))))
 }
@@ -255,7 +248,7 @@ pub async fn list_models(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
 ) -> Result<Json<Vec<ModelResponse>>, (StatusCode, Json<AitError>)> {
-    let models = state.db.list_models().map_err(internal_error)?;
+    let models = state.db.list_models()?;
     let filtered: Vec<ModelResponse> = match session.role {
         UserRole::Admin => models.into_iter().map(ModelResponse::from).collect(),
         UserRole::User => models
@@ -280,7 +273,7 @@ pub async fn delete_model(
     if session.role != UserRole::Admin {
         return Err(forbidden());
     }
-    state.db.delete_model(&name).map_err(internal_error)?;
+    state.db.delete_model(&name)?;
     Ok((StatusCode::NO_CONTENT,))
 }
 
@@ -301,9 +294,6 @@ pub async fn update_model(
         enabled: input.enabled,
         created_at: Utc::now(),
     };
-    let model = state
-        .db
-        .update_model(&name, &updates)
-        .map_err(internal_error)?;
+    let model = state.db.update_model(&name, &updates)?;
     Ok(Json(ModelResponse::from(model)))
 }

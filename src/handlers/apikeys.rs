@@ -59,8 +59,7 @@ pub async fn create_api_key(
 
     let (stored, raw_key) = state
         .db
-        .insert_api_key(&username, &input.name, expires_at)
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(AitError::bad_request(e))))?;
+        .insert_api_key(&username, &input.name, expires_at)?;
 
     Ok(Json(ApiKeyResponse {
         key: raw_key,
@@ -109,10 +108,7 @@ pub async fn delete_api_key(
         return Err(forbidden());
     }
 
-    state
-        .db
-        .delete_api_key(&username, &key)
-        .map_err(internal_error)?;
+    state.db.delete_api_key(&username, &key)?;
     Ok(Json(serde_json::json!({"ok": true})))
 }
 
@@ -130,10 +126,7 @@ pub async fn toggle_api_key(
     if session.role != UserRole::Admin && session.username != username {
         return Err(forbidden());
     }
-    let updated = state
-        .db
-        .toggle_api_key(&username, &key_id, input.enabled)
-        .map_err(internal_error)?;
+    let updated = state.db.toggle_api_key(&username, &key_id, input.enabled)?;
     Ok(Json(ApiKeyListItem {
         id: updated.id.clone(),
         key: updated.masked(),
