@@ -301,6 +301,22 @@ impl Database {
         Ok(model)
     }
 
+    pub fn update_model(&self, name: &str, updates: &Model) -> Result<Model, String> {
+        let mut model = self
+            .get_model(name)?
+            .ok_or_else(|| format!("Model '{}' not found", name))?;
+
+        model.provider_id = updates.provider_id.clone();
+        model.upstream_model = updates.upstream_model.clone();
+        model.enabled = updates.enabled;
+
+        let key = format!("model:{}", model.name);
+        let val = serde_json::to_string(&model).map_err(|e| e.to_string())?;
+        let cf = self.db.cf_handle(MODELS_CF).ok_or("models CF not found")?;
+        self.db.put_cf(&cf, &key, &val).map_err(|e| e.to_string())?;
+        Ok(model)
+    }
+
     pub fn delete_model(&self, name: &str) -> Result<(), String> {
         let key = format!("model:{}", name);
         let cf = self.db.cf_handle(MODELS_CF).ok_or("models CF not found")?;

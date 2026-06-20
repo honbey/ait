@@ -17,7 +17,8 @@ use tracing::info;
 
 use handlers::admin::{
     create_model, create_provider, delete_model, delete_provider,
-    get_provider, get_provider_api_key, list_models, list_providers, update_provider,
+    get_provider, get_provider_api_key, list_models, list_providers,
+    update_model, update_provider,
 };
 use handlers::apikeys::{
     create_api_key_handler, delete_api_key_handler, list_api_keys_handler,
@@ -103,6 +104,7 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
         // Model management
         .route("/admin/models", post(create_model))
         .route("/admin/models", get(list_models))
+        .route("/admin/models/{name}", put(update_model))
         .route("/admin/models/{name}", delete(delete_model))
         // User management
         .route("/admin/users", get(list_users_handler))

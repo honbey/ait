@@ -168,6 +168,22 @@ pub async fn delete_model(
     Ok((StatusCode::NO_CONTENT,))
 }
 
+pub async fn update_model(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionUser>,
+    Path(name): Path<String>,
+    Json(updates): Json<Model>,
+) -> Result<Json<Model>, (StatusCode, Json<AitError>)> {
+    if session.role != UserRole::Admin {
+        return Err(forbidden());
+    }
+    let model = state
+        .db
+        .update_model(&name, &updates)
+        .map_err(internal_error)?;
+    Ok(Json(model))
+}
+
 // --- Helpers ---
 
 fn mask_provider_api_key(mut provider: Provider) -> Provider {
