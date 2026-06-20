@@ -204,6 +204,50 @@ impl Database {
             .ok_or_else(|| DbError::Storage(format!("CF '{}' not found", name)))
     }
 
+    fn cf_get<T: serde::de::DeserializeOwned>(
+        &self,
+        cf_name: &str,
+        key: impl AsRef<[u8]>,
+    ) -> Result<Option<T>, DbError> {
+        let cf = self.cf(cf_name)?;
+        self.db
+            .get_cf(&cf, key)
+            .map_err(|e| DbError::Storage(e.to_string()))?
+            .map(|val| serde_json::from_slice(&val).map_err(|e| DbError::Storage(e.to_string())))
+            .transpose()
+    }
+
+    fn cf_list<T: serde::de::DeserializeOwned>(&self, cf_name: &str) -> Result<Vec<T>, DbError> {
+        let cf = self.cf(cf_name)?;
+        let mut items = Vec::new();
+        for item in self.db.iterator_cf(&cf, IteratorMode::Start).flatten() {
+            items.push(
+                serde_json::from_slice(&item.1).map_err(|e| DbError::Storage(e.to_string()))?,
+            );
+        }
+        Ok(items)
+    }
+
+    fn cf_put<T: serde::Serialize>(
+        &self,
+        cf_name: &str,
+        key: impl AsRef<[u8]>,
+        val: &T,
+    ) -> Result<(), DbError> {
+        let cf = self.cf(cf_name)?;
+        let bytes = serde_json::to_string(val).map_err(|e| DbError::Storage(e.to_string()))?;
+        self.db
+            .put_cf(&cf, key, bytes)
+            .map_err(|e| DbError::Storage(e.to_string()))
+    }
+
+    fn cf_del(&self, cf_name: &str, key: impl AsRef<[u8]>) -> Result<(), DbError> {
+        let cf = self.cf(cf_name)?;
+        self.db
+            .delete_cf(&cf, key)
+            .map_err(|e| DbError::Storage(e.to_string()))
+    }
+
     // --- Provider CRUD ---
 
     pub fn insert_provider(&self, mut provider: Provider) -> Result<Provider, DbError> {
@@ -214,20 +258,14 @@ impl Database {
         provider.created_at = now;
         provider.updated_at = now;
 
-        let key = format!("prov:{}", provider.id);
-        let val = serde_json::to_string(&provider).map_err(|e| DbError::Storage(e.to_string()))?;
-        let cf = self.cf(PROVIDERS_CF)?;
-        self.db
-            .put_cf(&cf, &key, &val)
-            .map_err(|e| DbError::Storage(e.to_string()))?;
+        self.cf_put(PROVIDERS_CF, format!("prov:{}", provider.id), &provider)?;
         Ok(provider)
     }
 
     pub fn update_provider(&self, id: &str, updates: &Provider) -> Result<Provider, DbError> {
-        let existing = self
+        let mut provider = self
             .get_provider(id)?
             .ok_or_else(|| DbError::NotFound(format!("Provider '{}' not found", id)))?;
-        let mut provider = existing;
 
         provider.name = updates.name.clone();
         provider.provider_type = updates.provider_type.clone();
@@ -238,42 +276,22 @@ impl Database {
         provider.enabled = updates.enabled;
         provider.updated_at = Utc::now();
 
-        let key = format!("prov:{}", provider.id);
-        let val = serde_json::to_string(&provider).map_err(|e| DbError::Storage(e.to_string()))?;
-        let cf = self.cf(PROVIDERS_CF)?;
-        self.db
-            .put_cf(&cf, &key, &val)
-            .map_err(|e| DbError::Storage(e.to_string()))?;
-
+        self.cf_put(PROVIDERS_CF, format!("prov:{}", id), &provider)?;
         Ok(provider)
     }
 
     pub fn delete_provider(&self, id: &str) -> Result<bool, DbError> {
-        let existing = self.get_provider(id)?;
-        if existing.is_none() {
+        if self.get_provider(id)?.is_none() {
             return Ok(false);
         }
 
-        let key = format!("prov:{}", id);
-        let cf = self.cf(PROVIDERS_CF)?;
-        self.db
-            .delete_cf(&cf, &key)
-            .map_err(|e| DbError::Storage(e.to_string()))?;
+        self.cf_del(PROVIDERS_CF, format!("prov:{}", id))?;
 
         // Also delete associated models
         let mut deleted_models = 0;
-        let cf_models = self.cf(MODELS_CF)?;
-        for item in self
-            .db
-            .iterator_cf(&cf_models, IteratorMode::Start)
-            .flatten()
-        {
-            let model: Model =
-                serde_json::from_slice(&item.1).map_err(|e| DbError::Storage(e.to_string()))?;
-            if model.provider_id == id {
-                self.db
-                    .delete_cf(&cf_models, item.0)
-                    .map_err(|e| DbError::Storage(e.to_string()))?;
+        for item in self.cf_list::<Model>(MODELS_CF)? {
+            if item.provider_id == id {
+                self.cf_del(MODELS_CF, format!("model:{}", item.name))?;
                 deleted_models += 1;
             }
         }
@@ -282,24 +300,11 @@ impl Database {
     }
 
     pub fn get_provider(&self, id: &str) -> Result<Option<Provider>, DbError> {
-        let key = format!("prov:{}", id);
-        let cf = self.cf(PROVIDERS_CF)?;
-        self.db
-            .get_cf(&cf, &key)
-            .map_err(|e| DbError::Storage(e.to_string()))?
-            .map(|val| serde_json::from_slice(&val).map_err(|e| DbError::Storage(e.to_string())))
-            .transpose()
+        self.cf_get(PROVIDERS_CF, format!("prov:{}", id))
     }
 
     pub fn list_providers(&self) -> Result<Vec<Provider>, DbError> {
-        let cf = self.cf(PROVIDERS_CF)?;
-        let mut providers = Vec::new();
-        for item in self.db.iterator_cf(&cf, IteratorMode::Start).flatten() {
-            let provider: Provider =
-                serde_json::from_slice(&item.1).map_err(|e| DbError::Storage(e.to_string()))?;
-            providers.push(provider);
-        }
-        Ok(providers)
+        self.cf_list(PROVIDERS_CF)
     }
 
     // --- Model CRUD ---
@@ -321,12 +326,7 @@ impl Database {
             }
         }
 
-        let key = format!("model:{}", model.name);
-        let val = serde_json::to_string(&model).map_err(|e| DbError::Storage(e.to_string()))?;
-        let cf = self.cf(MODELS_CF)?;
-        self.db
-            .put_cf(&cf, &key, &val)
-            .map_err(|e| DbError::Storage(e.to_string()))?;
+        self.cf_put(MODELS_CF, format!("model:{}", model.name), &model)?;
         Ok(model)
     }
 
@@ -339,42 +339,20 @@ impl Database {
         model.upstream_model = updates.upstream_model.clone();
         model.enabled = updates.enabled;
 
-        let key = format!("model:{}", model.name);
-        let val = serde_json::to_string(&model).map_err(|e| DbError::Storage(e.to_string()))?;
-        let cf = self.cf(MODELS_CF)?;
-        self.db
-            .put_cf(&cf, &key, &val)
-            .map_err(|e| DbError::Storage(e.to_string()))?;
+        self.cf_put(MODELS_CF, format!("model:{}", name), &model)?;
         Ok(model)
     }
 
     pub fn delete_model(&self, name: &str) -> Result<(), DbError> {
-        let key = format!("model:{}", name);
-        let cf = self.cf(MODELS_CF)?;
-        self.db
-            .delete_cf(&cf, &key)
-            .map_err(|e| DbError::Storage(e.to_string()))
+        self.cf_del(MODELS_CF, format!("model:{}", name))
     }
 
     pub fn get_model(&self, name: &str) -> Result<Option<Model>, DbError> {
-        let key = format!("model:{}", name);
-        let cf = self.cf(MODELS_CF)?;
-        self.db
-            .get_cf(&cf, &key)
-            .map_err(|e| DbError::Storage(e.to_string()))?
-            .map(|val| serde_json::from_slice(&val).map_err(|e| DbError::Storage(e.to_string())))
-            .transpose()
+        self.cf_get(MODELS_CF, format!("model:{}", name))
     }
 
     pub fn list_models(&self) -> Result<Vec<Model>, DbError> {
-        let cf = self.cf(MODELS_CF)?;
-        let mut models = Vec::new();
-        for item in self.db.iterator_cf(&cf, IteratorMode::Start).flatten() {
-            let model: Model =
-                serde_json::from_slice(&item.1).map_err(|e| DbError::Storage(e.to_string()))?;
-            models.push(model);
-        }
-        Ok(models)
+        self.cf_list(MODELS_CF)
     }
 
     // --- Lookup: model name -> (Model, Provider) ---
@@ -398,49 +376,24 @@ impl Database {
 
     pub fn insert_user(&self, mut user: User) -> Result<User, DbError> {
         user.created_at = Utc::now();
-        let key = format!("user:{}", user.username);
-        let val = serde_json::to_string(&user).map_err(|e| DbError::Storage(e.to_string()))?;
-        let cf = self.cf(USERS_CF)?;
-        self.db
-            .put_cf(&cf, &key, &val)
-            .map_err(|e| DbError::Storage(e.to_string()))?;
+        self.cf_put(USERS_CF, format!("user:{}", user.username), &user)?;
         Ok(user)
     }
 
     pub fn get_user(&self, username: &str) -> Result<Option<User>, DbError> {
-        let key = format!("user:{}", username);
-        let cf = self.cf(USERS_CF)?;
-        self.db
-            .get_cf(&cf, &key)
-            .map_err(|e| DbError::Storage(e.to_string()))?
-            .map(|val| serde_json::from_slice(&val).map_err(|e| DbError::Storage(e.to_string())))
-            .transpose()
+        self.cf_get(USERS_CF, format!("user:{}", username))
     }
 
     pub fn list_users(&self) -> Result<Vec<User>, DbError> {
-        let cf = self.cf(USERS_CF)?;
-        let mut users = Vec::new();
-        for item in self.db.iterator_cf(&cf, IteratorMode::Start).flatten() {
-            let user: User =
-                serde_json::from_slice(&item.1).map_err(|e| DbError::Storage(e.to_string()))?;
-            users.push(user);
-        }
-        Ok(users)
+        self.cf_list(USERS_CF)
     }
 
     pub fn update_user(&self, username: &str, mut user: User) -> Result<User, DbError> {
-        let key = format!("user:{}", username);
-        let cf = self.cf(USERS_CF)?;
-
         let existing = self.get_user(username)?;
         match existing {
             Some(existing_user) => {
                 user.created_at = existing_user.created_at;
-                let val =
-                    serde_json::to_string(&user).map_err(|e| DbError::Storage(e.to_string()))?;
-                self.db
-                    .put_cf(&cf, &key, &val)
-                    .map_err(|e| DbError::Storage(e.to_string()))?;
+                self.cf_put(USERS_CF, format!("user:{}", username), &user)?;
                 Ok(user)
             }
             None => Err(DbError::NotFound(format!("User '{}' not found", username))),
@@ -448,11 +401,7 @@ impl Database {
     }
 
     pub fn delete_user(&self, username: &str) -> Result<bool, DbError> {
-        let key = format!("user:{}", username);
-        let cf = self.cf(USERS_CF)?;
-        self.db
-            .delete_cf(&cf, &key)
-            .map_err(|e| DbError::Storage(e.to_string()))?;
+        self.cf_del(USERS_CF, format!("user:{}", username))?;
         Ok(true)
     }
 
@@ -462,33 +411,16 @@ impl Database {
         session.created_at = Utc::now();
         let hash = hash_key(&session.session_key);
         session.session_key = hash.clone();
-        let key = format!("sess:{}", hash);
-        let val = serde_json::to_string(&session).map_err(|e| DbError::Storage(e.to_string()))?;
-        let cf = self.cf(SESSIONS_CF)?;
-        self.db
-            .put_cf(&cf, &key, &val)
-            .map_err(|e| DbError::Storage(e.to_string()))?;
+        self.cf_put(SESSIONS_CF, format!("sess:{}", hash), &session)?;
         Ok(session)
     }
 
     pub fn get_session(&self, session_key: &str) -> Result<Option<Session>, DbError> {
-        let hash = hash_key(session_key);
-        let key = format!("sess:{}", hash);
-        let cf = self.cf(SESSIONS_CF)?;
-        self.db
-            .get_cf(&cf, &key)
-            .map_err(|e| DbError::Storage(e.to_string()))?
-            .map(|val| serde_json::from_slice(&val).map_err(|e| DbError::Storage(e.to_string())))
-            .transpose()
+        self.cf_get(SESSIONS_CF, format!("sess:{}", hash_key(session_key)))
     }
 
     pub fn delete_session(&self, session_key: &str) -> Result<bool, DbError> {
-        let hash = hash_key(session_key);
-        let key = format!("sess:{}", hash);
-        let cf = self.cf(SESSIONS_CF)?;
-        self.db
-            .delete_cf(&cf, &key)
-            .map_err(|e| DbError::Storage(e.to_string()))?;
+        self.cf_del(SESSIONS_CF, format!("sess:{}", hash_key(session_key)))?;
         Ok(true)
     }
 
@@ -543,14 +475,7 @@ impl Database {
             name: name.to_string(),
             created_at: now,
         };
-        let cf = self.cf(API_KEYS_CF)?;
-        self.db
-            .put_cf(
-                &cf,
-                &hash,
-                serde_json::to_string(&info).map_err(|e| DbError::Storage(e.to_string()))?,
-            )
-            .map_err(|e| DbError::Storage(e.to_string()))?;
+        self.cf_put(API_KEYS_CF, &hash, &info)?;
 
         user.api_keys.push(stored.clone());
         self.update_user(username, user)?;
@@ -559,13 +484,7 @@ impl Database {
     }
 
     pub fn get_user_by_api_key(&self, api_key: &str) -> Result<Option<ApiKeyInfo>, DbError> {
-        let hash = hash_key(api_key);
-        let cf = self.cf(API_KEYS_CF)?;
-        self.db
-            .get_cf(&cf, &hash)
-            .map_err(|e| DbError::Storage(e.to_string()))?
-            .map(|val| serde_json::from_slice(&val).map_err(|e| DbError::Storage(e.to_string())))
-            .transpose()
+        self.cf_get(API_KEYS_CF, hash_key(api_key))
     }
 
     pub fn delete_api_key(&self, username: &str, key_id: &str) -> Result<bool, DbError> {
@@ -580,10 +499,7 @@ impl Database {
             .map(|k| k.key.clone())
             .ok_or_else(|| DbError::NotFound("API key not found".to_string()))?;
 
-        let cf = self.cf(API_KEYS_CF)?;
-        self.db
-            .delete_cf(&cf, &hash)
-            .map_err(|e| DbError::Storage(e.to_string()))?;
+        self.cf_del(API_KEYS_CF, &hash)?;
 
         user.api_keys.retain(|k| k.id != key_id);
         self.update_user(username, user)?;
