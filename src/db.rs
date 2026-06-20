@@ -545,7 +545,7 @@ impl Database {
     }
 
     fn find_api_key_mut<'a>(
-        api_keys: &'a mut Vec<ApiKey>,
+        api_keys: &'a mut [ApiKey],
         key_id: &str,
     ) -> Result<&'a mut ApiKey, DbError> {
         api_keys
