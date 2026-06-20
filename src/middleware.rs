@@ -1,5 +1,5 @@
 use crate::app::AppState;
-use crate::db::{Permission, UserRole};
+use crate::db::{SessionUser, UserRole};
 use crate::error::AitError;
 use axum::{
     Json,
@@ -8,13 +8,6 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-
-#[derive(Clone)]
-pub struct SessionUser {
-    pub username: String,
-    pub role: UserRole,
-    pub allowed: Vec<Permission>,
-}
 
 fn full_access(username: &str) -> SessionUser {
     SessionUser {
@@ -62,7 +55,7 @@ pub async fn auth_middleware(
 
     // Check if token is a session key
     if let Ok(Some(session)) = state.db.get_session(token) {
-        if session.expires_at <= chrono::Utc::now() {
+        if session.is_expired() {
             return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
         }
         let user = state
@@ -76,11 +69,7 @@ pub async fn auth_middleware(
             })?
             .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
-        req.extensions_mut().insert(SessionUser {
-            username: user.username,
-            role: user.role,
-            allowed: user.allowed,
-        });
+        req.extensions_mut().insert(user.to_session_user());
         return Ok(next.run(req).await);
     }
 
@@ -147,7 +136,7 @@ pub async fn admin_auth_middleware(
         })?
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
-    if session.expires_at <= chrono::Utc::now() {
+    if session.is_expired() {
         return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
     }
 
@@ -162,11 +151,7 @@ pub async fn admin_auth_middleware(
         })?
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
-    let session_user = SessionUser {
-        username: user.username,
-        role: user.role,
-        allowed: user.allowed,
-    };
+    let session_user = user.to_session_user();
 
     if session_user.role != UserRole::Admin {
         tracing::warn!(

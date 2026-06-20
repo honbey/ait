@@ -1,8 +1,7 @@
 use axum::{Json, http::StatusCode};
 use serde::Serialize;
 
-use crate::db::{DbError, UserRole};
-use crate::middleware::SessionUser;
+use crate::db::{DbError, SessionUser, UserRole};
 
 #[derive(Debug, Serialize)]
 pub struct AitError {

@@ -6,9 +6,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{Permission, User, UserRole};
+use crate::db::{Permission, SessionUser, User, UserRole};
 use crate::error::{AitError, forbidden_msg, internal_error, not_found, require_admin};
-use crate::middleware::SessionUser;
 
 #[derive(Serialize)]
 pub struct UserInfoResponse {

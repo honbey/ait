@@ -9,9 +9,8 @@ use futures_util::StreamExt;
 use tracing::{info, warn};
 
 use crate::app::AppState;
-use crate::db::{Permission, UserRole};
+use crate::db::{Permission, SessionUser, UserRole};
 use crate::error::AitError;
-use crate::middleware::SessionUser;
 use crate::providers::create_provider;
 
 pub async fn chat_completions(

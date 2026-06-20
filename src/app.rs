@@ -51,6 +51,23 @@ impl AppState {
             }
         }
 
+        // Hourly cleanup of expired sessions
+        let cleanup_db = db.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                match cleanup_db.cleanup_expired_sessions() {
+                    Ok(count) => {
+                        if count > 0 {
+                            tracing::info!("Cleaned up {} expired sessions", count);
+                        }
+                    }
+                    Err(e) => tracing::error!("Session cleanup error: {}", e),
+                }
+            }
+        });
+
         Self {
             config,
             db,

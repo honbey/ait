@@ -7,9 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::app::AppState;
-use crate::db::UserRole;
+use crate::db::{SessionUser, UserRole};
 use crate::error::{AitError, forbidden, internal_error, not_found};
-use crate::middleware::SessionUser;
 
 #[derive(Deserialize)]
 pub struct CreateApiKeyRequest {

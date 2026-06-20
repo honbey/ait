@@ -140,6 +140,23 @@ pub struct User {
     pub updated_at: DateTime<chrono::Utc>,
 }
 
+impl User {
+    pub fn to_session_user(&self) -> SessionUser {
+        SessionUser {
+            username: self.username.clone(),
+            role: self.role.clone(),
+            allowed: self.allowed.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionUser {
+    pub username: String,
+    pub role: UserRole,
+    pub allowed: Vec<Permission>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub session_key: String,
@@ -148,6 +165,12 @@ pub struct Session {
     pub created_at: DateTime<chrono::Utc>,
     #[serde(with = "ts_seconds")]
     pub expires_at: DateTime<chrono::Utc>,
+}
+
+impl Session {
+    pub fn is_expired(&self) -> bool {
+        self.expires_at <= Utc::now()
+    }
 }
 
 fn hash_key(key: &str) -> String {
@@ -417,6 +440,18 @@ impl Database {
     pub fn delete_session(&self, session_key: &str) -> Result<bool, DbError> {
         self.cf_del(SESSIONS_CF, format!("sess:{}", hash_key(session_key)))?;
         Ok(true)
+    }
+
+    pub fn cleanup_expired_sessions(&self) -> Result<usize, DbError> {
+        let sessions: Vec<Session> = self.cf_list(SESSIONS_CF)?;
+        let mut count = 0;
+        for session in &sessions {
+            if session.is_expired() {
+                self.cf_del(SESSIONS_CF, format!("sess:{}", &session.session_key))?;
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 
     // --- API Key CRUD ---

@@ -6,9 +6,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{Model, Provider, ProviderType, UserRole};
+use crate::db::{Model, Provider, ProviderType, SessionUser, UserRole};
 use crate::error::{AitError, forbidden, internal_error, not_found, require_admin};
-use crate::middleware::SessionUser;
 
 // --- Provider request/response types ---
 
