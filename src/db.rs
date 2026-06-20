@@ -92,6 +92,8 @@ pub struct Model {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
+    #[serde(default)]
+    pub id: String,
     pub key: String,
     pub display: String,
     pub name: String,
@@ -104,6 +106,7 @@ pub struct ApiKey {
 /// Stored in the api_keys CF for O(1) reverse lookup by key value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeyInfo {
+    pub id: String,
     pub username: String,
     pub name: String,
     #[serde(with = "ts_seconds", default)]
@@ -452,9 +455,11 @@ impl Database {
         let raw_key = Self::generate_api_key();
         let hash = hash_key(&raw_key);
         let now = Utc::now();
+        let id = Uuid::new_v4().to_string();
 
         // Stored ApiKey (key is hash, display is masked raw key)
         let stored = ApiKey {
+            id: id.clone(),
             key: hash.clone(),
             display: ApiKey::mask_key(&raw_key),
             name: name.to_string(),
@@ -464,6 +469,7 @@ impl Database {
 
         // Store in api_keys CF for reverse lookup
         let info = ApiKeyInfo {
+            id: id.clone(),
             username: username.to_string(),
             name: name.to_string(),
             created_at: now,
@@ -506,22 +512,31 @@ impl Database {
             .transpose()
     }
 
-    pub fn delete_api_key(&self, username: &str, api_key: &str) -> Result<bool, String> {
-        let hash = hash_key(api_key);
+    pub fn delete_api_key(&self, username: &str, key_id: &str) -> Result<bool, String> {
+        let mut user = self
+            .get_user(username)?
+            .ok_or_else(|| format!("User '{}' not found", username))?;
+
+        let hash = user
+            .api_keys
+            .iter()
+            .find(|k| k.id == key_id)
+            .map(|k| k.key.clone())
+            .ok_or_else(|| "API key not found".to_string())?;
+
         let cf = self
             .db
             .cf_handle(API_KEYS_CF)
             .ok_or("api_keys CF not found")?;
         self.db.delete_cf(&cf, &hash).map_err(|e| e.to_string())?;
 
-        let mut user = self
-            .get_user(username)?
-            .ok_or_else(|| format!("User '{}' not found", username))?;
-        user.api_keys.retain(|k| k.key != hash);
+        user.api_keys.retain(|k| k.id != key_id);
         self.update_user(username, user)?;
 
         Ok(true)
     }
+
+
 }
 
 // Database is safe to share across threads (Arc internally)

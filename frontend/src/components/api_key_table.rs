@@ -111,7 +111,7 @@ fn render_delete_confirm(
     item: ApiKeyListItem,
 ) -> View {
     let deleting = create_signal(false);
-    let key_id = item.key.clone();
+    let key_id = item.id.clone();
     let on_delete = move |_| {
         if deleting.get() {
             return;
