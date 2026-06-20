@@ -388,17 +388,11 @@ impl Database {
         self.cf_list(USERS_CF)
     }
 
-    pub fn update_user(&self, username: &str, mut user: User) -> Result<User, DbError> {
-        let existing = self.get_user(username)?;
-        match existing {
-            Some(existing_user) => {
-                user.created_at = existing_user.created_at;
-                user.updated_at = Utc::now();
-                self.cf_put(USERS_CF, format!("user:{}", username), &user)?;
-                Ok(user)
-            }
-            None => Err(DbError::NotFound(format!("User '{}' not found", username))),
-        }
+    pub fn update_user(&self, user: &User) -> Result<User, DbError> {
+        let mut updated = user.clone();
+        updated.updated_at = Utc::now();
+        self.cf_put(USERS_CF, format!("user:{}", &updated.username), &updated)?;
+        Ok(updated)
     }
 
     pub fn delete_user(&self, username: &str) -> Result<bool, DbError> {
@@ -480,7 +474,7 @@ impl Database {
         self.cf_put(API_KEYS_CF, &hash, &info)?;
 
         user.api_keys.push(stored.clone());
-        self.update_user(username, user)?;
+        self.update_user(&user)?;
 
         Ok((stored, raw_key))
     }
@@ -504,7 +498,7 @@ impl Database {
         self.cf_del(API_KEYS_CF, &hash)?;
 
         user.api_keys.retain(|k| k.id != key_id);
-        self.update_user(username, user)?;
+        self.update_user(&user)?;
 
         Ok(true)
     }
@@ -528,7 +522,7 @@ impl Database {
         api_key.enabled = enabled;
         api_key.updated_at = Utc::now();
         let result = api_key.clone();
-        self.update_user(username, user)?;
+        self.update_user(&user)?;
 
         Ok(result)
     }

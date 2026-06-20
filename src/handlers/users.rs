@@ -72,13 +72,7 @@ pub async fn update_user(
         user.allowed = allowed;
     }
 
-    state.db.update_user(&username, user)?;
-
-    let updated = state
-        .db
-        .get_user(&username)
-        .map_err(internal_error)?
-        .ok_or_else(|| internal_error("User lost after update"))?;
+    let updated = state.db.update_user(&user)?;
 
     Ok(Json(updated.into()))
 }
@@ -123,6 +117,6 @@ pub async fn change_password(
         .map_err(|_| internal_error("Failed to hash password"))?;
     user.password_hash = new_hash;
 
-    state.db.update_user(&username, user)?;
+    state.db.update_user(&user)?;
     Ok(Json(serde_json::json!({"ok": true})))
 }
