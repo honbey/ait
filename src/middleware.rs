@@ -107,9 +107,17 @@ pub async fn auth_middleware(
         })?
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
-    // Check that the specific API key is enabled
-    if !user.api_keys.iter().any(|k| k.id == key_info.id && k.enabled) {
-        return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
+    // Check that the specific API key is enabled and not expired
+    let key = user
+        .api_keys
+        .iter()
+        .find(|k| k.id == key_info.id && k.enabled)
+        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+
+    if let Some(expires_at) = &key.expires_at {
+        if *expires_at <= chrono::Utc::now() {
+            return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
+        }
     }
 
     // API key users are always User role (never Admin)

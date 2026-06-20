@@ -1,4 +1,4 @@
-use chrono::serde::ts_seconds;
+use chrono::serde::{ts_seconds, ts_seconds_option};
 use chrono::{DateTime, Utc};
 use rocksdb::{DB as RocksDB, IteratorMode, Options};
 use serde::{Deserialize, Serialize};
@@ -101,6 +101,8 @@ pub struct ApiKey {
     pub created_at: DateTime<chrono::Utc>,
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default, with = "ts_seconds_option", skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<chrono::Utc>>,
 }
 
 /// Stored in the api_keys CF for O(1) reverse lookup by key value.
@@ -467,7 +469,20 @@ impl Database {
         format!("sk-{}", random)
     }
 
-    pub fn insert_api_key(&self, username: &str, name: &str) -> Result<(ApiKey, String), String> {
+    pub fn insert_api_key(
+        &self,
+        username: &str,
+        name: &str,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> Result<(ApiKey, String), String> {
+        // Check user exists and key limit
+        let mut user = self
+            .get_user(username)?
+            .ok_or_else(|| format!("User '{}' not found", username))?;
+        if user.api_keys.len() >= 10 {
+            return Err("Maximum of 10 API keys per user".to_string());
+        }
+
         let raw_key = Self::generate_api_key();
         let hash = hash_key(&raw_key);
         let now = Utc::now();
@@ -481,6 +496,7 @@ impl Database {
             name: name.to_string(),
             created_at: now,
             enabled: true,
+            expires_at,
         };
 
         // Store in api_keys CF for reverse lookup
@@ -502,10 +518,6 @@ impl Database {
             )
             .map_err(|e| e.to_string())?;
 
-        // Append to user's api_keys list
-        let mut user = self
-            .get_user(username)?
-            .ok_or_else(|| format!("User '{}' not found", username))?;
         user.api_keys.push(stored.clone());
         self.update_user(username, user)?;
 

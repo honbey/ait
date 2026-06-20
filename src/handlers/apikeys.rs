@@ -3,6 +3,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::app::AppState;
@@ -12,6 +13,7 @@ use crate::middleware::SessionUser;
 #[derive(Deserialize)]
 pub struct CreateApiKeyRequest {
     pub name: String,
+    pub expires_at: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -19,6 +21,7 @@ pub struct ApiKeyResponse {
     pub key: String,
     pub name: String,
     pub created_at: String,
+    pub expires_at: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -28,6 +31,7 @@ pub struct ApiKeyListItem {
     pub name: String,
     pub created_at: String,
     pub enabled: bool,
+    pub expires_at: Option<String>,
 }
 
 pub async fn create_api_key_handler(
@@ -40,15 +44,31 @@ pub async fn create_api_key_handler(
         return Err(forbidden());
     }
 
+    let expires_at: Option<DateTime<Utc>> = input
+        .expires_at
+        .as_deref()
+        .map(|s| {
+            DateTime::parse_from_rfc3339(s)
+                .map(|dt| dt.with_timezone(&Utc))
+                .map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(AitError::bad_request(format!("Invalid expires_at: {}", e))),
+                    )
+                })
+        })
+        .transpose()?;
+
     let (stored, raw_key) = state
         .db
-        .insert_api_key(&username, &input.name)
-        .map_err(internal_error)?;
+        .insert_api_key(&username, &input.name, expires_at)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(AitError::bad_request(e))))?;
 
     Ok(Json(ApiKeyResponse {
         key: raw_key,
         name: stored.name,
         created_at: stored.created_at.to_rfc3339(),
+        expires_at: stored.expires_at.map(|dt| dt.to_rfc3339()),
     }))
 }
 
@@ -76,6 +96,7 @@ pub async fn list_api_keys_handler(
             name: k.name,
             created_at: k.created_at.to_rfc3339(),
             enabled: k.enabled,
+            expires_at: k.expires_at.map(|dt| dt.to_rfc3339()),
         })
         .collect();
     Ok(Json(items))
@@ -121,6 +142,7 @@ pub async fn toggle_api_key_handler(
         name: updated.name,
         created_at: updated.created_at.to_rfc3339(),
         enabled: updated.enabled,
+        expires_at: updated.expires_at.map(|dt| dt.to_rfc3339()),
     }))
 }
 
