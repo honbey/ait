@@ -296,9 +296,7 @@ impl Database {
         provider.name = updates.name.clone();
         provider.provider_type = updates.provider_type.clone();
         provider.base_url = updates.base_url.clone();
-        if updates.api_key.is_some() {
-            provider.api_key = updates.api_key.clone();
-        }
+        provider.api_key = updates.api_key.clone();
         provider.enabled = updates.enabled;
         provider.updated_at = Utc::now();
 
@@ -341,14 +339,16 @@ impl Database {
         model.updated_at = Utc::now();
 
         // Check provider exists
-        if !model.provider_id.is_empty() {
-            let prov = self.get_provider(&model.provider_id)?;
-            if prov.is_none() {
-                return Err(DbError::NotFound(format!(
-                    "Provider '{}' not found",
-                    model.provider_id
-                )));
-            }
+
+        if model.provider_id.is_empty() {
+            return Err(DbError::Storage("provider_id is required".to_string()));
+        }
+        let prov = self.get_provider(&model.provider_id)?;
+        if prov.is_none() {
+            return Err(DbError::NotFound(format!(
+                "Provider '{}' not found",
+                model.provider_id
+            )));
         }
 
         self.cf_put(MODELS_CF, format!("model:{}", model.name), &model)?;
