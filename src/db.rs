@@ -59,12 +59,11 @@ pub enum ProviderType {
 }
 
 pub fn mask_api_key(key: &str) -> String {
-    let chars: Vec<char> = key.chars().collect();
-    if chars.len() <= 6 {
+    if key.len() <= 9 {
         "******".to_string()
     } else {
-        let prefix: String = chars[..6].iter().collect();
-        let suffix: String = chars[chars.len() - 3..].iter().collect();
+        let prefix = &key[..6];
+        let suffix = &key[key.len() - 3..];
         format!("{}******{}", prefix, suffix)
     }
 }
@@ -181,7 +180,7 @@ fn hash_key(key: &str) -> String {
 
 pub struct Database {
     db: Arc<RocksDB>,
-    max_api_keys_per_user: usize,
+    max_api_keys_per_user: u64,
 }
 
 #[derive(Debug)]
@@ -206,7 +205,7 @@ impl std::error::Error for DbError {}
 impl Database {
     pub fn new(
         path: &str,
-        max_api_keys_per_user: usize,
+        max_api_keys_per_user: u64,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(parent) = Path::new(path).parent() {
             fs::create_dir_all(parent)?;
@@ -484,7 +483,7 @@ impl Database {
     ) -> Result<(ApiKey, String), DbError> {
         // Check user exists and key limit
         let mut user = self.get_user_or_err(username)?;
-        if user.api_keys.len() >= self.max_api_keys_per_user {
+        if user.api_keys.len() as u64 >= self.max_api_keys_per_user {
             return Err(DbError::LimitExceeded(format!(
                 "Maximum of {} API keys per user",
                 self.max_api_keys_per_user

@@ -13,10 +13,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: ConfigApp) -> Self {
-        let db = match Database::new(
-            &config.database.path,
-            config.auth.max_api_keys_per_user as usize,
-        ) {
+        let db = match Database::new(&config.database.path, config.auth.max_api_keys_per_user) {
             Ok(d) => Arc::new(d),
             Err(e) => {
                 eprintln!("Failed to open database: {}", e);
