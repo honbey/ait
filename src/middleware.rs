@@ -1,6 +1,6 @@
 use crate::app::AppState;
 use crate::db::{SessionUser, UserRole};
-use crate::error::AitError;
+use crate::error::{AitError, db_error};
 use axum::{
     Json,
     extract::{Request, State},
@@ -61,12 +61,7 @@ pub async fn auth_middleware(
         let user = state
             .db
             .get_user(&session.username)
-            .map_err(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(AitError::internal_error("Database error")),
-                )
-            })?
+            .map_err(|_| db_error())?
             .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
         req.extensions_mut().insert(user.to_session_user());
@@ -77,23 +72,13 @@ pub async fn auth_middleware(
     let key_info = state
         .db
         .get_user_by_api_key(token)
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(AitError::internal_error("Database error")),
-            )
-        })?
+        .map_err(|_| db_error())?
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
     let user = state
         .db
         .get_user(&key_info.username)
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(AitError::internal_error("Database error")),
-            )
-        })?
+        .map_err(|_| db_error())?
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
     // Check that the specific API key is enabled and not expired
@@ -128,12 +113,7 @@ pub async fn admin_auth_middleware(
     let session = state
         .db
         .get_session(session_key)
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(AitError::internal_error("Database error")),
-            )
-        })?
+        .map_err(|_| db_error())?
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
     if session.is_expired() {
@@ -143,12 +123,7 @@ pub async fn admin_auth_middleware(
     let user = state
         .db
         .get_user(&session.username)
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(AitError::internal_error("Database error")),
-            )
-        })?
+        .map_err(|_| db_error())?
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
 
     let session_user = user.to_session_user();
