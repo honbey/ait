@@ -2,7 +2,7 @@ use axum::{
     Extension, Json as AxumJson,
     extract::{Json, State},
     http::{HeaderMap, HeaderName, StatusCode},
-    response::{IntoResponse, Response, Sse, sse::Event},
+    response::{IntoResponse, Response},
 };
 use chrono::Utc;
 use futures_util::StreamExt;
@@ -289,15 +289,28 @@ async fn proxy_streamed(
         ));
     }
 
-    let stream = Sse::new(response.bytes_stream().map(|result| match result {
-        Ok(bytes) => Ok(Event::default().data(String::from_utf8_lossy(&bytes))),
-        Err(e) => {
-            warn!("Stream error: {}", e);
-            Ok::<Event, std::convert::Infallible>(
-                Event::default().event("error").data(e.to_string()),
-            )
-        }
-    }));
+    let mut stream_builder = axum::response::Response::builder()
+        .header("content-type", "text/event-stream")
+        .header("cache-control", "no-cache");
 
-    Ok(stream)
+    for (name, value) in response.headers() {
+        if name.as_str().to_ascii_lowercase().starts_with("x-") {
+            stream_builder = stream_builder.header(name.clone(), value.clone());
+        }
+    }
+
+    let stream = response.bytes_stream().map(|result| {
+        result.map_err(|e| {
+            warn!("Stream error: {}", e);
+            std::io::Error::other(e)
+        })
+    });
+
+    let body = axum::body::Body::from_stream(stream);
+
+    let resp = stream_builder
+        .body(body)
+        .expect("static SSE headers are valid");
+
+    Ok(resp)
 }
