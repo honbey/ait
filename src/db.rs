@@ -19,7 +19,7 @@ pub enum UserRole {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Permission {
     pub provider_id: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub model_names: Vec<String>,
 }
 
@@ -32,18 +32,16 @@ const API_KEYS_CF: &str = "api_keys";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
-    #[serde(default)]
     pub id: String,
     pub name: String,
     #[serde(rename = "type")]
     pub provider_type: ProviderType,
     pub base_url: String,
     pub api_key: Option<String>,
-    #[serde(default)]
     pub enabled: bool,
-    #[serde(with = "ts_seconds", default)]
+    #[serde(with = "ts_seconds")]
     pub created_at: DateTime<chrono::Utc>,
-    #[serde(with = "ts_seconds", default)]
+    #[serde(with = "ts_seconds")]
     pub updated_at: DateTime<chrono::Utc>,
 }
 
@@ -79,31 +77,27 @@ impl Provider {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Model {
-    #[serde(default)]
     pub id: String,
     pub name: String,
     pub provider_id: String,
     pub upstream_model: String,
-    #[serde(default)]
     pub enabled: bool,
-    #[serde(with = "ts_seconds", default)]
+    #[serde(with = "ts_seconds")]
     pub created_at: DateTime<chrono::Utc>,
-    #[serde(with = "ts_seconds", default)]
+    #[serde(with = "ts_seconds")]
     pub updated_at: DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
-    #[serde(default)]
     pub id: String,
     pub key: String,
     pub display: String,
     pub name: String,
-    #[serde(with = "ts_seconds", default)]
+    #[serde(with = "ts_seconds")]
     pub created_at: DateTime<chrono::Utc>,
-    #[serde(with = "ts_seconds", default)]
+    #[serde(with = "ts_seconds")]
     pub updated_at: DateTime<chrono::Utc>,
-    #[serde(default)]
     pub enabled: bool,
     #[serde(
         default,
@@ -119,7 +113,7 @@ pub struct ApiKeyInfo {
     pub id: String,
     pub username: String,
     pub name: String,
-    #[serde(with = "ts_seconds", default)]
+    #[serde(with = "ts_seconds")]
     pub created_at: DateTime<chrono::Utc>,
 }
 
@@ -137,15 +131,12 @@ impl ApiKey {
 pub struct User {
     pub username: String,
     pub password_hash: String,
-    #[serde(default)]
     pub role: UserRole,
-    #[serde(default)]
     pub allowed: Vec<Permission>,
-    #[serde(default)]
     pub api_keys: Vec<ApiKey>,
-    #[serde(with = "ts_seconds", default)]
+    #[serde(with = "ts_seconds")]
     pub created_at: DateTime<chrono::Utc>,
-    #[serde(with = "ts_seconds", default)]
+    #[serde(with = "ts_seconds")]
     pub updated_at: DateTime<chrono::Utc>,
 }
 
@@ -153,7 +144,7 @@ pub struct User {
 pub struct Session {
     pub session_key: String,
     pub username: String,
-    #[serde(with = "ts_seconds", default)]
+    #[serde(with = "ts_seconds")]
     pub created_at: DateTime<chrono::Utc>,
     #[serde(with = "ts_seconds")]
     pub expires_at: DateTime<chrono::Utc>,
