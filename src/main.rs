@@ -22,6 +22,7 @@ use handlers::admin::{
 use handlers::apikeys::{create_api_key, delete_api_key, list_api_keys, toggle_api_key};
 use handlers::auth::{login, logout, register, session_check};
 use handlers::proxy::{chat_completions, completions, embeddings, health, list_models_proxy};
+use handlers::stats::dashboard_stats;
 use handlers::users::{change_password, delete_user, list_users, update_user};
 use middleware::{admin_auth_middleware, auth_middleware};
 
@@ -116,6 +117,8 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
             "/admin/users/{username}/api-keys/{key}",
             delete(delete_api_key),
         )
+        // Dashboard statistics
+        .route("/admin/stats", get(dashboard_stats))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             admin_auth_middleware,
