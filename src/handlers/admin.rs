@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::db::{Model, Provider, ProviderType, UserRole};
-use crate::error::{AitError, forbidden, internal_error, not_found};
+use crate::error::{AitError, forbidden, internal_error, not_found, require_admin};
 use crate::middleware::SessionUser;
 
 // --- Provider request/response types ---
@@ -110,9 +110,7 @@ pub async fn create_provider(
     Extension(session): Extension<SessionUser>,
     Json(input): Json<CreateProviderRequest>,
 ) -> Result<(StatusCode, Json<ProviderResponse>), (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
+    require_admin(&session)?;
     let provider = Provider {
         id: String::new(),
         name: input.name,
@@ -169,9 +167,7 @@ pub async fn get_provider_api_key(
     Extension(session): Extension<SessionUser>,
     Path(id): Path<String>,
 ) -> Result<AxumJson<serde_json::Value>, (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
+    require_admin(&session)?;
     let provider = state
         .db
         .get_provider(&id)
@@ -191,9 +187,7 @@ pub async fn update_provider(
     Path(id): Path<String>,
     Json(input): Json<UpdateProviderRequest>,
 ) -> Result<Json<ProviderResponse>, (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
+    require_admin(&session)?;
     let updates = Provider {
         id: id.clone(),
         name: input.name,
@@ -214,9 +208,7 @@ pub async fn delete_provider(
     Extension(session): Extension<SessionUser>,
     Path(id): Path<String>,
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
+    require_admin(&session)?;
     state.db.delete_provider(&id)?;
     Ok((StatusCode::NO_CONTENT,))
 }
@@ -228,9 +220,7 @@ pub async fn create_model(
     Extension(session): Extension<SessionUser>,
     Json(input): Json<CreateModelRequest>,
 ) -> Result<(StatusCode, Json<ModelResponse>), (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
+    require_admin(&session)?;
     let model = Model {
         id: String::new(),
         name: input.name,
@@ -270,9 +260,7 @@ pub async fn delete_model(
     Extension(session): Extension<SessionUser>,
     Path(name): Path<String>,
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
+    require_admin(&session)?;
     state.db.delete_model(&name)?;
     Ok((StatusCode::NO_CONTENT,))
 }
@@ -283,9 +271,7 @@ pub async fn update_model(
     Path(name): Path<String>,
     Json(input): Json<UpdateModelRequest>,
 ) -> Result<Json<ModelResponse>, (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
+    require_admin(&session)?;
     let updates = Model {
         id: String::new(),
         name: name.clone(),

@@ -1,7 +1,8 @@
 use axum::{Json, http::StatusCode};
 use serde::Serialize;
 
-use crate::db::DbError;
+use crate::db::{DbError, UserRole};
+use crate::middleware::SessionUser;
 
 #[derive(Debug, Serialize)]
 pub struct AitError {
@@ -128,4 +129,11 @@ pub fn conflict(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
             r#type: "auth_error".to_string(),
         }),
     )
+}
+
+pub fn require_admin(session: &SessionUser) -> Result<(), (StatusCode, Json<AitError>)> {
+    if session.role != UserRole::Admin {
+        return Err(forbidden());
+    }
+    Ok(())
 }

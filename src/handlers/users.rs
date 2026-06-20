@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::db::{Permission, User, UserRole};
-use crate::error::{AitError, forbidden, forbidden_msg, internal_error, not_found};
+use crate::error::{AitError, forbidden_msg, internal_error, not_found, require_admin};
 use crate::middleware::SessionUser;
 
 #[derive(Serialize)]
@@ -45,9 +45,7 @@ pub async fn list_users(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
 ) -> Result<Json<Vec<UserInfoResponse>>, (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
+    require_admin(&session)?;
     let users = state.db.list_users()?;
     Ok(Json(users.into_iter().map(Into::into).collect()))
 }
@@ -58,9 +56,7 @@ pub async fn update_user(
     Path(username): Path<String>,
     Json(input): Json<UpdateUserRequest>,
 ) -> Result<Json<UserInfoResponse>, (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
+    require_admin(&session)?;
     let mut user = match state.db.get_user(&username) {
         Ok(Some(u)) => u,
         Ok(None) => return Err(not_found(format!("User '{}' not found", username))),
@@ -90,9 +86,7 @@ pub async fn delete_user(
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
-    if session.role != UserRole::Admin {
-        return Err(forbidden());
-    }
+    require_admin(&session)?;
     state.db.delete_user(&username)?;
     Ok(Json(serde_json::json!({"ok": true})))
 }
