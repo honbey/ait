@@ -1,0 +1,27 @@
+# <type>(<scope>): <subject>
+# |<----  Limit to 50 characters  ----->|
+#
+# Types:
+#   feat      new feature
+#   fix       bug fix
+#   docs      documentation
+#   style     code style (formatting, etc.)
+#   refactor  code restructuring
+#   perf      performance improvement
+#   test      adding or fixing tests
+#   build     build system / dependencies
+#   ci        CI configuration
+#   chore     miscellaneous
+#   revert    revert a previous commit
+#
+# Scopes:
+#   db, middleware, handlers, apikeys, users, auth,
+#   admin, proxy, main, config, models, providers
+#
+# Subject: imperative mood, lowercase, no period
+# Body:   explain what and why (not how), wrap at 72 chars
+# Footer: BREAKING CHANGE or Closes #issue
+#
+# Examples:
+#   feat(db): add expires_at field to ApiKey
+#   fix(middleware): check api key expiry before auth
