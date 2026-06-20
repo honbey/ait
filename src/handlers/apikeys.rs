@@ -97,6 +97,33 @@ pub async fn delete_api_key_handler(
     Ok(Json(serde_json::json!({"ok": true})))
 }
 
+#[derive(Deserialize)]
+pub struct ToggleApiKeyRequest {
+    pub enabled: bool,
+}
+
+pub async fn toggle_api_key_handler(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionUser>,
+    Path((username, key_id)): Path<(String, String)>,
+    Json(input): Json<ToggleApiKeyRequest>,
+) -> Result<Json<ApiKeyListItem>, (StatusCode, Json<AitError>)> {
+    if session.role != crate::db::UserRole::Admin && session.username != username {
+        return Err(forbidden());
+    }
+    let updated = state
+        .db
+        .toggle_api_key(&username, &key_id, input.enabled)
+        .map_err(internal_error)?;
+    Ok(Json(ApiKeyListItem {
+        id: updated.id.clone(),
+        key: updated.masked(),
+        name: updated.name,
+        created_at: updated.created_at.to_rfc3339(),
+        enabled: updated.enabled,
+    }))
+}
+
 // --- Helpers ---
 
 fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<AitError>) {

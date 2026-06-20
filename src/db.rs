@@ -512,7 +512,7 @@ impl Database {
         Ok((stored, raw_key))
     }
 
-    pub fn get_user_by_api_key(&self, api_key: &str) -> Result<Option<String>, String> {
+    pub fn get_user_by_api_key(&self, api_key: &str) -> Result<Option<ApiKeyInfo>, String> {
         let hash = hash_key(api_key);
         let cf = self
             .db
@@ -521,10 +521,7 @@ impl Database {
         self.db
             .get_cf(&cf, &hash)
             .map_err(|e| e.to_string())?
-            .map(|val| {
-                let info: ApiKeyInfo = serde_json::from_slice(&val).map_err(|e| e.to_string())?;
-                Ok(info.username)
-            })
+            .map(|val| serde_json::from_slice(&val).map_err(|e| e.to_string()))
             .transpose()
     }
 
@@ -550,6 +547,29 @@ impl Database {
         self.update_user(username, user)?;
 
         Ok(true)
+    }
+
+    pub fn toggle_api_key(
+        &self,
+        username: &str,
+        key_id: &str,
+        enabled: bool,
+    ) -> Result<ApiKey, String> {
+        let mut user = self
+            .get_user(username)?
+            .ok_or_else(|| format!("User '{}' not found", username))?;
+
+        let api_key = user
+            .api_keys
+            .iter_mut()
+            .find(|k| k.id == key_id)
+            .ok_or_else(|| "API key not found".to_string())?;
+
+        api_key.enabled = enabled;
+        let result = api_key.clone();
+        self.update_user(username, user)?;
+
+        Ok(result)
     }
 
 

@@ -22,6 +22,7 @@ use handlers::admin::{
 };
 use handlers::apikeys::{
     create_api_key_handler, delete_api_key_handler, list_api_keys_handler,
+    toggle_api_key_handler,
 };
 use handlers::auth::{login_handler, logout_handler, register_handler, session_check};
 use handlers::proxy::{chat_completions, completions, embeddings, health, list_models_proxy};
@@ -114,6 +115,7 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
         // API key management
         .route("/admin/users/{username}/api-keys", get(list_api_keys_handler))
         .route("/admin/users/{username}/api-keys", post(create_api_key_handler))
+        .route("/admin/users/{username}/api-keys/{key}", put(toggle_api_key_handler))
         .route("/admin/users/{username}/api-keys/{key}", delete(delete_api_key_handler))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

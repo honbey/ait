@@ -85,7 +85,7 @@ pub async fn auth_middleware(
     }
 
     // Check if token is an API key
-    let username = state
+    let key_info = state
         .db
         .get_user_by_api_key(token)
         .map_err(|_| {
@@ -98,7 +98,7 @@ pub async fn auth_middleware(
 
     let user = state
         .db
-        .get_user(&username)
+        .get_user(&key_info.username)
         .map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -106,6 +106,11 @@ pub async fn auth_middleware(
             )
         })?
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())))?;
+
+    // Check that the specific API key is enabled
+    if !user.api_keys.iter().any(|k| k.id == key_info.id && k.enabled) {
+        return Err((StatusCode::UNAUTHORIZED, Json(AitError::unauthorized())));
+    }
 
     // API key users are always User role (never Admin)
     req.extensions_mut().insert(SessionUser {
