@@ -7,20 +7,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::db::{Permission, User, UserRole};
-use crate::error::{internal_error, not_found, forbidden, forbidden_msg, AitError};
+use crate::error::{AitError, forbidden, forbidden_msg, internal_error, not_found};
 use crate::middleware::SessionUser;
 
 #[derive(Serialize)]
-pub struct UserInfo {
+pub struct UserInfoResponse {
     pub username: String,
     pub role: UserRole,
     pub allowed: Vec<Permission>,
     pub created_at: i64,
 }
 
-impl From<User> for UserInfo {
+impl From<User> for UserInfoResponse {
     fn from(u: User) -> Self {
-        UserInfo {
+        UserInfoResponse {
             username: u.username,
             role: u.role,
             allowed: u.allowed,
@@ -44,7 +44,7 @@ pub struct ChangePasswordRequest {
 pub async fn list_users_handler(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
-) -> Result<Json<Vec<UserInfo>>, (StatusCode, Json<AitError>)> {
+) -> Result<Json<Vec<UserInfoResponse>>, (StatusCode, Json<AitError>)> {
     if session.role != UserRole::Admin {
         return Err(forbidden());
     }
@@ -57,7 +57,7 @@ pub async fn update_user_handler(
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,
     Json(input): Json<UpdateUserRequest>,
-) -> Result<Json<UserInfo>, (StatusCode, Json<AitError>)> {
+) -> Result<Json<UserInfoResponse>, (StatusCode, Json<AitError>)> {
     if session.role != UserRole::Admin {
         return Err(forbidden());
     }
@@ -79,7 +79,10 @@ pub async fn update_user_handler(
         .update_user(&username, user)
         .map_err(internal_error)?;
 
-    let updated = state.db.get_user(&username).map_err(internal_error)?
+    let updated = state
+        .db
+        .get_user(&username)
+        .map_err(internal_error)?
         .ok_or_else(|| internal_error("User lost after update"))?;
 
     Ok(Json(updated.into()))
@@ -108,7 +111,10 @@ pub async fn change_password_handler(
         return Err(forbidden_msg("You can only change your own password"));
     }
 
-    let mut user = state.db.get_user(&username).map_err(internal_error)?
+    let mut user = state
+        .db
+        .get_user(&username)
+        .map_err(internal_error)?
         .ok_or_else(|| not_found(format!("User '{}' not found", username)))?;
 
     // Verify current password when changing own password (all roles)
@@ -124,6 +130,9 @@ pub async fn change_password_handler(
         .map_err(|_| internal_error("Failed to hash password"))?;
     user.password_hash = new_hash;
 
-    state.db.update_user(&username, user).map_err(internal_error)?;
+    state
+        .db
+        .update_user(&username, user)
+        .map_err(internal_error)?;
     Ok(Json(serde_json::json!({"ok": true})))
 }
