@@ -61,7 +61,9 @@ fn render_add_modal(
     show_add_modal: Signal<bool>,
 ) -> View {
     let form_name = create_signal(String::new());
-    let form_provider_id = create_signal(String::new());
+    let form_provider_id = create_signal(
+        providers.first().map(|p| p.id.clone()).unwrap_or_default(),
+    );
     let form_upstream = create_signal(String::new());
     let form_enabled = create_signal(true);
     let form_err = create_signal(String::new());
@@ -85,9 +87,12 @@ fn render_add_modal(
         let refresh = model_refresh;
         let loading = form_loading;
         let err = form_err;
+        let sam = show_add_modal;
         spawn_local_scoped(async move {
             match create_model(&n, &p, &upstream, enabled).await {
                 Ok(_) => {
+                    loading.set(false);
+                    sam.set(false);
                     refresh.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -149,6 +154,7 @@ fn render_edit_modal(
     show_edit_modal: Signal<Option<Model>>,
     model: Model,
 ) -> View {
+    let model_name_for_display = model.name.clone();
     let form_name = create_signal(model.name.clone());
     let form_provider_id = create_signal(model.provider_id.clone());
     let form_upstream = create_signal(model.upstream_model.clone());
@@ -175,9 +181,12 @@ fn render_edit_modal(
         let refresh = model_refresh;
         let loading = form_loading;
         let err = form_err;
+        let sem = show_edit_modal;
         spawn_local_scoped(async move {
             match update_model(&model_name, &p, &upstream, enabled).await {
                 Ok(_) => {
+                    loading.set(false);
+                    sem.set(None);
                     refresh.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -199,7 +208,13 @@ fn render_edit_modal(
                 form_field(
                     "edit-model-name".into(),
                     i18n.t("name"),
-                    form_input("edit-model-name".into(), i18n.t("name"), form_name),
+                    input()
+                        .attr("id", "edit-model-name")
+                        .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-600 text-gray-900 dark:text-gray-100 cursor-not-allowed")
+                        .attr("type", "text")
+                        .attr("value", model_name_for_display)
+                        .attr("disabled", "")
+                        .into(),
                 ),
                 form_field(
                     "edit-model-provider".into(),

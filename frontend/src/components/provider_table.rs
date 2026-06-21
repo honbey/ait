@@ -94,9 +94,12 @@ fn render_add_modal(
         let refresh = provider_refresh;
         let loading = form_loading;
         let err = form_err;
+        let sam = show_add_modal;
         spawn_local_scoped(async move {
             match create_provider(&n, &ptype, &u, api_key, enabled).await {
                 Ok(_) => {
+                    loading.set(false);
+                    sam.set(false);
                     refresh.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -195,9 +198,12 @@ fn render_edit_modal(
         let err = form_err;
         let ptype = form_type.get_clone();
         let enabled = form_enabled.get();
+        let sem = show_edit_modal;
         spawn_local_scoped(async move {
             match update_provider(&pid, &n, &ptype, &u, api_key, enabled).await {
                 Ok(_) => {
+                    loading.set(false);
+                    sem.set(None);
                     refresh.update(|v| *v += 1);
                 }
                 Err(e) => {
