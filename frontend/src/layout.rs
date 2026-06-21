@@ -243,6 +243,8 @@ pub fn Layout(props: LayoutProps) -> View {
                                         &i18n_view,
                                         authenticated,
                                         route,
+                                        username,
+                                        role,
                                     )
                                 }
                                 Route::Register => {
