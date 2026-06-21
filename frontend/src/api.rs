@@ -198,11 +198,7 @@ pub async fn login_api(username: &str, password: &str) -> Result<(), NetError> {
 }
 
 pub async fn check_session() -> Result<Option<(String, String)>, NetError> {
-    let url = format!("{}/admin/session", get_base_url());
-    let resp = Request::get(&url).send().await?;
-    check_response(&resp, "session")?;
-
-    let json: serde_json::Value = resp.json().await?;
+    let json: serde_json::Value = api_get("session").await?;
     let authenticated = json
         .get("authenticated")
         .and_then(|v| v.as_bool())
