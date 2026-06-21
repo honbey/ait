@@ -118,9 +118,9 @@ pub fn TextGeneration(props: TextGenerationProps) -> View {
                                     div()
                                         .class("space-y-3")
                                         .children((
-                                            range_field("text-gen-temperature".into(), i18n.t("text_gen_temperature"), "0", "2", "0.01", temperature.clone()),
-                                            range_field("text-gen-max-tokens".into(), i18n.t("text_gen_max_tokens"), "1", "8192", "1", max_tokens.clone()),
-                                            range_field("text-gen-top-p".into(), i18n.t("text_gen_top_p"), "0", "1", "0.01", top_p.clone()),
+                                            range_field("text-gen-temperature".into(), i18n.t("text_gen_temperature"), "0", "2", "0.01", temperature),
+                                            range_field("text-gen-max-tokens".into(), i18n.t("text_gen_max_tokens"), "1", "8192", "1", max_tokens),
+                                            range_field("text-gen-top-p".into(), i18n.t("text_gen_top_p"), "0", "1", "0.01", top_p),
                                         )),
                                     // Generate button
                                     button()
@@ -208,7 +208,7 @@ fn range_field(
                 .attr("max", max)
                 .attr("step", step)
                 .class("flex-1 accent-indigo-600")
-                .bind(bind::value, value.clone()),
+                .bind(bind::value, value),
             View::from_dynamic(move || -> View {
                 span()
                     .class("w-14 text-right text-sm font-mono text-gray-700 dark:text-gray-300 shrink-0")
