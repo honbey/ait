@@ -36,7 +36,6 @@ pub fn render_login_view(
         let u = form_user.get_clone();
         let p = form_pass.get_clone();
         let i18n_async = i18n_submit.clone();
-        let loading_async = loading;
         spawn_local_scoped(async move {
             match crate::api::login_api(&u, &p).await {
                 Ok(()) => {
@@ -49,7 +48,7 @@ pub fn render_login_view(
                 }
                 Err(e) => {
                     error.set(i18n_async.t_replace("login_error", "msg", &e.to_string()));
-                    loading_async.set(false);
+                    loading.set(false);
                 }
             }
         });

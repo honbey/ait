@@ -32,16 +32,14 @@ pub fn render_register_view(i18n: &I18n, route: Signal<Route>) -> View {
         let p = password.get_clone();
         let c = registration_code.get_clone();
         let i18n_async = i18n_submit.clone();
-        let route_async = route;
-        let loading_async = loading;
         spawn_local_scoped(async move {
             match crate::api::register_api(&u, &p, &c).await {
                 Ok(()) => {
-                    route_async.set(Route::Login);
+                    route.set(Route::Login);
                 }
                 Err(e) => {
                     error.set(i18n_async.t_replace("register_error", "msg", &e.to_string()));
-                    loading_async.set(false);
+                    loading.set(false);
                 }
             }
         });

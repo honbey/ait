@@ -84,20 +84,16 @@ fn render_add_modal(
         form_err.set(String::new());
         let upstream = form_upstream.get_clone();
         let enabled = form_enabled.get();
-        let refresh = model_refresh;
-        let loading = form_loading;
-        let err = form_err;
-        let sam = show_add_modal;
         spawn_local_scoped(async move {
             match create_model(&n, &p, &upstream, enabled).await {
                 Ok(_) => {
-                    loading.set(false);
-                    sam.set(false);
-                    refresh.update(|v| *v += 1);
+                    form_loading.set(false);
+                    show_add_modal.set(false);
+                    model_refresh.update(|v| *v += 1);
                 }
                 Err(e) => {
-                    loading.set(false);
-                    err.set(e.to_string());
+                    form_loading.set(false);
+                    form_err.set(e.to_string());
                 }
             }
         });
@@ -178,20 +174,16 @@ fn render_edit_modal(
         let model_name = model.name.clone();
         let upstream = form_upstream.get_clone();
         let enabled = form_enabled.get();
-        let refresh = model_refresh;
-        let loading = form_loading;
-        let err = form_err;
-        let sem = show_edit_modal;
         spawn_local_scoped(async move {
             match update_model(&model_name, &p, &upstream, enabled).await {
                 Ok(_) => {
-                    loading.set(false);
-                    sem.set(None);
-                    refresh.update(|v| *v += 1);
+                    form_loading.set(false);
+                    show_edit_modal.set(None);
+                    model_refresh.update(|v| *v += 1);
                 }
                 Err(e) => {
-                    loading.set(false);
-                    err.set(e.to_string());
+                    form_loading.set(false);
+                    form_err.set(e.to_string());
                 }
             }
         });
@@ -404,7 +396,6 @@ pub fn ModelTable(props: ModelTableProps) -> View {
             Some(m) => {
                 let deleting = create_signal(false);
                 let model_name = m.name.clone();
-                let refresh = model_refresh;
                 render_delete_confirm(
                     &i18n,
                     i18n.t_replace("delete_confirm_message", "name", &m.name),
@@ -415,14 +406,13 @@ pub fn ModelTable(props: ModelTableProps) -> View {
                         }
                         deleting.set(true);
                         let mn = model_name.clone();
-                        let d = deleting;
                         spawn_local_scoped(async move {
                             match delete_model(&mn).await {
                                 Ok(_) => {
-                                    refresh.update(|v| *v += 1);
+                                    model_refresh.update(|v| *v += 1);
                                 }
                                 Err(e) => {
-                                    d.set(false);
+                                    deleting.set(false);
                                     sycamore::web::console_log!("Failed: {}", e);
                                 }
                             }

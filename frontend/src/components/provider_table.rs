@@ -91,20 +91,16 @@ fn render_add_modal(
         };
         let ptype = form_type.get_clone();
         let enabled = form_enabled.get();
-        let refresh = provider_refresh;
-        let loading = form_loading;
-        let err = form_err;
-        let sam = show_add_modal;
         spawn_local_scoped(async move {
             match create_provider(&n, &ptype, &u, api_key, enabled).await {
                 Ok(_) => {
-                    loading.set(false);
-                    sam.set(false);
-                    refresh.update(|v| *v += 1);
+                    form_loading.set(false);
+                    show_add_modal.set(false);
+                    provider_refresh.update(|v| *v += 1);
                 }
                 Err(e) => {
-                    loading.set(false);
-                    err.set(e.to_string());
+                    form_loading.set(false);
+                    form_err.set(e.to_string());
                 }
             }
         });
@@ -193,22 +189,18 @@ fn render_edit_modal(
             let raw = form_api_key.get_clone();
             if raw.is_empty() { None } else { Some(raw) }
         };
-        let refresh = provider_refresh;
-        let loading = form_loading;
-        let err = form_err;
         let ptype = form_type.get_clone();
         let enabled = form_enabled.get();
-        let sem = show_edit_modal;
         spawn_local_scoped(async move {
             match update_provider(&pid, &n, &ptype, &u, api_key, enabled).await {
                 Ok(_) => {
-                    loading.set(false);
-                    sem.set(None);
-                    refresh.update(|v| *v += 1);
+                    form_loading.set(false);
+                    show_edit_modal.set(None);
+                    provider_refresh.update(|v| *v += 1);
                 }
                 Err(e) => {
-                    loading.set(false);
-                    err.set(e.to_string());
+                    form_loading.set(false);
+                    form_err.set(e.to_string());
                 }
             }
         });
@@ -424,7 +416,6 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
             Some(prov) => {
                 let deleting = create_signal(false);
                 let prov_id = prov.id.clone();
-                let refresh = provider_refresh;
                 render_delete_confirm(
                     &i18n,
                     i18n.t_replace("delete_confirm_message", "name", &prov.name),
@@ -435,14 +426,13 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
                         }
                         deleting.set(true);
                         let pid = prov_id.clone();
-                        let d = deleting;
                         spawn_local_scoped(async move {
                             match delete_provider(&pid).await {
                                 Ok(_) => {
-                                    refresh.update(|v| *v += 1);
+                                    provider_refresh.update(|v| *v += 1);
                                 }
                                 Err(e) => {
-                                    d.set(false);
+                                    deleting.set(false);
                                     sycamore::web::console_log!("Failed: {}", e);
                                 }
                             }

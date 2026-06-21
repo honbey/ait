@@ -190,13 +190,12 @@ fn make_api_key_rows(
                         div().class("flex items-center justify-center gap-3").children((
                             button()
                                 .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
-                                .on(events::click, move |_| {
+                                .on(events::click,                                 move |_| {
                                     let kid = toggle_key_id.clone();
                                     let u = uname.clone();
-                                    let refresh = api_key_refresh;
                                     spawn_local_scoped(async move {
                                         match toggle_api_key(&u, &kid, !toggle_enabled).await {
-                                            Ok(_) => { refresh.update(|v| *v += 1); }
+                                            Ok(_) => { api_key_refresh.update(|v| *v += 1); }
                                             Err(e) => { sycamore::web::console_log!("Failed: {}", e); }
                                         }
                                     });
@@ -301,7 +300,6 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
                 let deleting = create_signal(false);
                 let key_id = item.id.clone();
                 let u = uname.clone();
-                let refresh = api_key_refresh;
                 render_delete_confirm(
                     &i18n,
                     i18n.t_replace("api_key_delete_confirm", "name", &item.name),
@@ -313,14 +311,13 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
                         deleting.set(true);
                         let kid = key_id.clone();
                         let u = u.clone();
-                        let d = deleting;
                         spawn_local_scoped(async move {
                             match delete_api_key(&u, &kid).await {
                                 Ok(_) => {
-                                    refresh.update(|v| *v += 1);
+                                    api_key_refresh.update(|v| *v += 1);
                                 }
                                 Err(e) => {
-                                    d.set(false);
+                                    deleting.set(false);
                                     sycamore::web::console_log!("Failed: {}", e);
                                 }
                             }
