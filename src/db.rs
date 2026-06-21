@@ -328,7 +328,11 @@ impl Database {
         provider.name = updates.name.clone();
         provider.provider_type = updates.provider_type.clone();
         provider.base_url = updates.base_url.clone();
-        provider.api_key = updates.api_key.clone();
+        provider.api_key = match &updates.api_key {
+            None => provider.api_key,
+            Some(s) if s.is_empty() => None,
+            Some(s) => Some(s.clone()),
+        };
         provider.enabled = updates.enabled;
         provider.updated_at = Utc::now();
 
