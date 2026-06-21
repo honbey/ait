@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::db::{Permission, SessionUser, User, UserRole};
-use crate::error::{AitError, forbidden, internal_error, not_found, require_admin};
+use crate::error::{AitError, conflict, forbidden, internal_error, not_found, require_admin};
 
 #[derive(Serialize)]
 pub struct UserInfoResponse {
@@ -65,6 +65,13 @@ pub async fn update_user(
         .ok_or_else(|| not_found(format!("User '{}' not found", username)))?;
 
     if let Some(role) = input.role {
+        // Prevent demoting the last admin
+        if role != UserRole::Admin
+            && user.role == UserRole::Admin
+            && state.db.count_admins().map_err(internal_error)? <= 1
+        {
+            return Err(conflict("Cannot demote the last admin"));
+        }
         user.role = role;
     }
     if let Some(allowed) = input.allowed {
@@ -82,6 +89,23 @@ pub async fn delete_user(
     Path(username): Path<String>,
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
+
+    // Cannot delete yourself
+    if session.username == username {
+        return Err(conflict("Cannot delete yourself"));
+    }
+
+    let user = state
+        .db
+        .get_user(&username)
+        .map_err(internal_error)?
+        .ok_or_else(|| not_found(format!("User '{}' not found", username)))?;
+
+    // Prevent deleting the last admin
+    if user.role == UserRole::Admin && state.db.count_admins().map_err(internal_error)? <= 1 {
+        return Err(conflict("Cannot delete the last admin"));
+    }
+
     state.db.delete_user(&username)?;
     Ok((StatusCode::NO_CONTENT,))
 }

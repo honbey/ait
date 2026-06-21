@@ -422,9 +422,29 @@ impl Database {
         Ok(updated)
     }
 
-    pub fn delete_user(&self, username: &str) -> Result<bool, DbError> {
+    pub fn delete_user(&self, username: &str) -> Result<(), DbError> {
+        let user = self.get_user_or_err(username)?;
+
+        // Cascade: remove API key reverse-lookup entries
+        for api_key in &user.api_keys {
+            self.cf_del(API_KEYS_CF, &api_key.key)?;
+        }
+
+        // Cascade: remove all sessions owned by this user
+        let sessions: Vec<Session> = self.cf_list(SESSIONS_CF)?;
+        for session in &sessions {
+            if session.username == username {
+                self.cf_del(SESSIONS_CF, format!("sess:{}", &session.session_key))?;
+            }
+        }
+
         self.cf_del(USERS_CF, format!("user:{}", username))?;
-        Ok(true)
+        Ok(())
+    }
+
+    pub fn count_admins(&self) -> Result<u64, DbError> {
+        let users: Vec<User> = self.cf_list(USERS_CF)?;
+        Ok(users.iter().filter(|u| u.role == UserRole::Admin).count() as u64)
     }
 
     fn get_user_or_err(&self, username: &str) -> Result<User, DbError> {
