@@ -106,14 +106,16 @@ fn render_add_modal(
             .class("space-y-4")
             .children((
                 modal_title(i18n.t("model_add"), move |_| show_add_modal.set(false)),
-                form_field(i18n.t("name"), form_input(i18n.t("name"), form_name)),
+                form_field("add-model-name".into(), i18n.t("name"), form_input("add-model-name".into(), i18n.t("name"), form_name)),
                 form_field(
+                    "add-model-provider".into(),
                     i18n.t("model_provider_id"),
-                    select_input(form_provider_id, options),
+                    select_input("add-model-provider".into(), form_provider_id, options),
                 ),
                 form_field(
+                    "add-model-upstream".into(),
                     i18n.t("model_upstream_model"),
-                    form_input(i18n.t("model_upstream_model"), form_upstream),
+                    form_input("add-model-upstream".into(), i18n.t("model_upstream_model"), form_upstream),
                 ),
                 form_checkbox(
                     "model-enabled".into(),
@@ -186,14 +188,16 @@ fn render_edit_modal(
             .class("space-y-4")
             .children((
                 modal_title(i18n.t("model_edit"), move |_| show_edit_modal.set(None)),
-                form_field(i18n.t("name"), form_input(i18n.t("name"), form_name)),
+                form_field("edit-model-name".into(), i18n.t("name"), form_input("edit-model-name".into(), i18n.t("name"), form_name)),
                 form_field(
+                    "edit-model-provider".into(),
                     i18n.t("model_provider_id"),
-                    select_input(form_provider_id, options),
+                    select_input("edit-model-provider".into(), form_provider_id, options),
                 ),
                 form_field(
+                    "edit-model-upstream".into(),
                     i18n.t("model_upstream_model"),
-                    form_input(i18n.t("model_upstream_model"), form_upstream),
+                    form_input("edit-model-upstream".into(), i18n.t("model_upstream_model"), form_upstream),
                 ),
                 form_checkbox(
                     "edit-enabled".into(),

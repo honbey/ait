@@ -45,12 +45,14 @@ fn render_create_modal(
                         modal_title(i18n.t("api_key_created"), backdrop_close),
                         p().class("text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 px-3 py-2 rounded-lg")
                             .children(i18n.t("api_key_raw_key_hint")),
-                        form_field(
-                            i18n.t("api_key_name"),
-                            span().class("text-gray-900 dark:text-gray-100 font-medium").children(name.clone()).into(),
-                        ),
-                        form_field(
-                            i18n.t("api_key_key"),
+                        div().children((
+                            label().class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
+                                .children(i18n.t("api_key_name")),
+                            span().class("text-gray-900 dark:text-gray-100 font-medium").children(name.clone()),
+                        )),
+                        div().children((
+                            label().class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
+                                .children(i18n.t("api_key_key")),
                             div().class("flex items-center gap-2").children((
                                 div().class("flex-1 bg-gray-100 dark:bg-gray-700 px-3 py-2 rounded-lg text-sm font-mono break-all text-gray-800 dark:text-gray-200 select-all").children(key.clone()),
                                 button()
@@ -66,8 +68,8 @@ fn render_create_modal(
                                         }
                                     })
                                     .children(i().class("fas fa-copy")),
-                            )).into(),
-                        ),
+                            )),
+                        )),
                         View::from_dynamic({
                             let i18n = i18n.clone();
                             move || {
@@ -133,14 +135,16 @@ fn render_create_modal(
                     .class("space-y-4")
                     .children((
                         modal_title(i18n.t("api_key_create"), backdrop_close),
-                        form_field(i18n.t("api_key_name"), form_input(i18n.t("api_key_name"), form_name)),
-                        form_field(i18n.t("expires_at"),
+                        form_field("create-apikey-name".into(), i18n.t("api_key_name"), form_input("create-apikey-name".into(), i18n.t("api_key_name"), form_name)),
+                        form_field("create-apikey-expires".into(), i18n.t("expires_at"),
                             div().class("flex gap-2").children((
                                 input()
+                                    .attr("id", "create-apikey-expires-date")
                                     .class("flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:border-indigo-500 outline-none")
                                     .attr("type", "date")
                                     .bind(sycamore::web::bind::value, form_expires_date),
                                 input()
+                                    .attr("id", "create-apikey-expires-time")
                                     .class("w-28 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:border-indigo-500 outline-none")
                                     .attr("type", "time")
                                     .bind(sycamore::web::bind::value, form_expires_time),
