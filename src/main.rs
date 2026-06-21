@@ -5,6 +5,7 @@ mod error;
 mod handlers;
 mod middleware;
 mod providers;
+mod rate_limiter;
 
 use axum::{
     Extension,
@@ -24,7 +25,10 @@ use handlers::auth::{login, logout, register, session_check};
 use handlers::proxy::{chat_completions, completions, embeddings, health, list_models_proxy};
 use handlers::stats::dashboard_stats;
 use handlers::users::{change_password, delete_user, list_users, update_user};
-use middleware::{admin_auth_middleware, auth_middleware};
+use middleware::{
+    admin_auth_middleware, auth_middleware, login_rate_limit_middleware,
+    register_rate_limit_middleware,
+};
 
 #[tokio::main]
 async fn main() {
@@ -50,7 +54,12 @@ async fn main() {
     info!("ait starting on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 fn parse_config_path() -> Option<String> {
@@ -81,9 +90,18 @@ fn init_logging() {
 
 fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
     // Auth routes (no admin middleware — they handle their own auth logic)
-    let auth_route = Router::new()
-        .route("/admin/login", post(login))
+    let login_route = Router::new().route("/admin/login", post(login)).layer(
+        axum::middleware::from_fn_with_state(state.clone(), login_rate_limit_middleware),
+    );
+    let register_route = Router::new()
         .route("/admin/register", post(register))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            register_rate_limit_middleware,
+        ));
+    let auth_route = Router::new()
+        .merge(login_route)
+        .merge(register_route)
         .route("/admin/logout", post(logout))
         .route("/admin/session", get(session_check));
 

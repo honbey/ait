@@ -90,3 +90,6 @@ bcrypt = "0.19"
 # Key hashing
 sha2 = "0.11"
 hex = "0.4"
+
+# Concurrent hashmap
+dashmap = "6.2"

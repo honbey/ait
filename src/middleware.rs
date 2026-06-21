@@ -1,13 +1,14 @@
 use crate::app::AppState;
 use crate::db::{SessionUser, UserRole};
-use crate::error::{AitError, db_error};
+use crate::error::{AitError, db_error, too_many_requests};
 use axum::{
     Json,
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::{HeaderMap, StatusCode, header},
     middleware::Next,
     response::Response,
 };
+use std::net::{IpAddr, SocketAddr};
 
 fn full_access(username: &str) -> SessionUser {
     SessionUser {
@@ -139,5 +140,83 @@ pub async fn admin_auth_middleware(
     }
 
     req.extensions_mut().insert(session_user);
+    Ok(next.run(req).await)
+}
+
+fn get_client_ip(req: &Request) -> Option<IpAddr> {
+    if let Some(value) = req.headers().get("x-forwarded-for")
+        && let Ok(value) = value.to_str()
+        && let Some(ip) = value.split(',').next().map(str::trim)
+        && let Ok(ip) = ip.parse::<IpAddr>()
+    {
+        return Some(ip);
+    }
+    if let Some(value) = req.headers().get("x-real-ip")
+        && let Ok(value) = value.to_str()
+        && let Ok(ip) = value.parse::<IpAddr>()
+    {
+        return Some(ip);
+    }
+    if let Some(connect_info) = req.extensions().get::<ConnectInfo<SocketAddr>>() {
+        return Some(connect_info.0.ip());
+    }
+    None
+}
+
+fn check_and_record(
+    limiter: &crate::rate_limiter::RateLimiter,
+    ip: IpAddr,
+    max_attempts: u64,
+    window_secs: u64,
+    ban_secs: u64,
+) -> Result<(), (StatusCode, Json<AitError>)> {
+    limiter
+        .check_and_record(ip, max_attempts, window_secs, ban_secs)
+        .map_err(|_| too_many_requests("Too many attempts. Please try again later."))
+}
+
+pub async fn login_rate_limit_middleware(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Result<Response, (StatusCode, Json<AitError>)> {
+    let config = &state.config.auth.login_rate_limit;
+    let ip =
+        get_client_ip(&req).ok_or_else(|| too_many_requests("Could not determine client IP"))?;
+
+    check_and_record(
+        &state.login_rate_limiter,
+        ip,
+        config.max_attempts,
+        config.window_secs,
+        config.ban_secs,
+    )?;
+
+    let response = next.run(req).await;
+
+    if response.status() == StatusCode::OK {
+        state.login_rate_limiter.clear(ip);
+    }
+
+    Ok(response)
+}
+
+pub async fn register_rate_limit_middleware(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Result<Response, (StatusCode, Json<AitError>)> {
+    let config = &state.config.auth.register_rate_limit;
+    let ip =
+        get_client_ip(&req).ok_or_else(|| too_many_requests("Could not determine client IP"))?;
+
+    check_and_record(
+        &state.register_rate_limiter,
+        ip,
+        config.max_attempts,
+        config.window_secs,
+        config.ban_secs,
+    )?;
+
     Ok(next.run(req).await)
 }

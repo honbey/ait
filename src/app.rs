@@ -1,7 +1,9 @@
 use crate::config::ConfigApp;
 use crate::db::{Database, User, UserRole};
+use crate::rate_limiter::RateLimiter;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -9,6 +11,8 @@ pub struct AppState {
     pub db: Arc<Database>,
     pub http_client: reqwest::Client,
     pub start_time: DateTime<Utc>,
+    pub login_rate_limiter: RateLimiter,
+    pub register_rate_limiter: RateLimiter,
 }
 
 impl AppState {
@@ -69,11 +73,30 @@ impl AppState {
             }
         });
 
+        // Rate limiter cleanup tasks
+        let login_limiter = RateLimiter::new();
+        let register_limiter = RateLimiter::new();
+        let cleanup_interval = config.server.rate_limiter_cleanup_interval_secs;
+        spawn_rate_limiter_cleanup(login_limiter.clone(), cleanup_interval);
+        spawn_rate_limiter_cleanup(register_limiter.clone(), cleanup_interval);
+
         Self {
             config,
             db,
             http_client,
             start_time: Utc::now(),
+            login_rate_limiter: login_limiter,
+            register_rate_limiter: register_limiter,
         }
     }
+}
+
+fn spawn_rate_limiter_cleanup(limiter: RateLimiter, interval_secs: u64) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+        loop {
+            interval.tick().await;
+            limiter.cleanup();
+        }
+    });
 }

@@ -123,6 +123,17 @@ pub fn conflict(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
     AitError::conflict(msg).into_response()
 }
 
+pub fn too_many_requests(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(AitError {
+            message: msg.into(),
+            code: 429,
+            r#type: "rate_limit_error".to_string(),
+        }),
+    )
+}
+
 pub fn db_error() -> (StatusCode, Json<AitError>) {
     AitError::internal_error("Database error").into_response()
 }

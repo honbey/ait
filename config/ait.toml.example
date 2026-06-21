@@ -5,6 +5,8 @@ port = 8000
 health_detail = false
 # 过期 session 自动清理间隔（秒）
 session_cleanup_interval_secs = 3600
+# 频率限制器过期条目清理间隔（秒）
+# rate_limiter_cleanup_interval_secs = 600
 
 [auth]
 # 仅控制 /v1/* 代理接口的认证开关，Admin 接口始终需要认证
@@ -21,6 +23,10 @@ bootstrap_password = "admin123"
 # registration_code = ""
 # 每个用户最大 API key 数量
 # max_api_keys_per_user = 10
+# 登录频率限制 (最多5次/300秒，超限封禁900秒)
+# login_rate_limit = { max_attempts = 5, window_secs = 300, ban_secs = 900 }
+# 注册频率限制 (最多3次/3600秒，超限封禁3600秒)
+# register_rate_limit = { max_attempts = 3, window_secs = 3600, ban_secs = 3600 }
 
 [database]
 path = "./data/ait.rocksdb"
