@@ -54,21 +54,6 @@ pub async fn auth_middleware(
     let token = extract_bearer_token(req.headers())
         .ok_or_else(|| AitError::unauthorized().into_response())?;
 
-    // Check if token is a session key
-    if let Ok(Some(session)) = state.db.get_session(token) {
-        if session.is_expired() {
-            return Err(AitError::unauthorized().into_response());
-        }
-        let user = state
-            .db
-            .get_user(&session.username)
-            .map_err(|_| db_error())?
-            .ok_or_else(|| AitError::unauthorized().into_response())?;
-
-        req.extensions_mut().insert(user.to_session_user());
-        return Ok(next.run(req).await);
-    }
-
     // Check if token is an API key
     let key_info = state
         .db
@@ -93,10 +78,9 @@ pub async fn auth_middleware(
         return Err(AitError::unauthorized().into_response());
     }
 
-    // API key users are always User role (never Admin)
     req.extensions_mut().insert(SessionUser {
         username: user.username,
-        role: UserRole::User,
+        role: user.role,
         allowed: user.allowed,
     });
     Ok(next.run(req).await)
