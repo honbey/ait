@@ -71,5 +71,16 @@
   "save_create": "创建",
   "copy": "复制",
   "copied_success": "☑️ 已复制到剪贴板！",
-  "never_expires": "永不过期"
+  "never_expires": "永不过期",
+  "text_gen_api_key": "API 密钥",
+  "text_gen_select_model": "模型",
+  "text_gen_prompt": "提示词",
+  "text_gen_prompt_placeholder": "请输入提示词...",
+  "text_gen_generate": "生成",
+  "text_gen_generating": "生成中...",
+  "text_gen_response": "响应",
+  "text_gen_max_tokens": "最大 Token 数",
+  "text_gen_temperature": "温度",
+  "text_gen_top_p": "Top P",
+  "text_gen_error": "生成失败：{{ msg }}"
 }

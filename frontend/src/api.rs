@@ -294,3 +294,57 @@ pub async fn update_provider(
 pub async fn delete_provider(id: &str) -> Result<(), NetError> {
     api_delete(&format!("providers/{}", id)).await
 }
+
+// --- Text Generation ---
+
+pub async fn generate_completion(
+    token: &str,
+    model: &str,
+    prompt: &str,
+    max_tokens: Option<u32>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
+) -> Result<String, NetError> {
+    let url = format!("{}/v1/completions", get_base_url());
+    let mut body = serde_json::json!({
+        "model": model,
+        "prompt": prompt,
+        "stream": false,
+    });
+    if let Some(mt) = max_tokens {
+        body["max_tokens"] = serde_json::json!(mt);
+    }
+    if let Some(t) = temperature {
+        body["temperature"] = serde_json::json!(t);
+    }
+    if let Some(p) = top_p {
+        body["top_p"] = serde_json::json!(p);
+    }
+    let resp = Request::post(&url)
+        .header("Content-Type", "application/json")
+        .header("Authorization", &format!("Bearer {}", token))
+        .body(body.to_string())
+        .map_err(|e| NetError::GlooError(e.to_string()))?
+        .send()
+        .await?;
+    if !resp.ok() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        let msg = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
+            .unwrap_or_else(|| format!("HTTP {}", status));
+        return Err(NetError::GlooError(msg));
+    }
+    let json: serde_json::Value = resp.json().await?;
+    let text = json
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|c| c.first())
+        .and_then(|c| c.get("text"))
+        .and_then(|t| t.as_str())
+        .or_else(|| json.get("response").and_then(|r| r.as_str()))
+        .unwrap_or("")
+        .to_string();
+    Ok(text)
+}
