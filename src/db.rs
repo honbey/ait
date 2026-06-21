@@ -1,6 +1,6 @@
 use chrono::serde::{ts_seconds, ts_seconds_option};
 use chrono::{DateTime, Utc};
-use rocksdb::{DB as RocksDB, IteratorMode, Options};
+use rocksdb::{DB as RocksDB, IteratorMode, Options, WriteBatch};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -306,6 +306,36 @@ impl Database {
             .map_err(|e| DbError::Storage(e.to_string()))
     }
 
+    fn cf_put_batch<T: serde::Serialize>(
+        &self,
+        batch: &mut WriteBatch,
+        cf_name: &str,
+        key: impl AsRef<[u8]>,
+        val: &T,
+    ) -> Result<(), DbError> {
+        let cf = self.cf(cf_name)?;
+        let bytes = serde_json::to_string(val).map_err(|e| DbError::Storage(e.to_string()))?;
+        batch.put_cf(cf, key, bytes);
+        Ok(())
+    }
+
+    fn cf_del_batch(
+        &self,
+        batch: &mut WriteBatch,
+        cf_name: &str,
+        key: impl AsRef<[u8]>,
+    ) -> Result<(), DbError> {
+        let cf = self.cf(cf_name)?;
+        batch.delete_cf(cf, key);
+        Ok(())
+    }
+
+    fn write_batch(&self, batch: WriteBatch) -> Result<(), DbError> {
+        self.db
+            .write(batch)
+            .map_err(|e| DbError::Storage(e.to_string()))
+    }
+
     // --- Provider CRUD ---
 
     pub fn insert_provider(&self, mut provider: Provider) -> Result<Provider, DbError> {
@@ -345,15 +375,16 @@ impl Database {
             return Ok(false);
         }
 
-        self.cf_del(PROVIDERS_CF, format!("prov:{}", id))?;
+        let mut batch = WriteBatch::default();
+        self.cf_del_batch(&mut batch, PROVIDERS_CF, format!("prov:{}", id))?;
 
-        // Also delete associated models
         for item in self.cf_list::<Model>(MODELS_CF)? {
             if item.provider_id == id {
-                self.cf_del(MODELS_CF, format!("model:{}", item.name))?;
+                self.cf_del_batch(&mut batch, MODELS_CF, format!("model:{}", item.name))?;
             }
         }
 
+        self.write_batch(batch)?;
         Ok(true)
     }
 
@@ -371,8 +402,9 @@ impl Database {
         if model.id.is_empty() {
             model.id = Uuid::new_v4().to_string();
         }
-        model.created_at = Utc::now();
-        model.updated_at = Utc::now();
+        let now = Utc::now();
+        model.created_at = now;
+        model.updated_at = now;
 
         // Check provider exists
 
@@ -437,8 +469,9 @@ impl Database {
     // --- User CRUD ---
 
     pub fn insert_user(&self, mut user: User) -> Result<User, DbError> {
-        user.created_at = Utc::now();
-        user.updated_at = Utc::now();
+        let now = Utc::now();
+        user.created_at = now;
+        user.updated_at = now;
         self.cf_put(USERS_CF, format!("user:{}", user.username), &user)?;
         Ok(user)
     }
@@ -461,20 +494,25 @@ impl Database {
     pub fn delete_user(&self, username: &str) -> Result<(), DbError> {
         let user = self.get_user_or_err(username)?;
 
-        // Cascade: remove API key reverse-lookup entries
+        let mut batch = WriteBatch::default();
+
         for api_key in &user.api_keys {
-            self.cf_del(API_KEYS_CF, &api_key.key)?;
+            self.cf_del_batch(&mut batch, API_KEYS_CF, &api_key.key)?;
         }
 
-        // Cascade: remove all sessions owned by this user
         let sessions: Vec<Session> = self.cf_list(SESSIONS_CF)?;
         for session in &sessions {
             if session.username == username {
-                self.cf_del(SESSIONS_CF, format!("sess:{}", &session.session_key))?;
+                self.cf_del_batch(
+                    &mut batch,
+                    SESSIONS_CF,
+                    format!("sess:{}", &session.session_key),
+                )?;
             }
         }
 
-        self.cf_del(USERS_CF, format!("user:{}", username))?;
+        self.cf_del_batch(&mut batch, USERS_CF, format!("user:{}", username))?;
+        self.write_batch(batch)?;
         Ok(())
     }
 
@@ -570,10 +608,14 @@ impl Database {
             name: name.to_string(),
             created_at: now,
         };
-        self.cf_put(API_KEYS_CF, &hash, &info)?;
 
         user.api_keys.push(stored.clone());
-        self.update_user(&user)?;
+        user.updated_at = now;
+
+        let mut batch = WriteBatch::default();
+        self.cf_put_batch(&mut batch, API_KEYS_CF, &hash, &info)?;
+        self.cf_put_batch(&mut batch, USERS_CF, format!("user:{}", username), &user)?;
+        self.write_batch(batch)?;
 
         Ok((stored, raw_key))
     }
@@ -592,10 +634,12 @@ impl Database {
             .ok_or_else(|| DbError::NotFound("API key not found".to_string()))?;
         let hash = user.api_keys[idx].key.clone();
         user.api_keys.remove(idx);
+        user.updated_at = Utc::now();
 
-        self.cf_del(API_KEYS_CF, &hash)?;
-
-        self.update_user(&user)?;
+        let mut batch = WriteBatch::default();
+        self.cf_del_batch(&mut batch, API_KEYS_CF, &hash)?;
+        self.cf_put_batch(&mut batch, USERS_CF, format!("user:{}", username), &user)?;
+        self.write_batch(batch)?;
 
         Ok(true)
     }
