@@ -68,5 +68,7 @@
   "api_key_delete_confirm": "确定要删除密钥 \"{{ name }}\" 吗？",
   "expires_at": "过期时间",
   "close": "关闭",
-  "save_create": "创建"
+  "save_create": "创建",
+  "copy": "复制",
+  "copied_success": "☑️ 已复制到剪贴板！"
 }

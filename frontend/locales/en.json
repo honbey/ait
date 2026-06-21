@@ -68,5 +68,7 @@
   "api_key_delete_confirm": "Are you sure you want to delete key \"{{ name }}\"?",
   "expires_at": "Expires At",
   "close": "Close",
-  "save_create": "Create"
+  "save_create": "Create",
+  "copy": "Copy",
+  "copied_success": "☑️ Copied to clipboard!"
 }
