@@ -48,7 +48,7 @@ pub fn render_login_view(
                     route.set(Route::Dashboard);
                 }
                 Err(e) => {
-                    error.set(i18n_async.t_replace("login_error", "msg", &e));
+                    error.set(i18n_async.t_replace("login_error", "msg", &e.to_string()));
                     loading_async.set(false);
                 }
             }
