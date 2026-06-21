@@ -70,5 +70,6 @@
   "close": "关闭",
   "save_create": "创建",
   "copy": "复制",
-  "copied_success": "☑️ 已复制到剪贴板！"
+  "copied_success": "☑️ 已复制到剪贴板！",
+  "never_expires": "永不过期"
 }

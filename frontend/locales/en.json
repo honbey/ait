@@ -70,5 +70,6 @@
   "close": "Close",
   "save_create": "Create",
   "copy": "Copy",
-  "copied_success": "☑️ Copied to clipboard!"
+  "copied_success": "☑️ Copied to clipboard!",
+  "never_expires": "Never expires"
 }

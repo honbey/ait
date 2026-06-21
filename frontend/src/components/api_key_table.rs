@@ -9,8 +9,9 @@ use crate::components::data_table::{
 };
 use crate::components::delete_confirm::render_delete_confirm;
 use crate::components::modal::{
-    action_cell, form_error, form_field, form_input, form_submit_footer, modal_dialog, modal_title,
-    mono_cell, name_cell, status_badge, text_cell, timestamp_cell, zebra_bg,
+    action_cell, form_checkbox, form_error, form_field, form_input, form_submit_footer,
+    modal_dialog, modal_title, mono_cell, name_cell, status_badge, text_cell, timestamp_cell,
+    zebra_bg,
 };
 use crate::i18n::I18n;
 use crate::models::ApiKeyListItem;
@@ -22,8 +23,17 @@ fn render_create_modal(
     show_create_modal: Signal<bool>,
 ) -> View {
     let form_name = create_signal(String::new());
-    let form_expires_date = create_signal(String::new());
-    let form_expires_time = create_signal(String::new());
+    let form_never_expire = create_signal(false);
+    let form_expires = create_signal({
+        let d = js_sys::Date::new_0();
+        d.set_date(d.get_date() + 30);
+        format!(
+            "{:04}-{:02}-{:02}T00:00",
+            d.get_full_year(),
+            d.get_month() + 1,
+            d.get_date(),
+        )
+    });
     let form_err = create_signal(String::new());
     let form_loading = create_signal(false);
     let result = create_signal::<Option<(String, String)>>(None);
@@ -102,18 +112,12 @@ fn render_create_modal(
                             }
                             form_loading.set(true);
                             form_err.set(String::new());
-                            let expires_at = {
-                                let date = form_expires_date.get_clone();
-                                let time = form_expires_time.get_clone();
-                                if date.is_empty() {
-                                    None
-                                } else {
-                                    let dt_str = if time.is_empty() {
-                                        format!("{}T00:00", date)
-                                    } else {
-                                        format!("{}T{}", date, time)
-                                    };
-                                    let ts = js_sys::Date::new(&dt_str.into()).get_time();
+                            let expires_at = if form_never_expire.get() {
+                                None
+                            } else {
+                                let dt = form_expires.get_clone();
+                                if dt.is_empty() { None } else {
+                                    let ts = js_sys::Date::new(&dt.into()).get_time();
                                     if ts.is_nan() { None } else { Some((ts / 1000.0) as i64) }
                                 }
                             };
@@ -137,18 +141,14 @@ fn render_create_modal(
                         modal_title(i18n.t("api_key_create"), backdrop_close),
                         form_field("create-apikey-name".into(), i18n.t("api_key_name"), form_input("create-apikey-name".into(), i18n.t("api_key_name"), form_name)),
                         form_field("create-apikey-expires".into(), i18n.t("expires_at"),
-                            div().class("flex gap-2").children((
-                                input()
-                                    .attr("id", "create-apikey-expires-date")
-                                    .class("flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:border-indigo-500 outline-none")
-                                    .attr("type", "date")
-                                    .bind(sycamore::web::bind::value, form_expires_date),
-                                input()
-                                    .attr("id", "create-apikey-expires-time")
-                                    .class("w-28 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:border-indigo-500 outline-none")
-                                    .attr("type", "time")
-                                    .bind(sycamore::web::bind::value, form_expires_time),
-                            )).into()),
+                            input()
+                                .attr("id", "create-apikey-expires")
+                                .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:border-indigo-500 outline-none")
+                                .attr("type", "datetime-local")
+                                .bool_attr("disabled", move || form_never_expire.get())
+                                .bind(sycamore::web::bind::value, form_expires)
+                                .into()),
+                        form_checkbox("create-apikey-never-expire".into(), i18n.t("never_expires"), form_never_expire),
                         form_error(form_err),
                         form_submit_footer(i18n.t("cancel"), backdrop_close, form_loading, i18n.t("save_create")),
                     ))
