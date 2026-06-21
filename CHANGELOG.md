@@ -1,5 +1,37 @@
 # 更新日志
 
+## [v0.1.2] - 2026-06-21
+
+### 新增功能
+
+- **API Key 管理** — 前端完整 CRUD 页面（创建、启用/禁用、删除），支持创建时设定过期时间或永不过期，快速复制到剪贴板
+- **文本生成页面** — 新页面通过 `/v1/completions` 代理接口提交生成请求，支持 Temperature/MaxTokens/TopP 参数调节（range 滑块）
+- **仪表盘统计接口** — `GET /admin/stats/dashboard` 返回提供商/模型数量及预留的 API 调用次数/Token 消耗字段
+- **用户注册** — `POST /auth/register` 允许新用户注册，受 `allow_registration` 和 `registration_code` 配置控制
+- **配置项更新**
+  - 移除旧版 `auth.token` 和 `auth.admin_token`
+  - 新增 `server.session_cleanup_interval_secs`、`auth.session_ttl_secs`、`auth.allow_registration`、`auth.registration_code`、`auth.max_api_keys_per_user`
+
+### 重构优化
+
+- **后端**
+  - 提取通用 HTTP 请求辅助函数，统一 `AitError` 错误类型
+  - Admin 接口拆分为独立模块（`admin.rs`、`apikeys.rs`、`users.rs`、`stats.rs`）
+  - `SessionUser` 重构，角色使用 `UserRole` 枚举
+  - `DbError` 统一处理模式，日期固定使用 UTC
+
+- **前端**
+  - 提取共享组件 `data_table.rs`、`delete_confirm.rs`、`modal.rs`，减少约 40% 重复代码
+  - API 调用集中到 `api.rs`，统一 `NetError` 处理
+  - Provider/Model/API Key 管理页面全部重构为共享组件模式
+  - 所有表单字段添加 `id`/`for` 属性提升无障碍访问
+  - `cargo fmt` 全量格式化 + Clippy 告警清理
+
+### 修复
+
+- **登录后信号刷新** — 登录成功后立即更新 `username`/`role` 响应式信号，避免 UI 不同步
+- **登出闭包递归** — 修复登出时因闭包递归调用导致的 panic
+
 ## [v0.1.1] - 2026-06-17
 
 ### 新增功能

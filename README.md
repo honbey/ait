@@ -10,6 +10,8 @@
 - **多提供商支持** — 支持 OpenAI Compatible（DeepSeek、Zhipu、LlamaCpp 等）和 Ollama
 - **动态管理** — 通过 Admin API 动态添加/更新/删除提供商和模型
 - **Web 管理界面** — 基于 Sycamore 0.9 的 WASM CSR 前端
+- **API Key 管理** — 创建/启用/禁用/删除 API Key，支持过期时间设定和快速复制
+- **用户注册** — 受控注册（可选注册码），每个用户可创建多个 API Key
 - **会话认证** — HttpOnly Cookie 的登录/登出/会话管理
 
 ## 快速开始
@@ -41,9 +43,9 @@ session_ttl_secs = 86400
 bootstrap_admin = true
 bootstrap_username = "admin"
 bootstrap_password = "admin123"
-# allow_registration = false
-# registration_code = ""
-# max_api_keys_per_user = 10
+allow_registration = false
+registration_code = ""
+max_api_keys_per_user = 10
 
 [database]
 path = "./data/ait.rocksdb"
@@ -74,13 +76,11 @@ ait -c /path/to/config.toml
 
 编译时将前端 WASM 静态文件嵌入后端，启动后通过 `http://{host}:{port}` 访问。
 
+目前控制台下的 dashboard/providers/models 等功能已实现，不过没有路由路径。
+
 | 路径 | 说明 |
 |------|------|
-| / | 首页 |
-| /login | 管理员登录 |
-| /dashboard | 仪表盘 |
-| /providers | 提供商管理 |
-| /models | 模型管理 |
+| / | 首页（其余页面正在开发中）|
 
 ## API 接口
 
@@ -103,3 +103,4 @@ ait -c /path/to/config.toml
 |------|------|
 | openai_compat | OpenAI 兼容接口（含 DeepSeek、Zhipu、LlamaCpp）|
 | ollama | Ollama 本地模型服务 |
+
