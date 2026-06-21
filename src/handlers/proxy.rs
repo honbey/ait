@@ -216,6 +216,19 @@ async fn proxy_non_streamed(
     })?;
 
     let status = response.status();
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("content-type"),
+        "application/json".parse().unwrap(),
+    );
+    for (name, value) in response.headers() {
+        let lower = name.as_str().to_ascii_lowercase();
+        if lower.starts_with("x-") || lower == "retry-after" {
+            headers.insert(name.clone(), value.clone());
+        }
+    }
+
     let bytes = response
         .bytes()
         .await
@@ -229,11 +242,6 @@ async fn proxy_non_streamed(
         .into_response());
     }
 
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        HeaderName::from_static("content-type"),
-        "application/json".parse().unwrap(),
-    );
     Ok((StatusCode::OK, headers, bytes.to_vec()))
 }
 
@@ -262,7 +270,8 @@ async fn proxy_streamed(
         .header("cache-control", "no-cache");
 
     for (name, value) in response.headers() {
-        if name.as_str().to_ascii_lowercase().starts_with("x-") {
+        let lower = name.as_str().to_ascii_lowercase();
+        if lower.starts_with("x-") || lower == "retry-after" {
             stream_builder = stream_builder.header(name.clone(), value.clone());
         }
     }
