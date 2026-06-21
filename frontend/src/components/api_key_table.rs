@@ -1,13 +1,17 @@
-use gloo_timers::callback::Timeout;
 use sycamore::prelude::*;
 use sycamore::web::events;
 use sycamore::web::tags::*;
 use sycamore_futures::spawn_local_scoped;
 
-use crate::api::{create_api_key, delete_api_key};
+use crate::api::{create_api_key, delete_api_key, toggle_api_key};
+use crate::components::data_table::{
+    debounce_refresh, render_table_header, table_container, table_shell, th_center, th_left,
+};
+use crate::components::delete_confirm::render_delete_confirm;
 use crate::components::modal::{
-    form_delete_footer, form_error, form_field, form_input, form_submit_footer, modal_dialog,
-    modal_title,
+    action_cell, form_checkbox, form_error, form_field, form_input, form_submit_footer,
+    modal_dialog, modal_title, mono_cell, name_cell, status_badge, text_cell, timestamp_cell,
+    zebra_bg,
 };
 use crate::i18n::I18n;
 use crate::models::ApiKeyListItem;
@@ -19,6 +23,17 @@ fn render_create_modal(
     show_create_modal: Signal<bool>,
 ) -> View {
     let form_name = create_signal(String::new());
+    let form_never_expire = create_signal(false);
+    let form_expires = create_signal({
+        let d = js_sys::Date::new_0();
+        d.set_date(d.get_date() + 30);
+        format!(
+            "{:04}-{:02}-{:02}T00:00",
+            d.get_full_year(),
+            d.get_month() + 1,
+            d.get_date(),
+        )
+    });
     let form_err = create_signal(String::new());
     let form_loading = create_signal(false);
     let result = create_signal::<Option<(String, String)>>(None);
@@ -33,45 +48,82 @@ fn render_create_modal(
             let i18n = i18n.clone();
             let uname = username.clone();
             move || -> View { match result.get_clone() {
-                Some((ref key, ref name)) => div().class("space-y-4").children((
-                    modal_title(i18n.t("api_key_created"), backdrop_close),
-                    p().class("text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 px-3 py-2 rounded-lg")
-                        .children(i18n.t("api_key_raw_key_hint")),
-                    form_field(
-                        i18n.t("api_key_name"),
-                        span().class("text-gray-900 dark:text-gray-100 font-medium").children(name.clone()).into(),
-                    ),
-                    form_field(
-                        i18n.t("api_key_key"),
-                        div().class("bg-gray-100 dark:bg-gray-700 px-3 py-2 rounded-lg text-sm font-mono break-all text-gray-800 dark:text-gray-200 select-all").children(key.clone()).into(),
-                    ),
-                    div().class("flex justify-end").children(
-                        button()
-                            .attr("type", "button")
-                            .class("px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer")
-                            .on(events::click, backdrop_close)
-                            .children(i18n.t("close")),
-                    ),
-                )).into(),
+                Some((ref key, ref name)) => {
+                    let copied = create_signal(false);
+                    let key_for_copy = key.clone();
+                    div().class("space-y-4").children((
+                        modal_title(i18n.t("api_key_created"), backdrop_close),
+                        p().class("text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 px-3 py-2 rounded-lg")
+                            .children(i18n.t("api_key_raw_key_hint")),
+                        div().children((
+                            label().class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
+                                .children(i18n.t("api_key_name")),
+                            span().class("text-gray-900 dark:text-gray-100 font-medium").children(name.clone()),
+                        )),
+                        div().children((
+                            label().class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
+                                .children(i18n.t("api_key_key")),
+                            div().class("flex items-center gap-2").children((
+                                div().class("flex-1 bg-gray-100 dark:bg-gray-700 px-3 py-2 rounded-lg text-sm font-mono break-all text-gray-800 dark:text-gray-200 select-all").children(key.clone()),
+                                button()
+                                    .attr("type", "button")
+                                    .class("shrink-0 px-3 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 border border-gray-300 dark:border-gray-600 rounded-lg transition-colors cursor-pointer")
+                                    .on(events::click, {
+                                        let k = key_for_copy.clone();
+                                        move |_| {
+                                            if let Some(w) = web_sys::window() {
+                                                let _ = w.navigator().clipboard().write_text(&k);
+                                                copied.set(true);
+                                            }
+                                        }
+                                    })
+                                    .children(i().class("fas fa-copy")),
+                            )),
+                        )),
+                        View::from_dynamic({
+                            let i18n = i18n.clone();
+                            move || {
+                                if copied.get() {
+                                    p().class("text-sm text-green-600 dark:text-green-400").children(i18n.t("copied_success")).into()
+                                } else {
+                                    View::new()
+                                }
+                            }
+                        }),
+                        div().class("flex justify-end").children(
+                            button()
+                                .attr("type", "button")
+                                .class("px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer")
+                                .on(events::click, backdrop_close)
+                                .children(i18n.t("close")),
+                        ),
+                    )).into()
+                },
                 None => form()
                     .on(events::submit, {
                         let uname = uname.clone();
                         move |ev: web_sys::SubmitEvent| {
                             ev.prevent_default();
-                            if form_loading.get() {
-                                return;
-                            }
+                            if form_loading.get() { return; }
                             let n = form_name.get_clone();
                             if n.is_empty() {
-                                form_err.set("Name is required".to_string());
+                                form_err.set("Name is required".into());
                                 return;
                             }
                             form_loading.set(true);
                             form_err.set(String::new());
-                            let name = n;
+                            let expires_at = if form_never_expire.get() {
+                                None
+                            } else {
+                                let dt = form_expires.get_clone();
+                                if dt.is_empty() { None } else {
+                                    let ts = js_sys::Date::new(&dt.into()).get_time();
+                                    if ts.is_nan() { None } else { Some((ts / 1000.0) as i64) }
+                                }
+                            };
                             let uname = uname.clone();
                             spawn_local_scoped(async move {
-                                match create_api_key(&uname, &name).await {
+                                match create_api_key(&uname, &n, expires_at).await {
                                     Ok(resp) => {
                                         form_loading.set(false);
                                         result.set(Some((resp.key, resp.name)));
@@ -87,14 +139,18 @@ fn render_create_modal(
                     .class("space-y-4")
                     .children((
                         modal_title(i18n.t("api_key_create"), backdrop_close),
-                        form_field(i18n.t("api_key_name"), form_input(i18n.t("api_key_name"), form_name)),
+                        form_field("create-apikey-name".into(), i18n.t("api_key_name"), form_input("create-apikey-name".into(), i18n.t("api_key_name"), form_name)),
+                        form_field("create-apikey-expires".into(), i18n.t("expires_at"),
+                            input()
+                                .attr("id", "create-apikey-expires")
+                                .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:border-indigo-500 outline-none")
+                                .attr("type", "datetime-local")
+                                .bool_attr("disabled", move || form_never_expire.get())
+                                .bind(sycamore::web::bind::value, form_expires)
+                                .into()),
+                        form_checkbox("create-apikey-never-expire".into(), i18n.t("never_expires"), form_never_expire),
                         form_error(form_err),
-                        form_submit_footer(
-                            i18n.t("cancel"),
-                            backdrop_close,
-                            form_loading,
-                            i18n.t("save_create"),
-                        ),
+                        form_submit_footer(i18n.t("cancel"), backdrop_close, form_loading, i18n.t("save_create")),
                     ))
                     .into(),
             }
@@ -103,59 +159,11 @@ fn render_create_modal(
     )
 }
 
-fn render_delete_confirm(
-    i18n: &I18n,
-    username: String,
-    api_key_refresh: Signal<usize>,
-    show_delete_confirm: Signal<Option<ApiKeyListItem>>,
-    item: ApiKeyListItem,
-) -> View {
-    let deleting = create_signal(false);
-    let key_id = item.id.clone();
-    let on_delete = move |_| {
-        if deleting.get() {
-            return;
-        }
-        deleting.set(true);
-        let kid = key_id.clone();
-        let uname = username.clone();
-        let refresh = api_key_refresh;
-        let d = deleting;
-        spawn_local_scoped(async move {
-            match delete_api_key(&uname, &kid).await {
-                Ok(_) => {
-                    refresh.update(|v| *v += 1);
-                }
-                Err(e) => {
-                    d.set(false);
-                    sycamore::web::console_log!("Failed to delete API key: {}", e);
-                }
-            }
-        });
-    };
-
-    modal_dialog(
-        (
-            modal_title(i18n.t("delete_confirm_title"), move |_| {
-                show_delete_confirm.set(None)
-            }),
-            p().class("text-gray-600 dark:text-gray-400 text-sm mb-6")
-                .children(i18n.t_replace("api_key_delete_confirm", "name", &item.name)),
-            form_delete_footer(
-                i18n.t("cancel"),
-                move |_| show_delete_confirm.set(None),
-                deleting,
-                i18n.t("delete"),
-                on_delete,
-            ),
-        ),
-        move |_| show_delete_confirm.set(None),
-    )
-}
-
 fn make_api_key_rows(
     keys: Vec<ApiKeyListItem>,
     i18n: &I18n,
+    username: String,
+    api_key_refresh: Signal<usize>,
     show_delete_confirm: Signal<Option<ApiKeyListItem>>,
 ) -> Vec<View> {
     let enabled_text = i18n.t("status_enabled");
@@ -164,34 +172,46 @@ fn make_api_key_rows(
         .enumerate()
         .map(|(idx, item)| {
             let item_modal = item.clone();
-            let ec = if item.enabled {
-                "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
-            } else {
-                "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
-            };
-            let st = if item.enabled { &enabled_text } else { &disabled_text };
-            let bg = if idx % 2 == 0 { "" } else { "bg-gray-50 dark:bg-gray-800/50" };
-            let span_class = format!("inline-block px-2 py-1 rounded-full text-xs font-medium {}", ec);
-            tr().class(bg)
+            let toggle_enabled = item.enabled;
+            let toggle_key_id = item.id.clone();
+            let uname = username.clone();
+            tr().class(zebra_bg(idx))
                 .children((
-                    td().class("px-6 py-4 font-medium text-gray-800 dark:text-gray-200")
-                        .children(item.name),
-                    td().class("px-6 py-4 font-mono text-xs text-gray-500 dark:text-gray-400 max-w-[200px] truncate")
-                        .children(item.key),
-                    td().class("px-6 py-4 text-gray-400 dark:text-gray-500 text-sm")
-                        .children(item.created_at),
-                    td().class("px-6 py-4 text-gray-400 dark:text-gray-500 text-sm")
-                        .children("—"),
-                    td().class("px-6 py-4")
-                        .children(span().class(span_class).children(st.clone())),
-                    td().class("px-6 py-4 text-center whitespace-nowrap").children(
-                        button()
-                            .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
-                            .on(events::click, {
-                                let p = item_modal.clone();
-                                move |_| show_delete_confirm.set(Some(p.clone()))
-                            })
-                            .children(i().class("fas fa-trash text-xs")),
+                    name_cell(item.name),
+                    mono_cell(item.key),
+                    timestamp_cell(item.created_at),
+                    text_cell(match item.expires_at {
+                        Some(ts) => crate::models::format_timestamp(ts),
+                        None => "—".into(),
+                    }),
+                    text_cell(status_badge(item.enabled, &enabled_text, &disabled_text)),
+                    timestamp_cell(item.updated_at),
+                    action_cell(
+                        div().class("flex items-center justify-center gap-3").children((
+                            button()
+                                .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+                                .on(events::click, move |_| {
+                                    let kid = toggle_key_id.clone();
+                                    let u = uname.clone();
+                                    let refresh = api_key_refresh;
+                                    spawn_local_scoped(async move {
+                                        match toggle_api_key(&u, &kid, !toggle_enabled).await {
+                                            Ok(_) => { refresh.update(|v| *v += 1); }
+                                            Err(e) => { sycamore::web::console_log!("Failed: {}", e); }
+                                        }
+                                    });
+                                })
+                                .children(i().class(move || {
+                                    if toggle_enabled { "fas fa-toggle-on text-xs" } else { "fas fa-toggle-off text-xs" }
+                                })),
+                            button()
+                                .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+                                .on(events::click, {
+                                    let p = item_modal.clone();
+                                    move |_| show_delete_confirm.set(Some(p.clone()))
+                                })
+                                .children(i().class("fas fa-trash text-xs")),
+                        )),
                     ),
                 ))
                 .into()
@@ -216,8 +236,50 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
     let username = props.username;
     let api_key_refresh = props.api_key_refresh;
     let api_key_refreshing = props.api_key_refreshing;
-    let rows = make_api_key_rows(keys.clone(), &i18n, show_delete_confirm);
+
+    let rows = make_api_key_rows(
+        keys.clone(),
+        &i18n,
+        username.clone(),
+        api_key_refresh,
+        show_delete_confirm,
+    );
     let count = keys.len();
+
+    let header = render_table_header(
+        &i18n,
+        i18n.t("api_key_title"),
+        count,
+        api_key_refreshing,
+        debounce_refresh(api_key_refresh, api_key_refreshing),
+        {
+            let i18n = i18n.clone();
+            button()
+                .class("px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors flex items-center gap-2 text-sm font-medium cursor-pointer")
+                .on(events::click, {
+                    let scm = show_create_modal;
+                    move |_| scm.set(true)
+                })
+                .children((
+                    i().class("fas fa-plus"),
+                    span().children(i18n.t("api_key_create")),
+                ))
+                .into()
+        },
+    );
+
+    let table = table_shell(
+        vec![
+            th_left(i18n.t("name")),
+            th_left(i18n.t("api_key_key")),
+            th_left(i18n.t("created_at")),
+            th_left(i18n.t("expires_at")),
+            th_left(i18n.t("table_status")),
+            th_left(i18n.t("updated_at")),
+            th_center(i18n.t("provider_actions")),
+        ],
+        rows,
+    );
 
     let create_modal = View::from_dynamic({
         let i18n = i18n.clone();
@@ -231,79 +293,45 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
         }
     });
 
-    let delete_confirm = View::from_dynamic({
+    let delete_modal = View::from_dynamic({
         let i18n = i18n.clone();
         let uname = username.clone();
         move || match show_delete_confirm.get_clone() {
-            Some(item) => render_delete_confirm(
-                &i18n,
-                uname.clone(),
-                api_key_refresh,
-                show_delete_confirm,
-                item,
-            ),
+            Some(item) => {
+                let deleting = create_signal(false);
+                let key_id = item.id.clone();
+                let u = uname.clone();
+                let refresh = api_key_refresh;
+                render_delete_confirm(
+                    &i18n,
+                    i18n.t_replace("api_key_delete_confirm", "name", &item.name),
+                    deleting,
+                    move |_| {
+                        if deleting.get() {
+                            return;
+                        }
+                        deleting.set(true);
+                        let kid = key_id.clone();
+                        let u = u.clone();
+                        let d = deleting;
+                        spawn_local_scoped(async move {
+                            match delete_api_key(&u, &kid).await {
+                                Ok(_) => {
+                                    refresh.update(|v| *v += 1);
+                                }
+                                Err(e) => {
+                                    d.set(false);
+                                    sycamore::web::console_log!("Failed: {}", e);
+                                }
+                            }
+                        });
+                    },
+                    move |_| show_delete_confirm.set(None),
+                )
+            }
             None => View::new(),
         }
     });
 
-    div()
-        .class("bg-white dark:bg-gray-800 rounded-xl shadow-sm overflow-hidden")
-        .children((
-            div()
-                .class("p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between")
-                .children((
-                    div().class("flex items-center gap-3").children((
-                        h2().class("text-xl font-semibold text-gray-800 dark:text-gray-100")
-                            .children(i18n.t("api_key_title")),
-                        span().class(
-                            "text-sm text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-3 py-1 rounded-full",
-                        )
-                        .children(i18n.t_replace("total_count", "count", &count.to_string())),
-                        button()
-                            .disabled(move || api_key_refreshing.get())
-                            .class("text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed")
-                            .on(events::click, move |_| {
-                                if api_key_refreshing.get() { return; }
-                                api_key_refreshing.set(true);
-                                let r = api_key_refresh;
-                                Timeout::new(50, move || { r.update(|v| *v += 1); }).forget();
-                            })
-                            .children(i().class(move || {
-                                if api_key_refreshing.get() { "fas fa-sync-alt animate-spin" } else { "fas fa-sync-alt" }
-                            })),
-                    )),
-                    button()
-                        .class("px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors flex items-center gap-2 text-sm font-medium cursor-pointer")
-                        .on(events::click, move |_| show_create_modal.set(true))
-                        .children((
-                            i().class("fas fa-plus"),
-                            span().children(i18n.t("api_key_create")),
-                        )),
-                )),
-            div().class("overflow-x-auto").children(
-                table().class("w-full text-sm").children((
-                    thead().children(
-                        tr().class("border-b border-gray-100 dark:border-gray-700")
-                            .children((
-                                th().class("text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
-                                    .children(i18n.t("name")),
-                                th().class("text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
-                                    .children(i18n.t("api_key_key")),
-                                th().class("text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
-                                    .children(i18n.t("created_at")),
-                                th().class("text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
-                                    .children(i18n.t("expires_at")),
-                                th().class("text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
-                                    .children(i18n.t("table_status")),
-                                th().class("text-center px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
-                                    .children(i18n.t("provider_actions")),
-                            )),
-                    ),
-                    tbody().children(rows),
-                )),
-            ),
-            create_modal,
-            delete_confirm,
-        ))
-        .into()
+    table_container(header, table, vec![create_modal, delete_modal])
 }

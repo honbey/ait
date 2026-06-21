@@ -65,6 +65,7 @@ enum RouteData {
     Providers(Vec<Provider>),
     Models(Vec<Model>, Vec<Provider>),
     ApiKeys(Vec<ApiKeyListItem>),
+    TextGeneration(Vec<Model>),
     Placeholder,
     Error(String),
 }
@@ -159,6 +160,10 @@ pub fn Layout(props: LayoutProps) -> View {
                         .unwrap_or_else(|e| RouteData::Error(e.to_string())),
                     None => RouteData::Placeholder,
                 },
+                Route::TextGeneration => fetch_models()
+                    .await
+                    .map(RouteData::TextGeneration)
+                    .unwrap_or_else(|e| RouteData::Error(e.to_string())),
                 _ => RouteData::Placeholder,
             };
             match route.get() {
@@ -243,6 +248,8 @@ pub fn Layout(props: LayoutProps) -> View {
                                         &i18n_view,
                                         authenticated,
                                         route,
+                                        username,
+                                        role,
                                     )
                                 }
                                 Route::Register => {
@@ -266,6 +273,9 @@ pub fn Layout(props: LayoutProps) -> View {
                                     Some(RouteData::ApiKeys(k)) => {
                                         let uname = username.get_clone().unwrap_or_default();
                                         crate::views::api_keys::render_api_keys_view(k, uname, api_key_refresh, api_key_refreshing)
+                                    }
+                                    Some(RouteData::TextGeneration(m)) => {
+                                        crate::views::text_generation::render_text_generation_view(m)
                                     }
                                     Some(RouteData::Placeholder) => match route.get() {
                                         Route::ApiKeys => {

@@ -7,9 +7,15 @@ use sycamore_futures::spawn_local_scoped;
 use crate::i18n::I18n;
 use crate::route::Route;
 
-pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal<Route>) -> View {
-    let username = create_signal(String::new());
-    let password = create_signal(String::new());
+pub fn render_login_view(
+    i18n: &I18n,
+    authenticated: Signal<bool>,
+    route: Signal<Route>,
+    username: Signal<Option<String>>,
+    role: Signal<Option<String>>,
+) -> View {
+    let form_user = create_signal(String::new());
+    let form_pass = create_signal(String::new());
     let error = create_signal(String::new());
     let loading = create_signal(false);
 
@@ -21,24 +27,28 @@ pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal
             return;
         }
 
-        if username.get_clone().is_empty() || password.get_clone().is_empty() {
+        if form_user.get_clone().is_empty() || form_pass.get_clone().is_empty() {
             error.set(i18n_submit.t("login_required"));
             return;
         }
 
         loading.set(true);
-        let u = username.get_clone();
-        let p = password.get_clone();
+        let u = form_user.get_clone();
+        let p = form_pass.get_clone();
         let i18n_async = i18n_submit.clone();
         let loading_async = loading;
         spawn_local_scoped(async move {
             match crate::api::login_api(&u, &p).await {
                 Ok(()) => {
+                    if let Ok(Some((uname, r))) = crate::api::check_session().await {
+                        username.set(Some(uname));
+                        role.set(Some(r));
+                    }
                     authenticated.set(true);
                     route.set(Route::Dashboard);
                 }
                 Err(e) => {
-                    error.set(i18n_async.t_replace("login_error", "msg", &e));
+                    error.set(i18n_async.t_replace("login_error", "msg", &e.to_string()));
                     loading_async.set(false);
                 }
             }
@@ -63,7 +73,7 @@ pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal
                             .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
                             .attr("type", "text")
                             .attr("placeholder", i18n.t("username"))
-                            .bind(bind::value, username)
+                            .bind(bind::value, form_user)
                             .on(events::input, move |_| error.set(String::new())),
                     )),
                     div().class("mb-6").children((
@@ -74,7 +84,7 @@ pub fn render_login_view(i18n: &I18n, authenticated: Signal<bool>, route: Signal
                             .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
                             .attr("type", "password")
                             .attr("placeholder", i18n.t("password"))
-                            .bind(bind::value, password)
+                            .bind(bind::value, form_pass)
                             .on(events::input, move |_| error.set(String::new())),
                     )),
                     View::from_dynamic(move || {

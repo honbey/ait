@@ -15,8 +15,10 @@
 #   revert    revert a previous commit
 #
 # Scopes:
-#   db, middleware, handlers, apikeys, users, auth,
-#   admin, proxy, main, config, models, providers
+#   Backend: db, middleware, handlers, apikeys, users, auth,
+#            admin, proxy, main, config, models, providers
+#   Frontend: fe-api, fe-components, fe-topbar, fe-views,
+#             fe-i18n, fe-models, fe-layout
 #
 # Subject: imperative mood, lowercase, no period
 # Body:   explain what and why (not how), wrap at 72 chars

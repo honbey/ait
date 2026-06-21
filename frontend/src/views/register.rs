@@ -40,7 +40,7 @@ pub fn render_register_view(i18n: &I18n, route: Signal<Route>) -> View {
                     route_async.set(Route::Login);
                 }
                 Err(e) => {
-                    error.set(i18n_async.t_replace("register_error", "msg", &e));
+                    error.set(i18n_async.t_replace("register_error", "msg", &e.to_string()));
                     loading_async.set(false);
                 }
             }

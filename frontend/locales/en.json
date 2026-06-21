@@ -57,6 +57,7 @@
   "cancel": "Cancel",
   "save": "Save",
   "model_add": "Add Model",
+  "model_edit": "Edit Model",
   "model_delete": "Delete Model",
   "api_key_title": "API Key List",
   "api_key_create": "Create API Key",
@@ -67,5 +68,19 @@
   "api_key_delete_confirm": "Are you sure you want to delete key \"{{ name }}\"?",
   "expires_at": "Expires At",
   "close": "Close",
-  "save_create": "Create"
+  "save_create": "Create",
+  "copy": "Copy",
+  "copied_success": "☑️ Copied to clipboard!",
+  "never_expires": "Never expires",
+  "text_gen_api_key": "API Key",
+  "text_gen_select_model": "Model",
+  "text_gen_prompt": "Prompt",
+  "text_gen_prompt_placeholder": "Enter your prompt here...",
+  "text_gen_generate": "Generate",
+  "text_gen_generating": "Generating...",
+  "text_gen_response": "Response",
+  "text_gen_max_tokens": "Max Tokens",
+  "text_gen_temperature": "Temperature",
+  "text_gen_top_p": "Top P",
+  "text_gen_error": "Generation failed: {{ msg }}"
 }

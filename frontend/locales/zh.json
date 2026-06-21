@@ -57,6 +57,7 @@
   "cancel": "取消",
   "save": "保存",
   "model_add": "添加模型",
+  "model_edit": "编辑模型",
   "model_delete": "删除模型",
   "api_key_title": "API 密钥列表",
   "api_key_create": "创建密钥",
@@ -67,5 +68,19 @@
   "api_key_delete_confirm": "确定要删除密钥 \"{{ name }}\" 吗？",
   "expires_at": "过期时间",
   "close": "关闭",
-  "save_create": "创建"
+  "save_create": "创建",
+  "copy": "复制",
+  "copied_success": "☑️ 已复制到剪贴板！",
+  "never_expires": "永不过期",
+  "text_gen_api_key": "API 密钥",
+  "text_gen_select_model": "模型",
+  "text_gen_prompt": "提示词",
+  "text_gen_prompt_placeholder": "请输入提示词...",
+  "text_gen_generate": "生成",
+  "text_gen_generating": "生成中...",
+  "text_gen_response": "响应",
+  "text_gen_max_tokens": "最大 Token 数",
+  "text_gen_temperature": "温度",
+  "text_gen_top_p": "Top P",
+  "text_gen_error": "生成失败：{{ msg }}"
 }

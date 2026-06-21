@@ -1,3 +1,4 @@
+use gloo_timers::callback::Timeout;
 use sycamore::prelude::*;
 use sycamore::web::events;
 use sycamore::web::tags::*;
@@ -186,13 +187,13 @@ pub fn Topbar(props: TopbarProps) -> View {
                                                     button()
                                                         .class("w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700")
                                                         .on(events::click, move |_e: web_sys::MouseEvent| {
-                                                            show_dropdown.set(false);
-                                                            let a = auth;
-                                                            let rt = r;
                                                             spawn_local_scoped(async move {
                                                                 crate::api::logout_api().await.ok();
-                                                                a.set(false);
-                                                                rt.set(crate::route::Route::Index);
+                                                                Timeout::new(0, move || {
+                                                                    show_dropdown.set(false);
+                                                                    auth.set(false);
+                                                                    r.set(crate::route::Route::Index);
+                                                                }).forget();
                                                             });
                                                         })
                                                         .children(i18n_logout.t("logout")),
