@@ -58,6 +58,38 @@ pub enum ProviderType {
     Llamacpp,
 }
 
+impl ProviderType {
+    pub fn serde_name(&self) -> &'static str {
+        match self {
+            Self::OpenAICompat => "openai_compat",
+            Self::DeepSeek => "deepseek",
+            Self::Zhipu => "zhipu",
+            Self::Ollama => "ollama",
+            Self::Llamacpp => "llamacpp",
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::OpenAICompat => "OpenAI Compatible",
+            Self::DeepSeek => "DeepSeek",
+            Self::Zhipu => "Zhipu",
+            Self::Ollama => "Ollama",
+            Self::Llamacpp => "llama.cpp",
+        }
+    }
+
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::OpenAICompat,
+            Self::DeepSeek,
+            Self::Zhipu,
+            Self::Ollama,
+            Self::Llamacpp,
+        ]
+    }
+}
+
 pub fn mask_api_key(key: &str) -> String {
     if key.len() <= 9 {
         "******".to_string()

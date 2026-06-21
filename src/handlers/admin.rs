@@ -163,6 +163,26 @@ impl From<UpdateModelRequest> for Model {
     }
 }
 
+// --- Provider type info ---
+
+#[derive(Serialize)]
+pub struct ProviderTypeInfo {
+    pub id: String,
+    pub name: String,
+}
+
+pub async fn list_provider_types() -> Json<Vec<ProviderTypeInfo>> {
+    Json(
+        ProviderType::all()
+            .iter()
+            .map(|t| ProviderTypeInfo {
+                id: t.serde_name().to_string(),
+                name: t.display_name().to_string(),
+            })
+            .collect(),
+    )
+}
+
 // --- Provider CRUD ---
 
 pub async fn create_provider(
