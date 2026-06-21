@@ -57,6 +57,7 @@
   "cancel": "Cancel",
   "save": "Save",
   "model_add": "Add Model",
+  "model_edit": "Edit Model",
   "model_delete": "Delete Model",
   "api_key_title": "API Key List",
   "api_key_create": "Create API Key",

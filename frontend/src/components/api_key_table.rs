@@ -4,13 +4,13 @@ use sycamore::web::events;
 use sycamore::web::tags::*;
 use sycamore_futures::spawn_local_scoped;
 
-use crate::api::{create_api_key, delete_api_key};
+use crate::api::{create_api_key, delete_api_key, toggle_api_key};
 use crate::components::modal::{
     form_delete_footer, form_error, form_field, form_input, form_submit_footer, modal_dialog,
     modal_title,
 };
 use crate::i18n::I18n;
-use crate::models::ApiKeyListItem;
+use crate::models::{ApiKeyListItem, format_timestamp};
 
 fn render_create_modal(
     i18n: &I18n,
@@ -19,6 +19,7 @@ fn render_create_modal(
     show_create_modal: Signal<bool>,
 ) -> View {
     let form_name = create_signal(String::new());
+    let form_expires = create_signal(String::new());
     let form_err = create_signal(String::new());
     let form_loading = create_signal(false);
     let result = create_signal::<Option<(String, String)>>(None);
@@ -70,8 +71,17 @@ fn render_create_modal(
                             form_err.set(String::new());
                             let name = n;
                             let uname = uname.clone();
+                            let expires_at = {
+                                let raw = form_expires.get_clone();
+                                if raw.is_empty() {
+                                    None
+                                } else {
+                                    let ts = js_sys::Date::new(&raw.into()).get_time();
+                                    if ts.is_nan() { None } else { Some((ts / 1000.0) as i64) }
+                                }
+                            };
                             spawn_local_scoped(async move {
-                                match create_api_key(&uname, &name).await {
+                                match create_api_key(&uname, &name, expires_at).await {
                                     Ok(resp) => {
                                         form_loading.set(false);
                                         result.set(Some((resp.key, resp.name)));
@@ -88,6 +98,12 @@ fn render_create_modal(
                     .children((
                         modal_title(i18n.t("api_key_create"), backdrop_close),
                         form_field(i18n.t("api_key_name"), form_input(i18n.t("api_key_name"), form_name)),
+                        form_field(i18n.t("expires_at"),
+                            input()
+                                .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
+                                .attr("type", "datetime-local")
+                                .bind(sycamore::web::bind::value, form_expires)
+                                .into()),
                         form_error(form_err),
                         form_submit_footer(
                             i18n.t("cancel"),
@@ -156,6 +172,8 @@ fn render_delete_confirm(
 fn make_api_key_rows(
     keys: Vec<ApiKeyListItem>,
     i18n: &I18n,
+    username: String,
+    api_key_refresh: Signal<usize>,
     show_delete_confirm: Signal<Option<ApiKeyListItem>>,
 ) -> Vec<View> {
     let enabled_text = i18n.t("status_enabled");
@@ -172,6 +190,9 @@ fn make_api_key_rows(
             let st = if item.enabled { &enabled_text } else { &disabled_text };
             let bg = if idx % 2 == 0 { "" } else { "bg-gray-50 dark:bg-gray-800/50" };
             let span_class = format!("inline-block px-2 py-1 rounded-full text-xs font-medium {}", ec);
+            let toggle_enabled = item.enabled;
+            let toggle_key_id = item.id.clone();
+            let uname = username.clone();
             tr().class(bg)
                 .children((
                     td().class("px-6 py-4 font-medium text-gray-800 dark:text-gray-200")
@@ -179,19 +200,42 @@ fn make_api_key_rows(
                     td().class("px-6 py-4 font-mono text-xs text-gray-500 dark:text-gray-400 max-w-[200px] truncate")
                         .children(item.key),
                     td().class("px-6 py-4 text-gray-400 dark:text-gray-500 text-sm")
-                        .children(item.created_at),
+                        .children(format_timestamp(item.created_at)),
                     td().class("px-6 py-4 text-gray-400 dark:text-gray-500 text-sm")
-                        .children("—"),
+                        .children(match item.expires_at {
+                            Some(timestamp) => format_timestamp(timestamp),
+                            None => "—".to_string(),
+                        }),
                     td().class("px-6 py-4")
                         .children(span().class(span_class).children(st.clone())),
+                    td().class("px-6 py-4 text-gray-400 dark:text-gray-500 text-sm")
+                        .children(format_timestamp(item.updated_at)),
                     td().class("px-6 py-4 text-center whitespace-nowrap").children(
-                        button()
-                            .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
-                            .on(events::click, {
-                                let p = item_modal.clone();
-                                move |_| show_delete_confirm.set(Some(p.clone()))
-                            })
-                            .children(i().class("fas fa-trash text-xs")),
+                        div().class("flex items-center justify-center gap-3").children((
+                            button()
+                                .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+                                .on(events::click, move |_| {
+                                    let kid = toggle_key_id.clone();
+                                    let u = uname.clone();
+                                    let refresh = api_key_refresh;
+                                    spawn_local_scoped(async move {
+                                        match toggle_api_key(&u, &kid, !toggle_enabled).await {
+                                            Ok(_) => { refresh.update(|v| *v += 1); }
+                                            Err(e) => { sycamore::web::console_log!("Failed to toggle API key: {}", e); }
+                                        }
+                                    });
+                                })
+                                .children(i().class(move || {
+                                    if toggle_enabled { "fas fa-toggle-on text-xs" } else { "fas fa-toggle-off text-xs" }
+                                })),
+                            button()
+                                .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+                                .on(events::click, {
+                                    let p = item_modal.clone();
+                                    move |_| show_delete_confirm.set(Some(p.clone()))
+                                })
+                                .children(i().class("fas fa-trash text-xs")),
+                        )),
                     ),
                 ))
                 .into()
@@ -216,7 +260,7 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
     let username = props.username;
     let api_key_refresh = props.api_key_refresh;
     let api_key_refreshing = props.api_key_refreshing;
-    let rows = make_api_key_rows(keys.clone(), &i18n, show_delete_confirm);
+    let rows = make_api_key_rows(keys.clone(), &i18n, username.clone(), api_key_refresh, show_delete_confirm);
     let count = keys.len();
 
     let create_modal = View::from_dynamic({
@@ -295,6 +339,8 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
                                     .children(i18n.t("expires_at")),
                                 th().class("text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
                                     .children(i18n.t("table_status")),
+                                th().class("text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
+                                    .children(i18n.t("updated_at")),
                                 th().class("text-center px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
                                     .children(i18n.t("provider_actions")),
                             )),

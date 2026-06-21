@@ -4,7 +4,6 @@ use sycamore::web::bind;
 use sycamore::web::events;
 use sycamore::web::tags::*;
 use sycamore_futures::spawn_local_scoped;
-use web_sys::wasm_bindgen::JsCast;
 
 use crate::api::{create_provider, delete_provider, update_provider};
 use crate::components::modal::{
@@ -12,7 +11,7 @@ use crate::components::modal::{
     form_submit_footer, modal_dialog, modal_title,
 };
 use crate::i18n::I18n;
-use crate::models::Provider;
+use crate::models::{Provider, format_timestamp};
 
 fn render_detail_modal(i18n: &I18n, prov: Provider, show_detail: Signal<Option<usize>>) -> View {
     let enabled_text = i18n.t("status_enabled");
@@ -36,8 +35,8 @@ fn render_detail_modal(i18n: &I18n, prov: Provider, show_detail: Signal<Option<u
             detail_row(i18n.t("provider_base_url"), prov.base_url),
             detail_row(i18n.t("api_key"), api_key_display),
             detail_row(i18n.t("table_status"), status),
-            detail_row(i18n.t("created_at"), format!("{}", prov.created_at as u64)),
-            detail_row(i18n.t("updated_at"), format!("{}", prov.updated_at as u64)),
+            detail_row(i18n.t("created_at"), format_timestamp(prov.created_at)),
+            detail_row(i18n.t("updated_at"), format_timestamp(prov.updated_at)),
         ),
         move |_| show_detail.set(None),
     )
@@ -187,9 +186,7 @@ fn render_edit_modal(
                 form_field(i18n.t("provider_api_type"),
                     select()
                         .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
-                        .on(events::change, move |ev: web_sys::Event| {
-                            form_type.set(ev.target().unwrap().unchecked_into::<web_sys::HtmlSelectElement>().value());
-                        })
+                        .bind(bind::value, form_type)
                         .children((
                             option().attr("value", "openai_compat")
                                 .bool_attr("selected", move || form_type.get_clone() == "openai_compat")
@@ -310,6 +307,8 @@ fn make_provider_rows(
                         .children(prov.base_url),
                     td().class("px-6 py-4")
                         .children(span().class(span_class).children(st.clone())),
+                    td().class("px-6 py-4 text-gray-400 dark:text-gray-500 text-sm")
+                        .children(format_timestamp(prov.updated_at)),
                     td().class("px-6 py-4 text-center whitespace-nowrap").children(
                         button()
                             .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
@@ -469,6 +468,8 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
                                     .children(i18n.t("provider_base_url")),
                                 th().class("text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
                                     .children(i18n.t("table_status")),
+                                th().class("text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
+                                    .children(i18n.t("updated_at")),
                                 th().class("text-center px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
                                     .children(i18n.t("provider_detail")),
                                 th().class("text-center px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")

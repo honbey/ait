@@ -3,7 +3,9 @@ use serde::de::DeserializeOwned;
 use gloo_net::Error as NetError;
 use gloo_net::http::{Headers, Request};
 
-use crate::models::{ApiKeyListItem, CreateApiKeyResponse, DashboardData, Model, Provider};
+use crate::models::{
+    ApiKeyListItem, CreateApiKeyResponse, DashboardData, DashboardStats, Model, Provider,
+};
 
 /// Get base URL from window.location.origin at runtime
 fn get_base_url() -> String {
@@ -13,27 +15,11 @@ fn get_base_url() -> String {
         .unwrap_or_default()
 }
 
-// --- Mock data ---
-
-fn mock_api_request_count() -> u64 {
-    615
-}
-
-fn mock_token_consumption() -> u64 {
-    17814528
-}
-
-// --- Auth headers (session via HttpOnly cookie; static Bearer for CLI/scripts) ---
-
-fn auth_headers() -> Headers {
-    Headers::new()
-}
-
 // --- Generic request helper ---
 
 async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
     let url = format!("{}/admin/{}", get_base_url(), path);
-    let resp = Request::get(&url).headers(auth_headers()).send().await?;
+    let resp = Request::get(&url).send().await?;
 
     if !resp.ok() {
         return Err(NetError::GlooError(format!(
@@ -80,6 +66,36 @@ pub async fn create_model(
     resp.json().await
 }
 
+pub async fn update_model(
+    name: &str,
+    provider_id: &str,
+    upstream_model: &str,
+    enabled: bool,
+) -> Result<Model, NetError> {
+    let url = format!("{}/admin/models/{}", get_base_url(), name);
+    let body = serde_json::json!({
+        "provider_id": provider_id,
+        "upstream_model": upstream_model,
+        "enabled": enabled,
+    });
+    let resp = Request::put(&url)
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .map_err(|e| NetError::GlooError(e.to_string()))?
+        .send()
+        .await?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        return Err(NetError::GlooError(format!(
+            "HTTP {} updating model",
+            status
+        )));
+    }
+
+    resp.json().await
+}
+
 pub async fn delete_model(name: &str) -> Result<(), NetError> {
     let url = format!("{}/admin/models/{}", get_base_url(), name);
     let resp = Request::delete(&url).send().await?;
@@ -101,9 +117,13 @@ pub async fn fetch_api_keys(username: &str) -> Result<Vec<ApiKeyListItem>, NetEr
     api_get(&format!("users/{}/api-keys", username)).await
 }
 
-pub async fn create_api_key(username: &str, name: &str) -> Result<CreateApiKeyResponse, NetError> {
+pub async fn create_api_key(
+    username: &str,
+    name: &str,
+    expires_at: Option<i64>,
+) -> Result<CreateApiKeyResponse, NetError> {
     let url = format!("{}/admin/users/{}/api-keys", get_base_url(), username);
-    let body = serde_json::json!({ "name": name });
+    let body = serde_json::json!({ "name": name, "expires_at": expires_at });
     let resp = Request::post(&url)
         .header("Content-Type", "application/json")
         .body(body.to_string())
@@ -115,6 +135,36 @@ pub async fn create_api_key(username: &str, name: &str) -> Result<CreateApiKeyRe
         let status = resp.status();
         return Err(NetError::GlooError(format!(
             "HTTP {} creating API key",
+            status
+        )));
+    }
+
+    resp.json().await
+}
+
+pub async fn toggle_api_key(
+    username: &str,
+    key_id: &str,
+    enabled: bool,
+) -> Result<ApiKeyListItem, NetError> {
+    let url = format!(
+        "{}/admin/users/{}/api-keys/{}",
+        get_base_url(),
+        username,
+        key_id
+    );
+    let body = serde_json::json!({ "enabled": enabled });
+    let resp = Request::put(&url)
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .map_err(|e| NetError::GlooError(e.to_string()))?
+        .send()
+        .await?;
+
+    if !resp.ok() {
+        let status = resp.status();
+        return Err(NetError::GlooError(format!(
+            "HTTP {} toggling API key",
             status
         )));
     }
@@ -246,16 +296,13 @@ pub async fn fetch_models() -> Result<Vec<Model>, NetError> {
 }
 
 pub async fn fetch_dashboard() -> Result<DashboardData, NetError> {
-    let (providers, models) = futures_util::try_join!(
-        api_get::<Vec<Provider>>("providers"),
-        api_get::<Vec<Model>>("models"),
-    )?;
+    let (stats,) = futures_util::try_join!(api_get::<DashboardStats>("stats"),)?;
 
     Ok(DashboardData {
-        providers,
-        models,
-        api_request_count: mock_api_request_count(),
-        token_consumption: mock_token_consumption(),
+        provider_count: stats.provider_count,
+        model_count: stats.model_count,
+        api_request_count: stats.api_request_count,
+        token_consumption: stats.token_consumption,
     })
 }
 

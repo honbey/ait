@@ -4,13 +4,13 @@ use sycamore::web::events;
 use sycamore::web::tags::*;
 use sycamore_futures::spawn_local_scoped;
 
-use crate::api::{create_model, delete_model};
+use crate::api::{create_model, delete_model, update_model};
 use crate::components::modal::{
     detail_row, form_checkbox, form_delete_footer, form_error, form_field, form_input,
     form_submit_footer, modal_dialog, modal_title,
 };
 use crate::i18n::I18n;
-use crate::models::{Model, Provider};
+use crate::models::{Model, Provider, format_timestamp};
 
 fn render_detail_modal(i18n: &I18n, model: Model, show_detail: Signal<Option<usize>>) -> View {
     let enabled_text = i18n.t("status_enabled");
@@ -32,7 +32,8 @@ fn render_detail_modal(i18n: &I18n, model: Model, show_detail: Signal<Option<usi
             detail_row(i18n.t("model_provider_id"), model.provider_id),
             detail_row(i18n.t("model_upstream_model"), model.upstream_model),
             detail_row(i18n.t("table_status"), status),
-            detail_row(i18n.t("created_at"), format!("{}", model.created_at as u64)),
+            detail_row(i18n.t("created_at"), format_timestamp(model.created_at)),
+            detail_row(i18n.t("updated_at"), format_timestamp(model.updated_at)),
         ),
         move |_| show_detail.set(None),
     )
@@ -119,6 +120,92 @@ fn render_add_modal(
     )
 }
 
+fn render_edit_modal(
+    i18n: &I18n,
+    providers: Vec<Provider>,
+    model_refresh: Signal<usize>,
+    show_edit_modal: Signal<Option<Model>>,
+    model: Model,
+) -> View {
+    let form_name = create_signal(model.name.clone());
+    let form_provider_id = create_signal(model.provider_id.clone());
+    let form_upstream = create_signal(model.upstream_model.clone());
+    let form_enabled = create_signal(model.enabled);
+    let form_err = create_signal(String::new());
+    let form_loading = create_signal(false);
+
+    let on_submit = move |ev: web_sys::SubmitEvent| {
+        ev.prevent_default();
+        if form_loading.get() {
+            return;
+        }
+        let n = form_name.get_clone();
+        let p = form_provider_id.get_clone();
+        if n.is_empty() || p.is_empty() {
+            form_err.set("Name and Provider ID are required".to_string());
+            return;
+        }
+        form_loading.set(true);
+        form_err.set(String::new());
+        let model_name = model.name.clone();
+        let provider_id = p;
+        let upstream = form_upstream.get_clone();
+        let enabled = form_enabled.get();
+        let refresh = model_refresh;
+        let loading = form_loading;
+        let err = form_err;
+        spawn_local_scoped(async move {
+            match update_model(&model_name, &provider_id, &upstream, enabled).await {
+                Ok(_) => {
+                    refresh.update(|v| *v += 1);
+                }
+                Err(e) => {
+                    loading.set(false);
+                    err.set(e.to_string());
+                }
+            }
+        });
+    };
+
+    let provider_options: Vec<View> = providers
+        .into_iter()
+        .map(|p| {
+            option()
+                .attr("value", p.id.clone())
+                .bool_attr("selected", move || {
+                    form_provider_id.get_clone() == p.id.clone()
+                })
+                .children(format!("{} ({})", p.name, p.provider_type))
+                .into()
+        })
+        .collect();
+
+    modal_dialog(
+        form()
+            .on(events::submit, on_submit)
+            .class("space-y-4")
+            .children((
+                modal_title(i18n.t("model_edit"), move |_| show_edit_modal.set(None)),
+                form_field(i18n.t("name"), form_input(i18n.t("name"), form_name)),
+                form_field(i18n.t("model_provider_id"),
+                    select()
+                        .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
+                        .bind(sycamore::web::bind::value, form_provider_id)
+                        .children(provider_options).into()),
+                form_field(i18n.t("model_upstream_model"), form_input(i18n.t("model_upstream_model"), form_upstream)),
+                form_checkbox("edit-enabled".to_string(), i18n.t("status_enabled"), form_enabled),
+                form_error(form_err),
+                form_submit_footer(
+                    i18n.t("cancel"),
+                    move |_| show_edit_modal.set(None),
+                    form_loading,
+                    i18n.t("save"),
+                ),
+            )),
+        move |_| show_edit_modal.set(None),
+    )
+}
+
 fn render_delete_confirm(
     i18n: &I18n,
     model_refresh: Signal<usize>,
@@ -173,6 +260,7 @@ fn make_model_rows(
     show_detail: Signal<Option<usize>>,
     is_admin: Signal<bool>,
     show_delete_confirm: Signal<Option<Model>>,
+    show_edit_modal: Signal<Option<Model>>,
 ) -> Vec<View> {
     let enabled_text = i18n.t("status_enabled");
     let disabled_text = i18n.t("status_disabled");
@@ -200,6 +288,8 @@ fn make_model_rows(
                         .children(m.upstream_model),
                     td().class("px-6 py-4")
                         .children(span().class(span_class).children(st.clone())),
+                    td().class("px-6 py-4 text-gray-400 dark:text-gray-500 text-sm")
+                        .children(format_timestamp(m.updated_at)),
                     td().class("px-6 py-4 text-center whitespace-nowrap").children(
                         button()
                             .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
@@ -211,8 +301,11 @@ fn make_model_rows(
                             if is_admin.get() {
                                 div().class("flex items-center justify-center gap-3").children((
                                     button()
-                                        .class("cursor-not-allowed text-gray-300 dark:text-gray-600 transition-colors")
-                                        .disabled(true)
+                                        .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+                                        .on(events::click, {
+                                            let p = model_modal.clone();
+                                            move |_| show_edit_modal.set(Some(p.clone()))
+                                        })
                                         .children(i().class("fas fa-pen text-xs")),
                                     button()
                                         .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
@@ -225,7 +318,7 @@ fn make_model_rows(
                             } else {
                                 i().class("fas fa-ban text-gray-300 dark:text-gray-600 cursor-not-allowed").into()
                             }
-                        }),
+                        })
                     ),
                 ))
                 .into()
@@ -247,6 +340,7 @@ pub fn ModelTable(props: ModelTableProps) -> View {
     let i18n = use_context::<I18n>();
     let show_detail = create_signal::<Option<usize>>(None);
     let show_delete_confirm = create_signal::<Option<Model>>(None);
+    let show_edit_modal = create_signal::<Option<Model>>(None);
     let models = props.models;
     let providers = props.providers;
     let is_admin = props.is_admin;
@@ -258,6 +352,7 @@ pub fn ModelTable(props: ModelTableProps) -> View {
         show_detail,
         is_admin,
         show_delete_confirm,
+        show_edit_modal,
     );
     let count = models.len();
 
@@ -272,14 +367,26 @@ pub fn ModelTable(props: ModelTableProps) -> View {
     });
 
     let show_add_modal = create_signal(false);
+    let add_providers = providers.clone();
     let add_modal = View::from_dynamic({
         let i18n = i18n.clone();
         move || {
             if show_add_modal.get() {
-                render_add_modal(&i18n, providers.clone(), model_refresh, show_add_modal)
+                render_add_modal(&i18n, add_providers.clone(), model_refresh, show_add_modal)
             } else {
                 View::new()
             }
+        }
+    });
+
+    let edit_confirm = View::from_dynamic({
+        let i18n = i18n.clone();
+        let providers = providers.clone();
+        move || match show_edit_modal.get_clone() {
+            Some(m) => {
+                render_edit_modal(&i18n, providers.clone(), model_refresh, show_edit_modal, m)
+            }
+            None => View::new(),
         }
     });
 
@@ -349,6 +456,8 @@ pub fn ModelTable(props: ModelTableProps) -> View {
                                 th().class("text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
                                     .children(i18n.t("table_status")),
                                 th().class("text-center px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
+                                    .children(i18n.t("updated_at")),
+                                th().class("text-center px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
                                     .children(i18n.t("provider_detail")),
                                 th().class("text-center px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
                                     .children(i18n.t("provider_actions")),
@@ -359,6 +468,7 @@ pub fn ModelTable(props: ModelTableProps) -> View {
             ),
             modal,
             add_modal,
+            edit_confirm,
             delete_confirm,
         ))
         .into()

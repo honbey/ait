@@ -57,6 +57,7 @@
   "cancel": "取消",
   "save": "保存",
   "model_add": "添加模型",
+  "model_edit": "编辑模型",
   "model_delete": "删除模型",
   "api_key_title": "API 密钥列表",
   "api_key_create": "创建密钥",

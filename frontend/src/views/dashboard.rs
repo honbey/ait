@@ -1,19 +1,16 @@
 use sycamore::prelude::*;
 use sycamore::web::tags::*;
 
-use crate::components::provider_table::ProviderTable;
-use crate::components::provider_table::ProviderTableProps;
 use crate::components::stat_card::StatCard;
 use crate::components::stat_card::StatCardProps;
 use crate::i18n::I18n;
 use crate::models::DashboardData;
 
 pub fn render_dashboard_view(i18n: &I18n, data: DashboardData) -> View {
-    let provider_count = data.providers.len();
-    let model_count = data.models.len();
+    let provider_count = data.provider_count;
+    let model_count = data.model_count;
     let api_calls = data.api_request_count;
     let token_consumption = data.token_consumption;
-    let providers = data.providers;
 
     div().children(
             div()
@@ -95,7 +92,6 @@ pub fn render_dashboard_view(i18n: &I18n, data: DashboardData) -> View {
                                         ),
                                 )),
                         )),
-                    ProviderTable(ProviderTableProps { providers, is_admin: create_signal(false), provider_refresh: create_signal(0), provider_refreshing: create_signal(false) }),
                 )),
         )
         .into()
