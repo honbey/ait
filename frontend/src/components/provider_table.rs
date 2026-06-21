@@ -30,7 +30,11 @@ fn provider_type_options() -> Vec<(String, String)> {
 fn render_provider_detail(i18n: &I18n, prov: Provider, show_detail: Signal<Option<usize>>) -> View {
     let enabled_text = i18n.t("status_enabled");
     let disabled_text = i18n.t("status_disabled");
-    let status = if prov.enabled { enabled_text } else { disabled_text };
+    let status = if prov.enabled {
+        enabled_text
+    } else {
+        disabled_text
+    };
     let api_key_display = prov.api_key.clone().unwrap_or_else(|| "—".to_string());
 
     render_detail_modal(
@@ -42,8 +46,14 @@ fn render_provider_detail(i18n: &I18n, prov: Provider, show_detail: Signal<Optio
             (i18n.t("provider_base_url"), prov.base_url),
             (i18n.t("api_key"), api_key_display),
             (i18n.t("table_status"), status),
-            (i18n.t("created_at"), crate::models::format_timestamp(prov.created_at)),
-            (i18n.t("updated_at"), crate::models::format_timestamp(prov.updated_at)),
+            (
+                i18n.t("created_at"),
+                crate::models::format_timestamp(prov.created_at),
+            ),
+            (
+                i18n.t("updated_at"),
+                crate::models::format_timestamp(prov.updated_at),
+            ),
         ],
         move |_| show_detail.set(None),
     )
@@ -64,7 +74,9 @@ fn render_add_modal(
 
     let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
-        if form_loading.get() { return; }
+        if form_loading.get() {
+            return;
+        }
         let n = form_name.get_clone();
         let u = form_base_url.get_clone();
         if n.is_empty() || u.is_empty() {
@@ -73,7 +85,10 @@ fn render_add_modal(
         }
         form_loading.set(true);
         form_err.set(String::new());
-        let api_key = { let raw = form_api_key.get_clone(); if raw.is_empty() { None } else { Some(raw) } };
+        let api_key = {
+            let raw = form_api_key.get_clone();
+            if raw.is_empty() { None } else { Some(raw) }
+        };
         let ptype = form_type.get_clone();
         let enabled = form_enabled.get();
         let refresh = provider_refresh;
@@ -81,8 +96,13 @@ fn render_add_modal(
         let err = form_err;
         spawn_local_scoped(async move {
             match create_provider(&n, &ptype, &u, api_key, enabled).await {
-                Ok(_) => { refresh.update(|v| *v += 1); }
-                Err(e) => { loading.set(false); err.set(e.to_string()); }
+                Ok(_) => {
+                    refresh.update(|v| *v += 1);
+                }
+                Err(e) => {
+                    loading.set(false);
+                    err.set(e.to_string());
+                }
             }
         });
     };
@@ -94,12 +114,26 @@ fn render_add_modal(
             .children((
                 modal_title(i18n.t("provider_add"), move |_| show_add_modal.set(false)),
                 form_field(i18n.t("name"), form_input(i18n.t("name"), form_name)),
-                form_field(i18n.t("provider_api_type"), select_input(form_type, provider_type_options())),
-                form_field(i18n.t("provider_base_url"), form_input(i18n.t("provider_base_url"), form_base_url)),
-                form_field(i18n.t("api_key"), form_input(i18n.t("api_key"), form_api_key)),
+                form_field(
+                    i18n.t("provider_api_type"),
+                    select_input(form_type, provider_type_options()),
+                ),
+                form_field(
+                    i18n.t("provider_base_url"),
+                    form_input(i18n.t("provider_base_url"), form_base_url),
+                ),
+                form_field(
+                    i18n.t("api_key"),
+                    form_input(i18n.t("api_key"), form_api_key),
+                ),
                 form_checkbox("add-enabled".into(), i18n.t("status_enabled"), form_enabled),
                 form_error(form_err),
-                form_submit_footer(i18n.t("cancel"), move |_| show_add_modal.set(false), form_loading, i18n.t("save")),
+                form_submit_footer(
+                    i18n.t("cancel"),
+                    move |_| show_add_modal.set(false),
+                    form_loading,
+                    i18n.t("save"),
+                ),
             )),
         move |_| show_add_modal.set(false),
     )
@@ -121,7 +155,9 @@ fn render_edit_modal(
 
     let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
-        if form_loading.get() { return; }
+        if form_loading.get() {
+            return;
+        }
         let n = form_name.get_clone();
         let u = form_base_url.get_clone();
         if n.is_empty() || u.is_empty() {
@@ -131,7 +167,10 @@ fn render_edit_modal(
         form_loading.set(true);
         form_err.set(String::new());
         let pid = prov.id.clone();
-        let api_key = { let raw = form_api_key.get_clone(); if raw.is_empty() { None } else { Some(raw) } };
+        let api_key = {
+            let raw = form_api_key.get_clone();
+            if raw.is_empty() { None } else { Some(raw) }
+        };
         let refresh = provider_refresh;
         let loading = form_loading;
         let err = form_err;
@@ -139,8 +178,13 @@ fn render_edit_modal(
         let enabled = form_enabled.get();
         spawn_local_scoped(async move {
             match update_provider(&pid, &n, &ptype, &u, api_key, enabled).await {
-                Ok(_) => { refresh.update(|v| *v += 1); }
-                Err(e) => { loading.set(false); err.set(e.to_string()); }
+                Ok(_) => {
+                    refresh.update(|v| *v += 1);
+                }
+                Err(e) => {
+                    loading.set(false);
+                    err.set(e.to_string());
+                }
             }
         });
     };
@@ -152,18 +196,34 @@ fn render_edit_modal(
             .children((
                 modal_title(i18n.t("provider_edit"), move |_| show_edit_modal.set(None)),
                 form_field(i18n.t("name"), form_input(i18n.t("name"), form_name)),
-                form_field(i18n.t("provider_api_type"), select_input(form_type, provider_type_options())),
-                form_field(i18n.t("provider_base_url"), form_input(i18n.t("provider_base_url"), form_base_url)),
+                form_field(
+                    i18n.t("provider_api_type"),
+                    select_input(form_type, provider_type_options()),
+                ),
+                form_field(
+                    i18n.t("provider_base_url"),
+                    form_input(i18n.t("provider_base_url"), form_base_url),
+                ),
                 div().children((
-                    label().class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
+                    label()
+                        .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
                         .children(i18n.t("api_key")),
                     form_input(i18n.t("api_key"), form_api_key),
                     p().class("text-xs text-gray-400 dark:text-gray-500 mt-1")
                         .children("Leave empty to keep current key"),
                 )),
-                form_checkbox("edit-enabled".into(), i18n.t("status_enabled"), form_enabled),
+                form_checkbox(
+                    "edit-enabled".into(),
+                    i18n.t("status_enabled"),
+                    form_enabled,
+                ),
                 form_error(form_err),
-                form_submit_footer(i18n.t("cancel"), move |_| show_edit_modal.set(None), form_loading, i18n.t("save")),
+                form_submit_footer(
+                    i18n.t("cancel"),
+                    move |_| show_edit_modal.set(None),
+                    form_loading,
+                    i18n.t("save"),
+                ),
             )),
         move |_| show_edit_modal.set(None),
     )
@@ -238,12 +298,20 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
     let provider_refreshing = props.provider_refreshing;
 
     let rows = make_provider_rows(
-        providers.clone(), &i18n, show_detail, is_admin, show_edit_modal, show_delete_confirm,
+        providers.clone(),
+        &i18n,
+        show_detail,
+        is_admin,
+        show_edit_modal,
+        show_delete_confirm,
     );
     let count = providers.len();
 
     let header = render_table_header(
-        &i18n, i18n.t("provider_title"), count, provider_refreshing,
+        &i18n,
+        i18n.t("provider_title"),
+        count,
+        provider_refreshing,
         debounce_refresh(provider_refresh, provider_refreshing),
         render_add_button(is_admin, {
             let i18n = i18n.clone();
@@ -289,9 +357,13 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
 
     let add_modal = View::from_dynamic({
         let i18n = i18n.clone();
-        move || if show_add_modal.get() {
-            render_add_modal(&i18n, provider_refresh, show_add_modal)
-        } else { View::new() }
+        move || {
+            if show_add_modal.get() {
+                render_add_modal(&i18n, provider_refresh, show_add_modal)
+            } else {
+                View::new()
+            }
+        }
     });
 
     let edit_modal = View::from_dynamic({
@@ -314,14 +386,21 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
                     i18n.t_replace("delete_confirm_message", "name", &prov.name),
                     deleting,
                     move |_| {
-                        if deleting.get() { return; }
+                        if deleting.get() {
+                            return;
+                        }
                         deleting.set(true);
                         let pid = prov_id.clone();
                         let d = deleting;
                         spawn_local_scoped(async move {
                             match delete_provider(&pid).await {
-                                Ok(_) => { refresh.update(|v| *v += 1); }
-                                Err(e) => { d.set(false); sycamore::web::console_log!("Failed: {}", e); }
+                                Ok(_) => {
+                                    refresh.update(|v| *v += 1);
+                                }
+                                Err(e) => {
+                                    d.set(false);
+                                    sycamore::web::console_log!("Failed: {}", e);
+                                }
                             }
                         });
                     },
@@ -332,5 +411,9 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
         }
     });
 
-    table_container(header, table, vec![detail_modal, add_modal, edit_modal, delete_modal])
+    table_container(
+        header,
+        table,
+        vec![detail_modal, add_modal, edit_modal, delete_modal],
+    )
 }

@@ -9,7 +9,10 @@ pub fn debounce_refresh(refresh: Signal<usize>, refreshing: Signal<bool>) -> imp
     move || {
         refreshing.set(true);
         let r = refresh;
-        Timeout::new(50, move || { r.update(|v| *v += 1); }).forget();
+        Timeout::new(50, move || {
+            r.update(|v| *v += 1);
+        })
+        .forget();
     }
 }
 

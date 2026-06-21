@@ -9,8 +9,8 @@ use crate::components::data_table::{
 };
 use crate::components::delete_confirm::render_delete_confirm;
 use crate::components::modal::{
-    action_cell, form_error, form_field, form_input, form_submit_footer, modal_dialog,
-    modal_title, mono_cell, name_cell, status_badge, text_cell, timestamp_cell, zebra_bg,
+    action_cell, form_error, form_field, form_input, form_submit_footer, modal_dialog, modal_title,
+    mono_cell, name_cell, status_badge, text_cell, timestamp_cell, zebra_bg,
 };
 use crate::i18n::I18n;
 use crate::models::ApiKeyListItem;
@@ -234,12 +234,19 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
     let api_key_refreshing = props.api_key_refreshing;
 
     let rows = make_api_key_rows(
-        keys.clone(), &i18n, username.clone(), api_key_refresh, show_delete_confirm,
+        keys.clone(),
+        &i18n,
+        username.clone(),
+        api_key_refresh,
+        show_delete_confirm,
     );
     let count = keys.len();
 
     let header = render_table_header(
-        &i18n, i18n.t("api_key_title"), count, api_key_refreshing,
+        &i18n,
+        i18n.t("api_key_title"),
+        count,
+        api_key_refreshing,
         debounce_refresh(api_key_refresh, api_key_refreshing),
         {
             let i18n = i18n.clone();
@@ -273,9 +280,13 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
     let create_modal = View::from_dynamic({
         let i18n = i18n.clone();
         let uname = username.clone();
-        move || if show_create_modal.get() {
-            render_create_modal(&i18n, uname.clone(), api_key_refresh, show_create_modal)
-        } else { View::new() }
+        move || {
+            if show_create_modal.get() {
+                render_create_modal(&i18n, uname.clone(), api_key_refresh, show_create_modal)
+            } else {
+                View::new()
+            }
+        }
     });
 
     let delete_modal = View::from_dynamic({
@@ -292,15 +303,22 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
                     i18n.t_replace("api_key_delete_confirm", "name", &item.name),
                     deleting,
                     move |_| {
-                        if deleting.get() { return; }
+                        if deleting.get() {
+                            return;
+                        }
                         deleting.set(true);
                         let kid = key_id.clone();
                         let u = u.clone();
                         let d = deleting;
                         spawn_local_scoped(async move {
                             match delete_api_key(&u, &kid).await {
-                                Ok(_) => { refresh.update(|v| *v += 1); }
-                                Err(e) => { d.set(false); sycamore::web::console_log!("Failed: {}", e); }
+                                Ok(_) => {
+                                    refresh.update(|v| *v += 1);
+                                }
+                                Err(e) => {
+                                    d.set(false);
+                                    sycamore::web::console_log!("Failed: {}", e);
+                                }
                             }
                         });
                     },

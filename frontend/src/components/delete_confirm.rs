@@ -1,8 +1,8 @@
 use sycamore::prelude::*;
 use sycamore::web::tags::*;
 
-use crate::i18n::I18n;
 use super::modal::{form_delete_footer, modal_dialog, modal_title};
+use crate::i18n::I18n;
 
 pub fn render_delete_confirm(
     i18n: &I18n,
