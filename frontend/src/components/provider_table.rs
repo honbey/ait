@@ -113,21 +113,37 @@ fn render_add_modal(
             .class("space-y-4")
             .children((
                 modal_title(i18n.t("provider_add"), move |_| show_add_modal.set(false)),
-                form_field("add-provider-name".into(), i18n.t("name"), form_input("add-provider-name".into(), i18n.t("name"), form_name)),
+                form_field(
+                    "add-provider-name".into(),
+                    i18n.t("name"),
+                    form_input("add-provider-name".into(), i18n.t("name"), form_name),
+                ),
                 form_field(
                     "add-provider-type".into(),
                     i18n.t("provider_api_type"),
-                    select_input("add-provider-type".into(), form_type, provider_type_options()),
+                    select_input(
+                        "add-provider-type".into(),
+                        form_type,
+                        provider_type_options(),
+                    ),
                 ),
                 form_field(
                     "add-provider-url".into(),
                     i18n.t("provider_base_url"),
-                    form_input("add-provider-url".into(), i18n.t("provider_base_url"), form_base_url),
+                    form_input(
+                        "add-provider-url".into(),
+                        i18n.t("provider_base_url"),
+                        form_base_url,
+                    ),
                 ),
                 form_field(
                     "add-provider-apikey".into(),
                     i18n.t("api_key"),
-                    form_input("add-provider-apikey".into(), i18n.t("api_key"), form_api_key),
+                    form_input(
+                        "add-provider-apikey".into(),
+                        i18n.t("api_key"),
+                        form_api_key,
+                    ),
                 ),
                 form_checkbox("add-enabled".into(), i18n.t("status_enabled"), form_enabled),
                 form_error(form_err),
@@ -198,22 +214,38 @@ fn render_edit_modal(
             .class("space-y-4")
             .children((
                 modal_title(i18n.t("provider_edit"), move |_| show_edit_modal.set(None)),
-                form_field("edit-provider-name".into(), i18n.t("name"), form_input("edit-provider-name".into(), i18n.t("name"), form_name)),
+                form_field(
+                    "edit-provider-name".into(),
+                    i18n.t("name"),
+                    form_input("edit-provider-name".into(), i18n.t("name"), form_name),
+                ),
                 form_field(
                     "edit-provider-type".into(),
                     i18n.t("provider_api_type"),
-                    select_input("edit-provider-type".into(), form_type, provider_type_options()),
+                    select_input(
+                        "edit-provider-type".into(),
+                        form_type,
+                        provider_type_options(),
+                    ),
                 ),
                 form_field(
                     "edit-provider-url".into(),
                     i18n.t("provider_base_url"),
-                    form_input("edit-provider-url".into(), i18n.t("provider_base_url"), form_base_url),
+                    form_input(
+                        "edit-provider-url".into(),
+                        i18n.t("provider_base_url"),
+                        form_base_url,
+                    ),
                 ),
                 div().children((
                     form_field(
                         "edit-provider-apikey".into(),
                         i18n.t("api_key"),
-                        form_input("edit-provider-apikey".into(), i18n.t("api_key"), form_api_key),
+                        form_input(
+                            "edit-provider-apikey".into(),
+                            i18n.t("api_key"),
+                            form_api_key,
+                        ),
                     ),
                     p().class("text-xs text-gray-400 dark:text-gray-500 mt-1")
                         .children("Leave empty to keep current key"),
