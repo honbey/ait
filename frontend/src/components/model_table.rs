@@ -26,11 +26,11 @@ fn provider_name_by_id(provider_id: &str, providers: &[Provider]) -> String {
 }
 
 fn render_model_detail(
-    i18n: &I18n,
     model: Model,
     show_detail: Signal<Option<usize>>,
     providers: &[Provider],
 ) -> View {
+    let i18n = use_context::<I18n>();
     let enabled_text = i18n.t("status_enabled");
     let disabled_text = i18n.t("status_disabled");
     let status = if model.enabled {
@@ -71,11 +71,11 @@ fn provider_select_options(providers: &[Provider]) -> Vec<(String, String)> {
 }
 
 fn render_add_modal(
-    i18n: &I18n,
     providers: Vec<Provider>,
     model_refresh: Signal<usize>,
     show_add_modal: Signal<bool>,
 ) -> View {
+    let i18n = use_context::<I18n>();
     let form_name = create_signal(String::new());
     let form_provider_id =
         create_signal(providers.first().map(|p| p.id.clone()).unwrap_or_default());
@@ -159,12 +159,12 @@ fn render_add_modal(
 }
 
 fn render_edit_modal(
-    i18n: &I18n,
     providers: Vec<Provider>,
     model_refresh: Signal<usize>,
     show_edit_modal: Signal<Option<Model>>,
     model: Model,
 ) -> View {
+    let i18n = use_context::<I18n>();
     let model_name_for_display = model.name.clone();
     let form_name = create_signal(model.name.clone());
     let form_provider_id = create_signal(model.provider_id.clone());
@@ -257,12 +257,12 @@ fn render_edit_modal(
 fn make_model_rows(
     models: Vec<Model>,
     providers: &[Provider],
-    i18n: &I18n,
     show_detail: Signal<Option<usize>>,
     is_admin: Signal<bool>,
     show_delete_confirm: Signal<Option<Model>>,
     show_edit_modal: Signal<Option<Model>>,
 ) -> Vec<View> {
+    let i18n = use_context::<I18n>();
     let enabled_text = i18n.t("status_enabled");
     let disabled_text = i18n.t("status_disabled");
     models
@@ -329,7 +329,6 @@ pub fn ModelTable(props: ModelTableProps) -> View {
     let rows = make_model_rows(
         models.clone(),
         &providers,
-        &i18n,
         show_detail,
         is_admin,
         show_delete_confirm,
@@ -338,7 +337,6 @@ pub fn ModelTable(props: ModelTableProps) -> View {
     let count = models.len();
 
     let header = render_table_header(
-        &i18n,
         i18n.t("model_title"),
         count,
         model_refreshing,
@@ -374,23 +372,21 @@ pub fn ModelTable(props: ModelTableProps) -> View {
     );
 
     let detail_modal = View::from_dynamic({
-        let i18n = i18n.clone();
         let models = models.clone();
         let providers = providers.clone();
         move || match show_detail.get() {
             Some(idx) => models.get(idx).map_or(View::new(), |m| {
-                render_model_detail(&i18n, m.clone(), show_detail, &providers)
+                render_model_detail(m.clone(), show_detail, &providers)
             }),
             None => View::new(),
         }
     });
 
     let add_modal = View::from_dynamic({
-        let i18n = i18n.clone();
         let providers = providers.clone();
         move || {
             if show_add_modal.get() {
-                render_add_modal(&i18n, providers.clone(), model_refresh, show_add_modal)
+                render_add_modal(providers.clone(), model_refresh, show_add_modal)
             } else {
                 View::new()
             }
@@ -398,11 +394,10 @@ pub fn ModelTable(props: ModelTableProps) -> View {
     });
 
     let edit_modal = View::from_dynamic({
-        let i18n = i18n.clone();
         let providers = providers.clone();
         move || match show_edit_modal.get_clone() {
             Some(m) => {
-                render_edit_modal(&i18n, providers.clone(), model_refresh, show_edit_modal, m)
+                render_edit_modal(providers.clone(), model_refresh, show_edit_modal, m)
             }
             None => View::new(),
         }
@@ -415,7 +410,6 @@ pub fn ModelTable(props: ModelTableProps) -> View {
                 let deleting = create_signal(false);
                 let model_name = m.name.clone();
                 render_delete_confirm(
-                    &i18n,
                     i18n.t_replace("delete_confirm_message", "name", &m.name),
                     deleting,
                     move |_| {

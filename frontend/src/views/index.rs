@@ -5,7 +5,8 @@ use sycamore::web::tags::*;
 use crate::i18n::I18n;
 use crate::route::Route;
 
-pub fn render_index_view(i18n: &I18n, route: Signal<Route>, authenticated: Signal<bool>) -> View {
+pub fn render_index_view(route: Signal<Route>, authenticated: Signal<bool>) -> View {
+    let i18n = use_context::<I18n>();
     div()
         .class("min-h-[calc(100vh-3.5rem)] flex items-center justify-center bg-gray-50 dark:bg-gray-900")
         .children(

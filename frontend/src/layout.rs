@@ -43,7 +43,8 @@ pub fn render_loading() -> View {
         .into()
 }
 
-pub fn render_error_view(i18n: &I18n, msg: String) -> View {
+pub fn render_error_view(msg: String) -> View {
+    let i18n = use_context::<I18n>();
     div()
         .class("min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center")
         .children(
@@ -70,7 +71,8 @@ enum RouteData {
     Error(String),
 }
 
-fn render_placeholder(i18n: &I18n, title_key: &str) -> View {
+fn render_placeholder(title_key: &str) -> View {
+    let i18n = use_context::<I18n>();
     let title = i18n.t(title_key);
     let suffix = i18n.t("in_development");
     div().children(
@@ -107,7 +109,6 @@ pub fn Layout(props: LayoutProps) -> View {
     let username = props.username;
     let role = props.role;
     let sidebar_open = create_signal(false);
-    let i18n = use_context::<I18n>();
 
     // Auth guard: redirect to Login if not authenticated
     create_effect(move || {
@@ -176,8 +177,6 @@ pub fn Layout(props: LayoutProps) -> View {
         }
     }));
 
-    let i18n_view = i18n.clone();
-
     div()
         .id("app")
         .class(move || if dark.get() { "dark" } else { "" })
@@ -238,14 +237,12 @@ pub fn Layout(props: LayoutProps) -> View {
                             match route.get() {
                                 Route::Index => {
                                     crate::views::index::render_index_view(
-                                        &i18n_view,
                                         route,
                                         authenticated,
                                     )
                                 }
                                 Route::Login => {
                                     crate::views::login::render_login_view(
-                                        &i18n_view,
                                         authenticated,
                                         route,
                                         username,
@@ -254,13 +251,12 @@ pub fn Layout(props: LayoutProps) -> View {
                                 }
                                 Route::Register => {
                                     crate::views::register::render_register_view(
-                                        &i18n_view,
                                         route,
                                     )
                                 }
                                 _ => match data.get_clone() {
                                     Some(RouteData::Dashboard(d)) => {
-                                        crate::views::dashboard::render_dashboard_view(&i18n_view, d)
+                                        crate::views::dashboard::render_dashboard_view(d)
                                     }
                                     Some(RouteData::Providers(p)) => {
                                         let is_admin = create_signal(role.get_clone().as_deref() == Some("admin"));
@@ -279,10 +275,10 @@ pub fn Layout(props: LayoutProps) -> View {
                                     }
                                     Some(RouteData::Placeholder) => match route.get() {
                                         Route::ApiKeys => {
-                                            render_placeholder(&i18n_view, "api_key")
+                                            render_placeholder("api_key")
                                         }
                                         Route::TextGeneration => {
-                                            render_placeholder(&i18n_view, "text_generation")
+                                            render_placeholder("text_generation")
                                         }
                                         Route::Dashboard
                                         | Route::Providers
@@ -290,7 +286,7 @@ pub fn Layout(props: LayoutProps) -> View {
                                         _ => render_loading(),
                                     },
                                     Some(RouteData::Error(e)) => {
-                                        render_error_view(&i18n_view, e)
+                                        render_error_view(e)
                                     }
                                     None => render_loading(),
                                 },

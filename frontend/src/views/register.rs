@@ -7,7 +7,8 @@ use sycamore_futures::spawn_local_scoped;
 use crate::i18n::I18n;
 use crate::route::Route;
 
-pub fn render_register_view(i18n: &I18n, route: Signal<Route>) -> View {
+pub fn render_register_view(route: Signal<Route>) -> View {
+    let i18n = use_context::<I18n>();
     let username = create_signal(String::new());
     let password = create_signal(String::new());
     let registration_code = create_signal(String::new());

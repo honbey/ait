@@ -5,12 +5,12 @@ use super::modal::{form_delete_footer, modal_dialog, modal_title};
 use crate::i18n::I18n;
 
 pub fn render_delete_confirm(
-    i18n: &I18n,
     message: String,
     deleting: Signal<bool>,
     on_confirm: impl Fn(web_sys::MouseEvent) + 'static,
     on_cancel: impl Fn(web_sys::MouseEvent) + Clone + 'static,
 ) -> View {
+    let i18n = use_context::<I18n>();
     let on_cancel_title = on_cancel.clone();
     let on_cancel_footer = on_cancel.clone();
     let on_cancel_backdrop = on_cancel;

@@ -28,11 +28,11 @@ fn provider_display_name(provider_type: &str, provider_types: &[(String, String)
 }
 
 fn render_provider_detail(
-    i18n: &I18n,
     prov: Provider,
     show_detail: Signal<Option<usize>>,
     provider_types: &[(String, String)],
 ) -> View {
+    let i18n = use_context::<I18n>();
     let enabled_text = i18n.t("status_enabled");
     let disabled_text = i18n.t("status_disabled");
     let status = if prov.enabled {
@@ -68,11 +68,11 @@ fn render_provider_detail(
 }
 
 fn render_add_modal(
-    i18n: &I18n,
     provider_refresh: Signal<usize>,
     show_add_modal: Signal<bool>,
     provider_types: Vec<(String, String)>,
 ) -> View {
+    let i18n = use_context::<I18n>();
     let form_name = create_signal(String::new());
     let form_type = create_signal("openai_compat".to_string());
     let form_base_url = create_signal(String::new());
@@ -163,12 +163,12 @@ fn render_add_modal(
 }
 
 fn render_edit_modal(
-    i18n: &I18n,
     provider_refresh: Signal<usize>,
     show_edit_modal: Signal<Option<Provider>>,
     prov: Provider,
     provider_types: Vec<(String, String)>,
 ) -> View {
+    let i18n = use_context::<I18n>();
     let form_name = create_signal(prov.name.clone());
     let form_type = create_signal(prov.provider_type.clone());
     let form_base_url = create_signal(prov.base_url.clone());
@@ -278,13 +278,13 @@ fn render_edit_modal(
 
 fn make_provider_rows(
     providers: Vec<Provider>,
-    i18n: &I18n,
     show_detail: Signal<Option<usize>>,
     is_admin: Signal<bool>,
     show_edit_modal: Signal<Option<Provider>>,
     show_delete_confirm: Signal<Option<Provider>>,
     provider_types: &[(String, String)],
 ) -> Vec<View> {
+    let i18n = use_context::<I18n>();
     let enabled_text = i18n.t("status_enabled");
     let disabled_text = i18n.t("status_disabled");
     providers
@@ -384,7 +384,6 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
 
     let rows = make_provider_rows(
         providers.clone(),
-        &i18n,
         show_detail,
         is_admin,
         show_edit_modal,
@@ -394,7 +393,6 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
     let count = providers.len();
 
     let header = render_table_header(
-        &i18n,
         i18n.t("provider_title"),
         count,
         provider_refreshing,
@@ -430,12 +428,10 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
     );
 
     let detail_modal = View::from_dynamic({
-        let i18n = i18n.clone();
         let providers = providers.clone();
         move || match show_detail.get() {
             Some(idx) => providers.get(idx).map_or(View::new(), |prov| {
                 render_provider_detail(
-                    &i18n,
                     prov.clone(),
                     show_detail,
                     &provider_types.get_clone(),
@@ -445,34 +441,26 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
         }
     });
 
-    let add_modal = View::from_dynamic({
-        let i18n = i18n.clone();
-        move || {
-            if show_add_modal.get() {
-                render_add_modal(
-                    &i18n,
-                    provider_refresh,
-                    show_add_modal,
-                    provider_types.get_clone(),
-                )
-            } else {
-                View::new()
-            }
+    let add_modal = View::from_dynamic(move || {
+        if show_add_modal.get() {
+            render_add_modal(
+                provider_refresh,
+                show_add_modal,
+                provider_types.get_clone(),
+            )
+        } else {
+            View::new()
         }
     });
 
-    let edit_modal = View::from_dynamic({
-        let i18n = i18n.clone();
-        move || match show_edit_modal.get_clone() {
-            Some(prov) => render_edit_modal(
-                &i18n,
-                provider_refresh,
-                show_edit_modal,
-                prov,
-                provider_types.get_clone(),
-            ),
-            None => View::new(),
-        }
+    let edit_modal = View::from_dynamic(move || match show_edit_modal.get_clone() {
+        Some(prov) => render_edit_modal(
+            provider_refresh,
+            show_edit_modal,
+            prov,
+            provider_types.get_clone(),
+        ),
+        None => View::new(),
     });
 
     let delete_modal = View::from_dynamic({
@@ -482,7 +470,6 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
                 let deleting = create_signal(false);
                 let prov_id = prov.id.clone();
                 render_delete_confirm(
-                    &i18n,
                     i18n.t_replace("delete_confirm_message", "name", &prov.name),
                     deleting,
                     move |_| {

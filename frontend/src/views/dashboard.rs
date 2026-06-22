@@ -6,7 +6,8 @@ use crate::components::stat_card::StatCardProps;
 use crate::i18n::I18n;
 use crate::models::DashboardData;
 
-pub fn render_dashboard_view(i18n: &I18n, data: DashboardData) -> View {
+pub fn render_dashboard_view(data: DashboardData) -> View {
+    let i18n = use_context::<I18n>();
     let provider_count = data.provider_count;
     let model_count = data.model_count;
     let api_calls = data.api_request_count;

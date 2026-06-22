@@ -17,13 +17,13 @@ pub fn debounce_refresh(refresh: Signal<usize>, refreshing: Signal<bool>) -> imp
 }
 
 pub fn render_table_header(
-    i18n: &I18n,
     title: String,
     count: usize,
     refreshing: Signal<bool>,
     on_refresh: impl Fn() + 'static,
     add_button: View,
 ) -> View {
+    let i18n = use_context::<I18n>();
     div()
         .class("p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between")
         .children((

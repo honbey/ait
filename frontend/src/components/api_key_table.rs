@@ -17,11 +17,11 @@ use crate::i18n::I18n;
 use crate::models::ApiKeyListItem;
 
 fn render_create_modal(
-    i18n: &I18n,
     username: String,
     api_key_refresh: Signal<usize>,
     show_create_modal: Signal<bool>,
 ) -> View {
+    let i18n = use_context::<I18n>();
     let form_name = create_signal(String::new());
     let form_never_expire = create_signal(false);
     let form_expires = create_signal({
@@ -161,11 +161,11 @@ fn render_create_modal(
 
 fn make_api_key_rows(
     keys: Vec<ApiKeyListItem>,
-    i18n: &I18n,
     username: String,
     api_key_refresh: Signal<usize>,
     show_delete_confirm: Signal<Option<ApiKeyListItem>>,
 ) -> Vec<View> {
+    let i18n = use_context::<I18n>();
     let enabled_text = i18n.t("status_enabled");
     let disabled_text = i18n.t("status_disabled");
     keys.into_iter()
@@ -238,7 +238,6 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
 
     let rows = make_api_key_rows(
         keys.clone(),
-        &i18n,
         username.clone(),
         api_key_refresh,
         show_delete_confirm,
@@ -246,7 +245,6 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
     let count = keys.len();
 
     let header = render_table_header(
-        &i18n,
         i18n.t("api_key_title"),
         count,
         api_key_refreshing,
@@ -281,11 +279,10 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
     );
 
     let create_modal = View::from_dynamic({
-        let i18n = i18n.clone();
         let uname = username.clone();
         move || {
             if show_create_modal.get() {
-                render_create_modal(&i18n, uname.clone(), api_key_refresh, show_create_modal)
+                render_create_modal(uname.clone(), api_key_refresh, show_create_modal)
             } else {
                 View::new()
             }
@@ -301,7 +298,6 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
                 let key_id = item.id.clone();
                 let u = uname.clone();
                 render_delete_confirm(
-                    &i18n,
                     i18n.t_replace("api_key_delete_confirm", "name", &item.name),
                     deleting,
                     move |_| {

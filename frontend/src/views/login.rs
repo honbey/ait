@@ -8,12 +8,12 @@ use crate::i18n::I18n;
 use crate::route::Route;
 
 pub fn render_login_view(
-    i18n: &I18n,
     authenticated: Signal<bool>,
     route: Signal<Route>,
     username: Signal<Option<String>>,
     role: Signal<Option<String>>,
 ) -> View {
+    let i18n = use_context::<I18n>();
     let form_user = create_signal(String::new());
     let form_pass = create_signal(String::new());
     let error = create_signal(String::new());
