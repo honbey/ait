@@ -3,7 +3,7 @@ use sycamore::web::tags::*;
 
 use crate::components::stat_card::StatCard;
 use crate::components::stat_card::StatCardProps;
-use crate::i18n::I18n;
+use crate::i18n::{I18n, K};
 use crate::models::DashboardData;
 
 pub fn render_dashboard_view(data: DashboardData) -> View {
@@ -26,7 +26,7 @@ pub fn render_dashboard_view(data: DashboardData) -> View {
                                     "bg-indigo-100 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-400"
                                         .to_string(),
                                 value: provider_count.to_string(),
-                                label: i18n.t("providers"),
+                                label: i18n.t(K::Providers),
                             }),
                             StatCard(StatCardProps {
                                 icon: "fa-cube".to_string(),
@@ -34,7 +34,7 @@ pub fn render_dashboard_view(data: DashboardData) -> View {
                                     "bg-green-100 text-green-600 dark:bg-green-900 dark:text-green-400"
                                         .to_string(),
                                 value: model_count.to_string(),
-                                label: i18n.t("models"),
+                                label: i18n.t(K::Models),
                             }),
                             StatCard(StatCardProps {
                                 icon: "fa-arrow-right-arrow-left".to_string(),
@@ -42,7 +42,7 @@ pub fn render_dashboard_view(data: DashboardData) -> View {
                                     "bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-400"
                                         .to_string(),
                                 value: api_calls.to_string(),
-                                label: i18n.t("api_request_count"),
+                                label: i18n.t(K::ApiRequestCount),
                             }),
                             StatCard(StatCardProps {
                                 icon: "fa-code".to_string(),
@@ -50,7 +50,7 @@ pub fn render_dashboard_view(data: DashboardData) -> View {
                                     "bg-pink-100 text-pink-600 dark:bg-pink-900 dark:text-pink-400"
                                         .to_string(),
                                 value: token_consumption.to_string(),
-                                label: i18n.t("token_consumption"),
+                                label: i18n.t(K::TokenConsumption),
                             }),
                         )),
                     div()
@@ -64,14 +64,14 @@ pub fn render_dashboard_view(data: DashboardData) -> View {
                                     h2().class(
                                         "text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4",
                                     )
-                                    .children(i18n.t("api_request_count_trending_table_title")),
+                                    .children(i18n.t(K::ApiRequestCountTrendingTableTitle)),
                                     div()
                                         .class(
                                             "h-64 flex items-center justify-center bg-gray-50 dark:bg-gray-700 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600",
                                         )
                                         .children(
                                             span().class("text-gray-400 text-sm")
-                                                .children(i18n.t("chart_placeholder")),
+                                                .children(i18n.t(K::ChartPlaceholder)),
                                         ),
                                 )),
                             div()
@@ -82,14 +82,14 @@ pub fn render_dashboard_view(data: DashboardData) -> View {
                                     h2().class(
                                         "text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4",
                                     )
-                                    .children(i18n.t("token_consumption_trending_table_title")),
+                                    .children(i18n.t(K::TokenConsumptionTrendingTableTitle)),
                                     div()
                                         .class(
                                             "h-64 flex items-center justify-center bg-gray-50 dark:bg-gray-700 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600",
                                         )
                                         .children(
                                             span().class("text-gray-400 text-sm")
-                                                .children(i18n.t("chart_placeholder")),
+                                                .children(i18n.t(K::ChartPlaceholder)),
                                         ),
                                 )),
                         )),

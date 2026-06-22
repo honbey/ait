@@ -4,7 +4,7 @@ use sycamore::web::events;
 use sycamore::web::tags::*;
 
 use crate::api::{fetch_api_keys, fetch_dashboard, fetch_models, fetch_providers};
-use crate::i18n::I18n;
+use crate::i18n::{I18n, K};
 use crate::models::{ApiKeyListItem, DashboardData, Model, Provider};
 use crate::route::Route;
 
@@ -53,7 +53,7 @@ pub fn render_error_view(msg: String) -> View {
                     "bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 px-6 py-4 rounded-lg",
                 )
                 .children((
-                    p().class("font-semibold").children(i18n.t("load_failed")),
+                    p().class("font-semibold").children(i18n.t(K::LoadFailed)),
                     p().class("text-sm mt-1").children(msg),
                 )),
         )
@@ -71,10 +71,10 @@ enum RouteData {
     Error(String),
 }
 
-fn render_placeholder(title_key: &str) -> View {
+fn render_placeholder(title_key: K) -> View {
     let i18n = use_context::<I18n>();
     let title = i18n.t(title_key);
-    let suffix = i18n.t("in_development");
+    let suffix = i18n.t(K::InDevelopment);
     div().children(
         div()
             .class("p-4 sm:p-8")
@@ -275,10 +275,10 @@ pub fn Layout(props: LayoutProps) -> View {
                                     }
                                     Some(RouteData::Placeholder) => match route.get() {
                                         Route::ApiKeys => {
-                                            render_placeholder("api_key")
+                                            render_placeholder(K::ApiKey)
                                         }
                                         Route::TextGeneration => {
-                                            render_placeholder("text_generation")
+                                            render_placeholder(K::TextGeneration)
                                         }
                                         Route::Dashboard
                                         | Route::Providers

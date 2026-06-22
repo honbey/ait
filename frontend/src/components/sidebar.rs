@@ -2,7 +2,7 @@ use sycamore::prelude::*;
 use sycamore::web::events;
 use sycamore::web::tags::*;
 
-use crate::i18n::I18n;
+use crate::i18n::{I18n, K};
 use crate::route::Route;
 
 // ─── NavItem ───────────────────────────────────────────────────
@@ -10,7 +10,7 @@ use crate::route::Route;
 #[derive(Props)]
 pub struct NavItemProps {
     pub icon: String,
-    pub label_key: String,
+    pub label_key: K,
     pub route: Route,
     pub current_route: Signal<Route>,
     pub i18n: I18n,
@@ -34,7 +34,7 @@ fn NavItem(props: NavItemProps) -> View {
         .on(events::click, move |_| props.current_route.set(props.route))
         .children((
             i().class(format!("fas {} w-5 text-center", props.icon)),
-            span().children(View::from_dynamic(move || i18n.t(&label_key))),
+            span().children(View::from_dynamic(move || i18n.t(label_key))),
         ))
         .into()
 }
@@ -67,35 +67,35 @@ pub fn Sidebar(props: SidebarProps) -> View {
                 .children((
                     NavItem(NavItemProps {
                         icon: "fa-chart-pie".to_string(),
-                        label_key: "dashboard".to_string(),
+                        label_key: K::Dashboard,
                         route: Route::Dashboard,
                         current_route: props.route,
                         i18n: i18n.clone(),
                     }),
                     NavItem(NavItemProps {
                         icon: "fa-server".to_string(),
-                        label_key: "providers".to_string(),
+                        label_key: K::Providers,
                         route: Route::Providers,
                         current_route: props.route,
                         i18n: i18n.clone(),
                     }),
                     NavItem(NavItemProps {
                         icon: "fa-cube".to_string(),
-                        label_key: "models".to_string(),
+                        label_key: K::Models,
                         route: Route::Models,
                         current_route: props.route,
                         i18n: i18n.clone(),
                     }),
                     NavItem(NavItemProps {
                         icon: "fa-key".to_string(),
-                        label_key: "api_key".to_string(),
+                        label_key: K::ApiKey,
                         route: Route::ApiKeys,
                         current_route: props.route,
                         i18n: i18n.clone(),
                     }),
                     NavItem(NavItemProps {
                         icon: "fa-comment-dots".to_string(),
-                        label_key: "text_generation".to_string(),
+                        label_key: K::TextGeneration,
                         route: Route::TextGeneration,
                         current_route: props.route,
                         i18n: i18n.clone(),

@@ -4,7 +4,7 @@ use sycamore::web::events;
 use sycamore::web::tags::*;
 use sycamore_futures::spawn_local_scoped;
 
-use crate::i18n::I18n;
+use crate::i18n::{I18n, K};
 use crate::route::Route;
 
 pub fn render_register_view(route: Signal<Route>) -> View {
@@ -24,7 +24,7 @@ pub fn render_register_view(route: Signal<Route>) -> View {
         }
 
         if username.get_clone().is_empty() || password.get_clone().is_empty() {
-            error.set(i18n_submit.t("register_required"));
+            error.set(i18n_submit.t(K::RegisterRequired));
             return;
         }
 
@@ -39,7 +39,7 @@ pub fn render_register_view(route: Signal<Route>) -> View {
                     route.set(Route::Login);
                 }
                 Err(e) => {
-                    error.set(i18n_async.t_replace("register_error", "msg", &e.to_string()));
+                    error.set(i18n_async.t_replace(K::RegisterError, "msg", &e.to_string()));
                     loading.set(false);
                 }
             }
@@ -55,37 +55,37 @@ pub fn render_register_view(route: Signal<Route>) -> View {
                 .children((
                     h2()
                         .class("text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6 text-center")
-                        .children(i18n.t("register")),
+                        .children(i18n.t(K::Register)),
                     div().class("mb-4").children((
                         label()
                             .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
-                            .children(i18n.t("username")),
+                            .children(i18n.t(K::Username)),
                         input()
                             .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
                             .attr("type", "text")
-                            .attr("placeholder", i18n.t("username"))
+                            .attr("placeholder", i18n.t(K::Username))
                             .bind(bind::value, username)
                             .on(events::input, move |_| error.set(String::new())),
                     )),
                     div().class("mb-4").children((
                         label()
                             .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
-                            .children(i18n.t("password")),
+                            .children(i18n.t(K::Password)),
                         input()
                             .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
                             .attr("type", "password")
-                            .attr("placeholder", i18n.t("password"))
+                            .attr("placeholder", i18n.t(K::Password))
                             .bind(bind::value, password)
                             .on(events::input, move |_| error.set(String::new())),
                     )),
                     div().class("mb-6").children((
                         label()
                             .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
-                            .children(i18n.t("registration_code")),
+                            .children(i18n.t(K::RegistrationCode)),
                         input()
                             .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
                             .attr("type", "text")
-                            .attr("placeholder", i18n.t("registration_code"))
+                            .attr("placeholder", i18n.t(K::RegistrationCode))
                             .bind(bind::value, registration_code)
                             .on(events::input, move |_| error.set(String::new())),
                     )),
@@ -107,20 +107,20 @@ pub fn render_register_view(route: Signal<Route>) -> View {
                                 if loading.get() {
                                     div().class("flex items-center gap-2").children((
                                         i().class("fas fa-spinner animate-spin"),
-                                        span().children(i18n_btn.t("register_btn")),
+                                        span().children(i18n_btn.t(K::RegisterBtn)),
                                     )).into()
                                 } else {
-                                    span().children(i18n_btn.t("register_btn")).into()
+                                    span().children(i18n_btn.t(K::RegisterBtn)).into()
                                 }
                             }))
                     },
                     div().class("mt-4 text-center").children((
                         span().class("text-sm text-gray-500 dark:text-gray-400")
-                            .children(i18n.t("have_account_login")),
+                            .children(i18n.t(K::HaveAccountLogin)),
                         button()
                             .class("ml-1 text-sm text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer")
                             .on(events::click, move |_| route.set(Route::Login))
-                            .children(i18n.t("login")),
+                            .children(i18n.t(K::Login)),
                     )),
                 )),
         )

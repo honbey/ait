@@ -6,7 +6,7 @@ use sycamore_futures::spawn_local_scoped;
 
 use crate::api::generate_completion;
 use crate::components::modal::{form_field, select_input};
-use crate::i18n::I18n;
+use crate::i18n::{I18n, K};
 use crate::models::Model;
 
 #[derive(Props)]
@@ -56,7 +56,7 @@ pub fn TextGeneration(props: TextGenerationProps) -> View {
                 }
                 let model = selected_model.get_clone();
                 if model.is_empty() {
-                    error.set(i18n.t("text_gen_select_model"));
+                    error.set(i18n.t(K::TextGenSelectModel));
                     return;
                 }
                 loading.set(true);
@@ -68,7 +68,7 @@ pub fn TextGeneration(props: TextGenerationProps) -> View {
                 let tp = top_p.get_clone().parse::<f32>().ok();
                 match generate_completion(&key, &model, &prompt_text, mt, temp, tp).await {
                     Ok(text) => response.set(Some(text)),
-                    Err(e) => error.set(i18n.t_replace("text_gen_error", "msg", &e.to_string())),
+                    Err(e) => error.set(i18n.t_replace(K::TextGenError, "msg", &e.to_string())),
                 }
                 loading.set(false);
             });
@@ -89,7 +89,7 @@ pub fn TextGeneration(props: TextGenerationProps) -> View {
                                 .children((
                                     form_field(
                                         "text-gen-api-key".into(),
-                                        i18n.t("text_gen_api_key"),
+                                        i18n.t(K::TextGenApiKey),
                                         input()
                                             .attr("id", "text-gen-api-key")
                                             .attr("type", "text")
@@ -100,15 +100,15 @@ pub fn TextGeneration(props: TextGenerationProps) -> View {
                                     ),
                                     form_field(
                                         "text-gen-model".into(),
-                                        i18n.t("text_gen_select_model"),
+                                        i18n.t(K::TextGenSelectModel),
                                         select_input("text-gen-model".into(), selected_model, opts),
                                     ),
                                     form_field(
                                         "text-gen-prompt".into(),
-                                        i18n.t("text_gen_prompt"),
+                                        i18n.t(K::TextGenPrompt),
                                         textarea()
                                             .attr("id", "text-gen-prompt")
-                                            .attr("placeholder", i18n.t("text_gen_prompt_placeholder"))
+                                            .attr("placeholder", i18n.t(K::TextGenPromptPlaceholder))
                                             .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-y")
                                             .attr("rows", "8")
                                             .bind(bind::value, prompt)
@@ -118,9 +118,9 @@ pub fn TextGeneration(props: TextGenerationProps) -> View {
                                     div()
                                         .class("space-y-3")
                                         .children((
-                                            range_field("text-gen-temperature".into(), i18n.t("text_gen_temperature"), "0", "2", "0.01", temperature),
-                                            range_field("text-gen-max-tokens".into(), i18n.t("text_gen_max_tokens"), "1", "8192", "1", max_tokens),
-                                            range_field("text-gen-top-p".into(), i18n.t("text_gen_top_p"), "0", "1", "0.01", top_p),
+                                            range_field("text-gen-temperature".into(), i18n.t(K::TextGenTemperature), "0", "2", "0.01", temperature),
+                                            range_field("text-gen-max-tokens".into(), i18n.t(K::TextGenMaxTokens), "1", "8192", "1", max_tokens),
+                                            range_field("text-gen-top-p".into(), i18n.t(K::TextGenTopP), "0", "1", "0.01", top_p),
                                         )),
                                     // Generate button
                                     button()
@@ -134,10 +134,10 @@ pub fn TextGeneration(props: TextGenerationProps) -> View {
                                                 if loading.get() {
                                                     div().class("flex items-center gap-2").children((
                                                         i().class("fas fa-spinner animate-spin"),
-                                                        span().children(i18n.t("text_gen_generating")),
+                                                        span().children(i18n.t(K::TextGenGenerating)),
                                                     )).into()
                                                 } else {
-                                                    span().children(i18n.t("text_gen_generate")).into()
+                                                    span().children(i18n.t(K::TextGenGenerate)).into()
                                                 }
                                             }
                                         })),
@@ -166,7 +166,7 @@ pub fn TextGeneration(props: TextGenerationProps) -> View {
                                                 .children((
                                                     h3()
                                                         .class("text-sm font-medium text-gray-500 dark:text-gray-400")
-                                                        .children(i18n.t("text_gen_response")),
+                                                        .children(i18n.t(K::TextGenResponse)),
                                                     View::from_dynamic(move || -> View {
                                                         if let Some(text) = response.get_clone() {
                                                             div()

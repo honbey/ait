@@ -6,14 +6,14 @@ use sycamore_futures::spawn_local_scoped;
 
 use super::dark_mode_toggle::DarkModeToggle;
 use super::dark_mode_toggle::DarkModeToggleProps;
-use crate::i18n::I18n;
+use crate::i18n::{I18n, K};
 use crate::route::Route;
 
 fn nav_item(
     route: Signal<Route>,
     is_active: impl Fn(Route) -> bool + 'static,
     icon: &str,
-    i18n_key: String,
+    i18n_key: K,
     on_click: impl Fn(web_sys::MouseEvent) + 'static,
     mobile_hidden: bool,
 ) -> View {
@@ -37,14 +37,13 @@ fn nav_item(
             i().class(icon_class),
             span().class("hidden sm:inline").children({
                 let i18n = i18n.clone();
-                let key = i18n_key.clone();
-                View::from_dynamic(move || i18n.t(&key))
+                View::from_dynamic(move || i18n.t(i18n_key))
             }),
         ))
         .into()
 }
 
-fn nav_item_static(icon: &str, i18n_key: String) -> View {
+fn nav_item_static(icon: &str, i18n_key: K) -> View {
     let i18n = use_context::<I18n>();
     let icon_class = format!("{icon} w-4 text-center");
     div()
@@ -53,8 +52,7 @@ fn nav_item_static(icon: &str, i18n_key: String) -> View {
             i().class(icon_class),
             span().class("hidden sm:inline").children({
                 let i18n = i18n.clone();
-                let key = i18n_key.clone();
-                View::from_dynamic(move || i18n.t(&key))
+                View::from_dynamic(move || i18n.t(i18n_key))
             }),
         ))
         .into()
@@ -90,9 +88,9 @@ pub fn Topbar(props: TopbarProps) -> View {
                             .children("Ait"),
                     )),
                 div().class("flex items-center gap-1").children((
-                    nav_item(route, |r| r == Route::Index, "fas fa-house", "index".into(),
+                    nav_item(route, |r| r == Route::Index, "fas fa-house", K::Index,
                         move |_| route.set(Route::Index), true),
-                    nav_item(route, |r| r.is_console(), "fas fa-terminal", "console".into(),
+                    nav_item(route, |r| r.is_console(), "fas fa-terminal", K::Console,
                         {
                             let auth = authenticated;
                             move |_| {
@@ -103,8 +101,8 @@ pub fn Topbar(props: TopbarProps) -> View {
                                 }
                             }
                         }, false),
-                    nav_item_static("fas fa-book", "docs".into()),
-                    nav_item_static("fas fa-info-circle", "about".into()),
+                    nav_item_static("fas fa-book", K::Docs),
+                    nav_item_static("fas fa-info-circle", K::About),
                 )),
             )),
             div().class("flex items-center gap-1 sm:gap-3").children((
@@ -122,7 +120,7 @@ pub fn Topbar(props: TopbarProps) -> View {
                         })
                         .children((
                             i().class("fas fa-globe w-4 text-center"),
-                            span().class("hidden sm:inline").children(View::from_dynamic(move || i18n_label.t("language"))),
+                            span().class("hidden sm:inline").children(View::from_dynamic(move || i18n_label.t(K::Language))),
                         ))
                 },
                 DarkModeToggle(DarkModeToggleProps { dark: props.dark }),
@@ -144,7 +142,7 @@ pub fn Topbar(props: TopbarProps) -> View {
                                 .children((
                                     i().class("fas fa-sign-in-alt w-4 text-center"),
                                     span().class("hidden sm:inline")
-                                        .children(View::from_dynamic(move || i18n_login.t("login"))),
+                                        .children(View::from_dynamic(move || i18n_login.t(K::Login))),
                                 ))
                                 .into()
                         } else {
@@ -206,7 +204,7 @@ pub fn Topbar(props: TopbarProps) -> View {
                                                                 }).forget();
                                                             });
                                                         })
-                                                        .children(i18n_logout.t("logout")),
+                                                        .children(i18n_logout.t(K::Logout)),
                                                 )
                                                 .into()
                                         } else {

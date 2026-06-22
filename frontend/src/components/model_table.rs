@@ -14,7 +14,7 @@ use crate::components::modal::{
     icon_button, modal_dialog, modal_title, mono_cell, name_cell, render_detail_modal,
     secondary_cell, select_input, status_badge, text_cell, timestamp_cell, zebra_bg,
 };
-use crate::i18n::I18n;
+use crate::i18n::{I18n, K};
 use crate::models::{Model, Provider};
 
 fn provider_name_by_id(provider_id: &str, providers: &[Provider]) -> String {
@@ -31,8 +31,8 @@ fn render_model_detail(
     providers: &[Provider],
 ) -> View {
     let i18n = use_context::<I18n>();
-    let enabled_text = i18n.t("status_enabled");
-    let disabled_text = i18n.t("status_disabled");
+    let enabled_text = i18n.t(K::StatusEnabled);
+    let disabled_text = i18n.t(K::StatusDisabled);
     let status = if model.enabled {
         enabled_text
     } else {
@@ -40,22 +40,22 @@ fn render_model_detail(
     };
 
     render_detail_modal(
-        i18n.t_replace("detail_title", "entity", &i18n.t("models")),
+        i18n.t_replace(K::DetailTitle, "entity", &i18n.t(K::Models)),
         vec![
             ("ID".into(), model.id),
-            (i18n.t("name"), model.name),
+            (i18n.t(K::Name), model.name),
             (
-                i18n.t("providers"),
+                i18n.t(K::Providers),
                 provider_name_by_id(&model.provider_id, providers),
             ),
-            (i18n.t("model_upstream_model"), model.upstream_model),
-            (i18n.t("table_status"), status),
+            (i18n.t(K::ModelUpstreamModel), model.upstream_model),
+            (i18n.t(K::TableStatus), status),
             (
-                i18n.t("created_at"),
+                i18n.t(K::CreatedAt),
                 crate::models::format_timestamp(model.created_at),
             ),
             (
-                i18n.t("updated_at"),
+                i18n.t(K::UpdatedAt),
                 crate::models::format_timestamp(model.updated_at),
             ),
         ],
@@ -121,37 +121,37 @@ fn render_add_modal(
             .on(events::submit, on_submit)
             .class("space-y-4")
             .children((
-                modal_title(i18n.t("model_add"), move |_| show_add_modal.set(false)),
+                modal_title(i18n.t(K::ModelAdd), move |_| show_add_modal.set(false)),
                 form_field(
                     "add-model-name".into(),
-                    i18n.t("name"),
-                    form_input("add-model-name".into(), i18n.t("name"), form_name),
+                    i18n.t(K::Name),
+                    form_input("add-model-name".into(), i18n.t(K::Name), form_name),
                 ),
                 form_field(
                     "add-model-provider".into(),
-                    i18n.t("providers"),
+                    i18n.t(K::Providers),
                     select_input("add-model-provider".into(), form_provider_id, options),
                 ),
                 form_field(
                     "add-model-upstream".into(),
-                    i18n.t("model_upstream_model"),
+                    i18n.t(K::ModelUpstreamModel),
                     form_input(
                         "add-model-upstream".into(),
-                        i18n.t("model_upstream_model"),
+                        i18n.t(K::ModelUpstreamModel),
                         form_upstream,
                     ),
                 ),
                 form_checkbox(
                     "model-enabled".into(),
-                    i18n.t("status_enabled"),
+                    i18n.t(K::StatusEnabled),
                     form_enabled,
                 ),
                 form_error(form_err),
                 form_submit_footer(
-                    i18n.t("cancel"),
+                    i18n.t(K::Cancel),
                     move |_| show_add_modal.set(false),
                     form_loading,
-                    i18n.t("save"),
+                    i18n.t(K::Save),
                 ),
             )),
         move |_| show_add_modal.set(false),
@@ -211,10 +211,10 @@ fn render_edit_modal(
             .on(events::submit, on_submit)
             .class("space-y-4")
             .children((
-                modal_title(i18n.t("model_edit"), move |_| show_edit_modal.set(None)),
+                modal_title(i18n.t(K::ModelEdit), move |_| show_edit_modal.set(None)),
                 form_field(
                     "edit-model-name".into(),
-                    i18n.t("name"),
+                    i18n.t(K::Name),
                     input()
                         .attr("id", "edit-model-name")
                         .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-600 text-gray-900 dark:text-gray-100 cursor-not-allowed")
@@ -225,29 +225,29 @@ fn render_edit_modal(
                 ),
                 form_field(
                     "edit-model-provider".into(),
-                    i18n.t("providers"),
+                    i18n.t(K::Providers),
                     select_input("edit-model-provider".into(), form_provider_id, options),
                 ),
                 form_field(
                     "edit-model-upstream".into(),
-                    i18n.t("model_upstream_model"),
+                    i18n.t(K::ModelUpstreamModel),
                     form_input(
                         "edit-model-upstream".into(),
-                        i18n.t("model_upstream_model"),
+                        i18n.t(K::ModelUpstreamModel),
                         form_upstream,
                     ),
                 ),
                 form_checkbox(
                     "edit-enabled".into(),
-                    i18n.t("status_enabled"),
+                    i18n.t(K::StatusEnabled),
                     form_enabled,
                 ),
                 form_error(form_err),
                 form_submit_footer(
-                    i18n.t("cancel"),
+                    i18n.t(K::Cancel),
                     move |_| show_edit_modal.set(None),
                     form_loading,
-                    i18n.t("save"),
+                    i18n.t(K::Save),
                 ),
             )),
         move |_| show_edit_modal.set(None),
@@ -263,8 +263,8 @@ fn make_model_rows(
     show_edit_modal: Signal<Option<Model>>,
 ) -> Vec<View> {
     let i18n = use_context::<I18n>();
-    let enabled_text = i18n.t("status_enabled");
-    let disabled_text = i18n.t("status_disabled");
+    let enabled_text = i18n.t(K::StatusEnabled);
+    let disabled_text = i18n.t(K::StatusDisabled);
     models
         .into_iter()
         .enumerate()
@@ -337,7 +337,7 @@ pub fn ModelTable(props: ModelTableProps) -> View {
     let count = models.len();
 
     let header = render_table_header(
-        i18n.t("model_title"),
+        i18n.t(K::ModelTitle),
         count,
         model_refreshing,
         debounce_refresh(model_refresh, model_refreshing),
@@ -351,7 +351,7 @@ pub fn ModelTable(props: ModelTableProps) -> View {
                     })
                     .children((
                         i().class("fas fa-plus"),
-                        span().children(i18n.t("model_add")),
+                        span().children(i18n.t(K::ModelAdd)),
                     ))
                     .into()
             }
@@ -360,13 +360,13 @@ pub fn ModelTable(props: ModelTableProps) -> View {
 
     let table = table_shell(
         vec![
-            th_left(i18n.t("name")),
-            th_left(i18n.t("providers")),
-            th_left(i18n.t("model_upstream_model")),
-            th_left(i18n.t("table_status")),
-            th_left(i18n.t("updated_at")),
-            th_center(i18n.t("provider_detail")),
-            th_center(i18n.t("provider_actions")),
+            th_left(i18n.t(K::Name)),
+            th_left(i18n.t(K::Providers)),
+            th_left(i18n.t(K::ModelUpstreamModel)),
+            th_left(i18n.t(K::TableStatus)),
+            th_left(i18n.t(K::UpdatedAt)),
+            th_center(i18n.t(K::ProviderDetail)),
+            th_center(i18n.t(K::ProviderActions)),
         ],
         rows,
     );
@@ -410,7 +410,7 @@ pub fn ModelTable(props: ModelTableProps) -> View {
                 let deleting = create_signal(false);
                 let model_name = m.name.clone();
                 render_delete_confirm(
-                    i18n.t_replace("delete_confirm_message", "name", &m.name),
+                    i18n.t_replace(K::DeleteConfirmMessage, "name", &m.name),
                     deleting,
                     move |_| {
                         if deleting.get() {

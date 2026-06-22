@@ -13,7 +13,7 @@ use crate::components::modal::{
     modal_dialog, modal_title, mono_cell, name_cell, status_badge, text_cell, timestamp_cell,
     zebra_bg,
 };
-use crate::i18n::I18n;
+use crate::i18n::{I18n, K};
 use crate::models::ApiKeyListItem;
 
 fn render_create_modal(
@@ -52,17 +52,17 @@ fn render_create_modal(
                     let copied = create_signal(false);
                     let key_for_copy = key.clone();
                     div().class("space-y-4").children((
-                        modal_title(i18n.t("api_key_created"), backdrop_close),
+                        modal_title(i18n.t(K::ApiKeyCreated), backdrop_close),
                         p().class("text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 px-3 py-2 rounded-lg")
-                            .children(i18n.t("api_key_raw_key_hint")),
+                            .children(i18n.t(K::ApiKeyRawKeyHint)),
                         div().children((
                             label().class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
-                                .children(i18n.t("api_key_name")),
+                                .children(i18n.t(K::ApiKeyName)),
                             span().class("text-gray-900 dark:text-gray-100 font-medium").children(name.clone()),
                         )),
                         div().children((
                             label().class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
-                                .children(i18n.t("api_key_key")),
+                                .children(i18n.t(K::ApiKeyKey)),
                             div().class("flex items-center gap-2").children((
                                 div().class("flex-1 bg-gray-100 dark:bg-gray-700 px-3 py-2 rounded-lg text-sm font-mono break-all text-gray-800 dark:text-gray-200 select-all").children(key.clone()),
                                 button()
@@ -84,7 +84,7 @@ fn render_create_modal(
                             let i18n = i18n.clone();
                             move || {
                                 if copied.get() {
-                                    p().class("text-sm text-green-600 dark:text-green-400").children(i18n.t("copied_success")).into()
+                                    p().class("text-sm text-green-600 dark:text-green-400").children(i18n.t(K::CopiedSuccess)).into()
                                 } else {
                                     View::new()
                                 }
@@ -95,7 +95,7 @@ fn render_create_modal(
                                 .attr("type", "button")
                                 .class("px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer")
                                 .on(events::click, backdrop_close)
-                                .children(i18n.t("close")),
+                                .children(i18n.t(K::Close)),
                         ),
                     )).into()
                 },
@@ -138,9 +138,9 @@ fn render_create_modal(
                     })
                     .class("space-y-4")
                     .children((
-                        modal_title(i18n.t("api_key_create"), backdrop_close),
-                        form_field("create-apikey-name".into(), i18n.t("api_key_name"), form_input("create-apikey-name".into(), i18n.t("api_key_name"), form_name)),
-                        form_field("create-apikey-expires".into(), i18n.t("expires_at"),
+                        modal_title(i18n.t(K::ApiKeyCreate), backdrop_close),
+                        form_field("create-apikey-name".into(), i18n.t(K::ApiKeyName), form_input("create-apikey-name".into(), i18n.t(K::ApiKeyName), form_name)),
+                        form_field("create-apikey-expires".into(), i18n.t(K::ExpiresAt),
                             input()
                                 .attr("id", "create-apikey-expires")
                                 .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:border-indigo-500 outline-none")
@@ -148,9 +148,9 @@ fn render_create_modal(
                                 .bool_attr("disabled", move || form_never_expire.get())
                                 .bind(sycamore::web::bind::value, form_expires)
                                 .into()),
-                        form_checkbox("create-apikey-never-expire".into(), i18n.t("never_expires"), form_never_expire),
+                        form_checkbox("create-apikey-never-expire".into(), i18n.t(K::NeverExpires), form_never_expire),
                         form_error(form_err),
-                        form_submit_footer(i18n.t("cancel"), backdrop_close, form_loading, i18n.t("save_create")),
+                        form_submit_footer(i18n.t(K::Cancel), backdrop_close, form_loading, i18n.t(K::SaveCreate)),
                     ))
                     .into(),
             }
@@ -166,8 +166,8 @@ fn make_api_key_rows(
     show_delete_confirm: Signal<Option<ApiKeyListItem>>,
 ) -> Vec<View> {
     let i18n = use_context::<I18n>();
-    let enabled_text = i18n.t("status_enabled");
-    let disabled_text = i18n.t("status_disabled");
+    let enabled_text = i18n.t(K::StatusEnabled);
+    let disabled_text = i18n.t(K::StatusDisabled);
     keys.into_iter()
         .enumerate()
         .map(|(idx, item)| {
@@ -245,7 +245,7 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
     let count = keys.len();
 
     let header = render_table_header(
-        i18n.t("api_key_title"),
+        i18n.t(K::ApiKeyTitle),
         count,
         api_key_refreshing,
         debounce_refresh(api_key_refresh, api_key_refreshing),
@@ -259,7 +259,7 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
                 })
                 .children((
                     i().class("fas fa-plus"),
-                    span().children(i18n.t("api_key_create")),
+                    span().children(i18n.t(K::ApiKeyCreate)),
                 ))
                 .into()
         },
@@ -267,13 +267,13 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
 
     let table = table_shell(
         vec![
-            th_left(i18n.t("name")),
-            th_left(i18n.t("api_key_key")),
-            th_left(i18n.t("created_at")),
-            th_left(i18n.t("expires_at")),
-            th_left(i18n.t("table_status")),
-            th_left(i18n.t("updated_at")),
-            th_center(i18n.t("provider_actions")),
+            th_left(i18n.t(K::Name)),
+            th_left(i18n.t(K::ApiKeyKey)),
+            th_left(i18n.t(K::CreatedAt)),
+            th_left(i18n.t(K::ExpiresAt)),
+            th_left(i18n.t(K::TableStatus)),
+            th_left(i18n.t(K::UpdatedAt)),
+            th_center(i18n.t(K::ProviderActions)),
         ],
         rows,
     );
@@ -298,7 +298,7 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
                 let key_id = item.id.clone();
                 let u = uname.clone();
                 render_delete_confirm(
-                    i18n.t_replace("api_key_delete_confirm", "name", &item.name),
+                    i18n.t_replace(K::ApiKeyDeleteConfirm, "name", &item.name),
                     deleting,
                     move |_| {
                         if deleting.get() {

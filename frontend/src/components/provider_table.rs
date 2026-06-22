@@ -15,7 +15,7 @@ use crate::components::modal::{
     render_detail_modal, secondary_cell, select_input, status_badge, text_cell, timestamp_cell,
     zebra_bg,
 };
-use crate::i18n::I18n;
+use crate::i18n::{I18n, K};
 use crate::models::Provider;
 use crate::storage::get_storage;
 
@@ -33,8 +33,8 @@ fn render_provider_detail(
     provider_types: &[(String, String)],
 ) -> View {
     let i18n = use_context::<I18n>();
-    let enabled_text = i18n.t("status_enabled");
-    let disabled_text = i18n.t("status_disabled");
+    let enabled_text = i18n.t(K::StatusEnabled);
+    let disabled_text = i18n.t(K::StatusDisabled);
     let status = if prov.enabled {
         enabled_text
     } else {
@@ -43,23 +43,23 @@ fn render_provider_detail(
     let api_key_display = prov.api_key.clone().unwrap_or_else(|| "—".to_string());
 
     render_detail_modal(
-        i18n.t_replace("detail_title", "entity", &i18n.t("providers")),
+        i18n.t_replace(K::DetailTitle, "entity", &i18n.t(K::Providers)),
         vec![
             ("ID".into(), prov.id),
-            (i18n.t("name"), prov.name),
+            (i18n.t(K::Name), prov.name),
             (
-                i18n.t("providers"),
+                i18n.t(K::Providers),
                 provider_display_name(&prov.provider_type, provider_types),
             ),
-            (i18n.t("provider_base_url"), prov.base_url),
-            (i18n.t("api_key"), api_key_display),
-            (i18n.t("table_status"), status),
+            (i18n.t(K::ProviderBaseUrl), prov.base_url),
+            (i18n.t(K::ApiKey), api_key_display),
+            (i18n.t(K::TableStatus), status),
             (
-                i18n.t("created_at"),
+                i18n.t(K::CreatedAt),
                 crate::models::format_timestamp(prov.created_at),
             ),
             (
-                i18n.t("updated_at"),
+                i18n.t(K::UpdatedAt),
                 crate::models::format_timestamp(prov.updated_at),
             ),
         ],
@@ -120,42 +120,42 @@ fn render_add_modal(
             .on(events::submit, on_submit)
             .class("space-y-4")
             .children((
-                modal_title(i18n.t("provider_add"), move |_| show_add_modal.set(false)),
+                modal_title(i18n.t(K::ProviderAdd), move |_| show_add_modal.set(false)),
                 form_field(
                     "add-provider-name".into(),
-                    i18n.t("name"),
-                    form_input("add-provider-name".into(), i18n.t("name"), form_name),
+                    i18n.t(K::Name),
+                    form_input("add-provider-name".into(), i18n.t(K::Name), form_name),
                 ),
                 form_field(
                     "add-provider-type".into(),
-                    i18n.t("providers"),
+                    i18n.t(K::Providers),
                     select_input("add-provider-type".into(), form_type, provider_types),
                 ),
                 form_field(
                     "add-provider-url".into(),
-                    i18n.t("provider_base_url"),
+                    i18n.t(K::ProviderBaseUrl),
                     form_input(
                         "add-provider-url".into(),
-                        i18n.t("provider_base_url"),
+                        i18n.t(K::ProviderBaseUrl),
                         form_base_url,
                     ),
                 ),
                 form_field(
                     "add-provider-apikey".into(),
-                    i18n.t("api_key"),
+                    i18n.t(K::ApiKey),
                     form_input(
                         "add-provider-apikey".into(),
-                        i18n.t("api_key"),
+                        i18n.t(K::ApiKey),
                         form_api_key,
                     ),
                 ),
-                form_checkbox("add-enabled".into(), i18n.t("status_enabled"), form_enabled),
+                form_checkbox("add-enabled".into(), i18n.t(K::StatusEnabled), form_enabled),
                 form_error(form_err),
                 form_submit_footer(
-                    i18n.t("cancel"),
+                    i18n.t(K::Cancel),
                     move |_| show_add_modal.set(false),
                     form_loading,
-                    i18n.t("save"),
+                    i18n.t(K::Save),
                 ),
             )),
         move |_| show_add_modal.set(false),
@@ -224,52 +224,52 @@ fn render_edit_modal(
             .on(events::submit, on_submit)
             .class("space-y-4")
             .children((
-                modal_title(i18n.t("provider_edit"), move |_| show_edit_modal.set(None)),
+                modal_title(i18n.t(K::ProviderEdit), move |_| show_edit_modal.set(None)),
                 form_field(
                     "edit-provider-name".into(),
-                    i18n.t("name"),
-                    form_input("edit-provider-name".into(), i18n.t("name"), form_name),
+                    i18n.t(K::Name),
+                    form_input("edit-provider-name".into(), i18n.t(K::Name), form_name),
                 ),
                 form_field(
                     "edit-provider-type".into(),
-                    i18n.t("providers"),
+                    i18n.t(K::Providers),
                     select_input("edit-provider-type".into(), form_type, provider_types),
                 ),
                 form_field(
                     "edit-provider-url".into(),
-                    i18n.t("provider_base_url"),
+                    i18n.t(K::ProviderBaseUrl),
                     form_input(
                         "edit-provider-url".into(),
-                        i18n.t("provider_base_url"),
+                        i18n.t(K::ProviderBaseUrl),
                         form_base_url,
                     ),
                 ),
                 form_field_with_hint(
                     "edit-provider-apikey".into(),
-                    i18n.t("api_key"),
-                    i18n.t("keep_key_hint"),
+                    i18n.t(K::ApiKey),
+                    i18n.t(K::KeepKeyHint),
                     form_input(
                         "edit-provider-apikey".into(),
-                        i18n.t("api_key"),
+                        i18n.t(K::ApiKey),
                         form_api_key,
                     ),
                 ),
                 form_checkbox(
                     "edit-provider-clear-key".into(),
-                    i18n.t("clear_key"),
+                    i18n.t(K::ClearKey),
                     form_clear_key,
                 ),
                 form_checkbox(
                     "edit-enabled".into(),
-                    i18n.t("status_enabled"),
+                    i18n.t(K::StatusEnabled),
                     form_enabled,
                 ),
                 form_error(form_err),
                 form_submit_footer(
-                    i18n.t("cancel"),
+                    i18n.t(K::Cancel),
                     move |_| show_edit_modal.set(None),
                     form_loading,
-                    i18n.t("save"),
+                    i18n.t(K::Save),
                 ),
             )),
         move |_| show_edit_modal.set(None),
@@ -285,8 +285,8 @@ fn make_provider_rows(
     provider_types: &[(String, String)],
 ) -> Vec<View> {
     let i18n = use_context::<I18n>();
-    let enabled_text = i18n.t("status_enabled");
-    let disabled_text = i18n.t("status_disabled");
+    let enabled_text = i18n.t(K::StatusEnabled);
+    let disabled_text = i18n.t(K::StatusDisabled);
     providers
         .into_iter()
         .enumerate()
@@ -393,7 +393,7 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
     let count = providers.len();
 
     let header = render_table_header(
-        i18n.t("provider_title"),
+        i18n.t(K::ProviderTitle),
         count,
         provider_refreshing,
         debounce_refresh(provider_refresh, provider_refreshing),
@@ -407,7 +407,7 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
                     })
                     .children((
                         i().class("fas fa-plus"),
-                        span().children(i18n.t("provider_add")),
+                        span().children(i18n.t(K::ProviderAdd)),
                     ))
                     .into()
             }
@@ -416,13 +416,13 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
 
     let table = table_shell(
         vec![
-            th_left(i18n.t("name")),
-            th_left(i18n.t("providers")),
-            th_left(i18n.t("provider_base_url")),
-            th_left(i18n.t("table_status")),
-            th_left(i18n.t("updated_at")),
-            th_center(i18n.t("provider_detail")),
-            th_center(i18n.t("provider_actions")),
+            th_left(i18n.t(K::Name)),
+            th_left(i18n.t(K::Providers)),
+            th_left(i18n.t(K::ProviderBaseUrl)),
+            th_left(i18n.t(K::TableStatus)),
+            th_left(i18n.t(K::UpdatedAt)),
+            th_center(i18n.t(K::ProviderDetail)),
+            th_center(i18n.t(K::ProviderActions)),
         ],
         rows,
     );
@@ -470,7 +470,7 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
                 let deleting = create_signal(false);
                 let prov_id = prov.id.clone();
                 render_delete_confirm(
-                    i18n.t_replace("delete_confirm_message", "name", &prov.name),
+                    i18n.t_replace(K::DeleteConfirmMessage, "name", &prov.name),
                     deleting,
                     move |_| {
                         if deleting.get() {
