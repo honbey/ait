@@ -347,11 +347,24 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
 
     let storage = get_storage();
     const PT_KEY: &str = "ait_provider_types";
+    const PT_TS_KEY: &str = "ait_provider_types_ts";
+    const PT_TTL_MS: f64 = 3_600_000.0; // 1 hour
+
+    let cached_fresh = storage
+        .get_item(PT_TS_KEY)
+        .and_then(|ts| ts.parse::<f64>().ok())
+        .map(|ts| js_sys::Date::now() - ts < PT_TTL_MS)
+        .unwrap_or(false);
+
     let provider_types = create_signal(
-        storage
-            .get_item(PT_KEY)
-            .and_then(|json| serde_json::from_str::<Vec<(String, String)>>(&json).ok())
-            .unwrap_or_default(),
+        if cached_fresh {
+            storage
+                .get_item(PT_KEY)
+                .and_then(|json| serde_json::from_str::<Vec<(String, String)>>(&json).ok())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        },
     );
 
     if provider_types.get_clone().is_empty() {
@@ -362,6 +375,7 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
                     types.into_iter().map(|t| (t.id, t.name)).collect();
                 if let Ok(json) = serde_json::to_string(&pairs) {
                     st.set_item(PT_KEY, &json);
+                    st.set_item(PT_TS_KEY, &js_sys::Date::now().to_string());
                 }
                 provider_types.set(pairs);
             }
