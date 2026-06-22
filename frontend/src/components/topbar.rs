@@ -143,7 +143,11 @@ pub fn Topbar(props: TopbarProps) -> View {
                                 .into()
                         } else {
                             let i18n_logout = i18n.clone();
-                            let avatar_letter = uname.get_clone().and_then(|s| s.chars().next().map(|c| c.to_uppercase().to_string())).unwrap_or_else(|| "U".to_string());
+                            let avatar_letter = create_memo(move || {
+                                uname.get_clone()
+                                .and_then(|s| s.chars().next().map(|c| c.to_uppercase().to_string()))
+                                .unwrap_or_else(|| "U".to_string())
+                            });
                             div()
                                 .class("relative")
                                 .children((

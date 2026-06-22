@@ -244,7 +244,7 @@ fn render_edit_modal(
                         form_base_url,
                     ),
                 ),
-                div().children(form_field_with_hint(
+                form_field_with_hint(
                     "edit-provider-apikey".into(),
                     i18n.t("api_key"),
                     i18n.t("keep_key_hint"),
@@ -253,7 +253,7 @@ fn render_edit_modal(
                         i18n.t("api_key"),
                         form_api_key,
                     ),
-                )),
+                ),
                 form_checkbox(
                     "edit-provider-clear-key".into(),
                     i18n.t("clear_key"),
