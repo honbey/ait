@@ -8,5 +8,4 @@ pub mod model_table;
 pub mod provider_table;
 pub mod sidebar;
 pub mod stat_card;
-pub mod text_generation;
 pub mod topbar;
