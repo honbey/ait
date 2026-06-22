@@ -1,9 +1,9 @@
 use sycamore::prelude::*;
-use sycamore::web::bind;
-use sycamore::web::events;
-use sycamore::web::tags::*;
 use sycamore_futures::spawn_local_scoped;
 
+use crate::components::auth_form::{
+    auth_error_display, auth_input_field, auth_link_footer, auth_page_shell, auth_submit_button,
+};
 use crate::i18n::{I18n, K};
 use crate::route::Route;
 
@@ -52,72 +52,33 @@ pub fn render_login_view(
         });
     };
 
-    form()
-        .on(events::submit, on_submit)
-        .class("min-h-[calc(100vh-3.5rem)] flex items-center justify-center bg-gray-50 dark:bg-gray-900")
-        .children(
-            div()
-                .class("bg-white dark:bg-gray-800 rounded-xl shadow-sm p-8 w-full max-w-md mx-4")
-                .children((
-                    h2()
-                        .class("text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6 text-center")
-                        .children(i18n.t(K::Login)),
-                    div().class("mb-4").children((
-                        label()
-                            .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
-                            .children(i18n.t(K::Username)),
-                        input()
-                            .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
-                            .attr("type", "text")
-                            .attr("placeholder", i18n.t(K::Username))
-                            .bind(bind::value, form_user)
-                            .on(events::input, move |_| error.set(String::new())),
-                    )),
-                    div().class("mb-6").children((
-                        label()
-                            .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
-                            .children(i18n.t(K::Password)),
-                        input()
-                            .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
-                            .attr("type", "password")
-                            .attr("placeholder", i18n.t(K::Password))
-                            .bind(bind::value, form_pass)
-                            .on(events::input, move |_| error.set(String::new())),
-                    )),
-                    View::from_dynamic(move || {
-                        let err = error.get_clone();
-                        if err.is_empty() {
-                            View::new()
-                        } else {
-                            p().class("text-red-500 text-sm mb-4").children(err).into()
-                        }
-                    }),
-                    {
-                        let i18n_btn = i18n.clone();
-                        button()
-                            .attr("type", "submit")
-                            .disabled(move || loading.get())
-                            .class("w-full py-2 px-4 bg-indigo-600 hover:enabled:bg-indigo-700 text-white font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2")
-                            .children(View::from_dynamic(move || -> View {
-                                if loading.get() {
-                                    div().class("flex items-center gap-2").children((
-                                        i().class("fas fa-spinner animate-spin"),
-                                        span().children(i18n_btn.t(K::LoginBtn)),
-                                    )).into()
-                                } else {
-                                    span().children(i18n_btn.t(K::LoginBtn)).into()
-                                }
-                            }))
-                    },
-                    div().class("mt-4 text-center").children((
-                        span().class("text-sm text-gray-500 dark:text-gray-400")
-                            .children(i18n.t(K::NoAccountRegister)),
-                        button()
-                            .class("ml-1 text-sm text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer")
-                            .on(events::click, move |_| route.set(Route::Register))
-                            .children(i18n.t(K::Register)),
-                    )),
-                )),
-        )
-        .into()
+    auth_page_shell(
+        on_submit,
+        i18n.t(K::Login),
+        (
+            auth_input_field(
+                i18n.t(K::Username),
+                "text",
+                i18n.t(K::Username),
+                form_user,
+                error,
+                false,
+            ),
+            auth_input_field(
+                i18n.t(K::Password),
+                "password",
+                i18n.t(K::Password),
+                form_pass,
+                error,
+                true,
+            ),
+            auth_error_display(error),
+            auth_submit_button(loading, i18n.t(K::LoginBtn)),
+            auth_link_footer(
+                i18n.t(K::NoAccountRegister),
+                i18n.t(K::Register),
+                move |_| route.set(Route::Register),
+            ),
+        ),
+    )
 }

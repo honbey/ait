@@ -1,4 +1,5 @@
 pub mod api_key_table;
+pub mod auth_form;
 pub mod dark_mode_toggle;
 pub mod data_table;
 pub mod delete_confirm;
