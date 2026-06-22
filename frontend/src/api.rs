@@ -321,7 +321,8 @@ pub async fn generate_completion(
         body["top_p"] = serde_json::json!(p);
     }
     let auth = format!("Bearer {}", token);
-    let json: serde_json::Value = api_post("v1/completions", &body, &[("Authorization", &auth)]).await?;
+    let json: serde_json::Value =
+        api_post("v1/completions", &body, &[("Authorization", &auth)]).await?;
     let text = json
         .get("choices")
         .and_then(|c| c.as_array())

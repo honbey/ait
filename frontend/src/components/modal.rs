@@ -66,7 +66,9 @@ pub fn form_field_with_hint(id: String, label_text: String, hint: String, input:
                 .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
                 .children((
                     span().children(label_text),
-                    span().class("text-xs text-gray-400 dark:text-gray-500 ml-1").children(hint),
+                    span()
+                        .class("text-xs text-gray-400 dark:text-gray-500 ml-1")
+                        .children(hint),
                 )),
             input,
         ))

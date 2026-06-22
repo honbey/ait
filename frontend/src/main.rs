@@ -11,7 +11,7 @@ mod storage;
 mod components;
 mod views;
 
-use crate::storage::{get_storage, LANG_KEY, THEME_KEY};
+use crate::storage::{LANG_KEY, THEME_KEY, get_storage};
 
 // ─── App Component ─────────────────────────────────────────────
 
