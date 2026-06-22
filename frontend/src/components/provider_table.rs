@@ -48,7 +48,7 @@ fn render_provider_detail(
             ("ID".into(), prov.id),
             (i18n.t("name"), prov.name),
             (
-                i18n.t("provider_api_type"),
+                i18n.t("providers"),
                 provider_display_name(&prov.provider_type, provider_types),
             ),
             (i18n.t("provider_base_url"), prov.base_url),
@@ -128,7 +128,7 @@ fn render_add_modal(
                 ),
                 form_field(
                     "add-provider-type".into(),
-                    i18n.t("provider_api_type"),
+                    i18n.t("providers"),
                     select_input("add-provider-type".into(), form_type, provider_types),
                 ),
                 form_field(
@@ -232,7 +232,7 @@ fn render_edit_modal(
                 ),
                 form_field(
                     "edit-provider-type".into(),
-                    i18n.t("provider_api_type"),
+                    i18n.t("providers"),
                     select_input("edit-provider-type".into(), form_type, provider_types),
                 ),
                 form_field(
@@ -419,7 +419,7 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
     let table = table_shell(
         vec![
             th_left(i18n.t("name")),
-            th_left(i18n.t("provider_api_type")),
+            th_left(i18n.t("providers")),
             th_left(i18n.t("provider_base_url")),
             th_left(i18n.t("table_status")),
             th_left(i18n.t("updated_at")),

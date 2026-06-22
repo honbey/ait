@@ -10,7 +10,6 @@
   "chart_placeholder": "Chart Placeholder",
   "provider_title": "Provider List",
   "name": "Name",
-  "provider_api_type": "API Type",
   "provider_base_url": "Base URL",
   "table_status": "Status",
   "status_enabled": "Enabled",

@@ -10,7 +10,6 @@
   "chart_placeholder": "预留图表位",
   "provider_title": "提供商列表",
   "name": "名称",
-  "provider_api_type": "API 类型",
   "provider_base_url": "基础 URL",
   "table_status": "状态",
   "status_enabled": "启用",
