@@ -30,7 +30,7 @@ async fn response_to_error(resp: gloo_net::http::Response) -> NetError {
 }
 
 async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
-    let url = format!("{}/admin/{}", get_base_url(), path);
+    let url = format!("{}/{}", get_base_url(), path);
     let resp = Request::get(&url).send().await?;
     if resp.ok() {
         resp.json().await
@@ -42,10 +42,14 @@ async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
 async fn api_post<T: DeserializeOwned>(
     path: &str,
     body: &serde_json::Value,
+    headers: &[(&str, &str)],
 ) -> Result<T, NetError> {
-    let url = format!("{}/admin/{}", get_base_url(), path);
-    let resp = Request::post(&url)
-        .header("Content-Type", "application/json")
+    let url = format!("{}/{}", get_base_url(), path);
+    let mut req = Request::post(&url).header("Content-Type", "application/json");
+    for (k, v) in headers {
+        req = req.header(k, v);
+    }
+    let resp = req
         .body(body.to_string())
         .map_err(|e| NetError::GlooError(e.to_string()))?
         .send()
@@ -58,7 +62,7 @@ async fn api_post<T: DeserializeOwned>(
 }
 
 async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> Result<T, NetError> {
-    let url = format!("{}/admin/{}", get_base_url(), path);
+    let url = format!("{}/{}", get_base_url(), path);
     let resp = Request::put(&url)
         .header("Content-Type", "application/json")
         .body(body.to_string())
@@ -73,7 +77,7 @@ async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> R
 }
 
 async fn api_delete(path: &str) -> Result<(), NetError> {
-    let url = format!("{}/admin/{}", get_base_url(), path);
+    let url = format!("{}/{}", get_base_url(), path);
     let resp = Request::delete(&url).send().await?;
     if resp.ok() {
         Ok(())
@@ -97,13 +101,14 @@ pub async fn create_model(
     enabled: bool,
 ) -> Result<Model, NetError> {
     api_post(
-        "models",
+        "admin/models",
         &serde_json::json!({
             "name": name,
             "provider_id": provider_id,
             "upstream_model": upstream_model,
             "enabled": enabled,
         }),
+        &[],
     )
     .await
 }
@@ -115,7 +120,7 @@ pub async fn update_model(
     enabled: bool,
 ) -> Result<Model, NetError> {
     api_put(
-        &format!("models/{}", name),
+        &format!("admin/models/{}", name),
         &serde_json::json!({
             "provider_id": provider_id,
             "upstream_model": upstream_model,
@@ -126,13 +131,13 @@ pub async fn update_model(
 }
 
 pub async fn delete_model(name: &str) -> Result<(), NetError> {
-    api_delete(&format!("models/{}", name)).await
+    api_delete(&format!("admin/models/{}", name)).await
 }
 
 // --- API Key CRUD ---
 
 pub async fn fetch_api_keys(username: &str) -> Result<Vec<ApiKeyListItem>, NetError> {
-    api_get(&format!("users/{}/api-keys", username)).await
+    api_get(&format!("admin/users/{}/api-keys", username)).await
 }
 
 pub async fn create_api_key(
@@ -141,8 +146,9 @@ pub async fn create_api_key(
     expires_at: Option<i64>,
 ) -> Result<CreateApiKeyResponse, NetError> {
     api_post(
-        &format!("users/{}/api-keys", username),
+        &format!("admin/users/{}/api-keys", username),
         &serde_json::json!({ "name": name, "expires_at": expires_at }),
+        &[],
     )
     .await
 }
@@ -153,14 +159,14 @@ pub async fn toggle_api_key(
     enabled: bool,
 ) -> Result<ApiKeyListItem, NetError> {
     api_put(
-        &format!("users/{}/api-keys/{}", username, key_id),
+        &format!("admin/users/{}/api-keys/{}", username, key_id),
         &serde_json::json!({ "enabled": enabled }),
     )
     .await
 }
 
 pub async fn delete_api_key(username: &str, key: &str) -> Result<(), NetError> {
-    api_delete(&format!("users/{}/api-keys/{}", username, key)).await
+    api_delete(&format!("admin/users/{}/api-keys/{}", username, key)).await
 }
 
 // --- Auth ---
@@ -171,12 +177,13 @@ pub async fn register_api(
     registration_code: &str,
 ) -> Result<(), NetError> {
     api_post::<serde_json::Value>(
-        "register",
+        "admin/register",
         &serde_json::json!({
             "username": username,
             "password": password,
             "registration_code": registration_code,
         }),
+        &[],
     )
     .await?;
     Ok(())
@@ -184,15 +191,16 @@ pub async fn register_api(
 
 pub async fn login_api(username: &str, password: &str) -> Result<String, NetError> {
     let resp: LoginResponse = api_post(
-        "login",
+        "admin/login",
         &serde_json::json!({ "username": username, "password": password }),
+        &[],
     )
     .await?;
     Ok(resp.role)
 }
 
 pub async fn check_session() -> Result<Option<(String, String)>, NetError> {
-    let json: serde_json::Value = api_get("session").await?;
+    let json: serde_json::Value = api_get("admin/session").await?;
     let authenticated = json
         .get("authenticated")
         .and_then(|v| v.as_bool())
@@ -212,26 +220,26 @@ pub async fn check_session() -> Result<Option<(String, String)>, NetError> {
 }
 
 pub async fn logout_api() -> Result<(), NetError> {
-    api_post::<serde_json::Value>("logout", &serde_json::json!({})).await?;
+    api_post::<serde_json::Value>("admin/logout", &serde_json::json!({}), &[]).await?;
     Ok(())
 }
 
 // --- Data fetchers ---
 
 pub async fn fetch_providers() -> Result<Vec<Provider>, NetError> {
-    api_get("providers").await
+    api_get("admin/providers").await
 }
 
 pub async fn fetch_provider_types() -> Result<Vec<ProviderTypeInfo>, NetError> {
-    api_get("provider-types").await
+    api_get("admin/provider-types").await
 }
 
 pub async fn fetch_models() -> Result<Vec<Model>, NetError> {
-    api_get("models").await
+    api_get("admin/models").await
 }
 
 pub async fn fetch_dashboard() -> Result<DashboardData, NetError> {
-    let stats = api_get::<DashboardStats>("stats").await?;
+    let stats = api_get::<DashboardStats>("admin/stats").await?;
     Ok(DashboardData {
         provider_count: stats.provider_count,
         model_count: stats.model_count,
@@ -250,7 +258,7 @@ pub async fn create_provider(
     enabled: bool,
 ) -> Result<Provider, NetError> {
     api_post(
-        "providers",
+        "admin/providers",
         &serde_json::json!({
             "name": name,
             "type": provider_type,
@@ -258,6 +266,7 @@ pub async fn create_provider(
             "api_key": api_key_value(api_key.as_deref()),
             "enabled": enabled,
         }),
+        &[],
     )
     .await
 }
@@ -271,7 +280,7 @@ pub async fn update_provider(
     enabled: bool,
 ) -> Result<Provider, NetError> {
     api_put(
-        &format!("providers/{}", id),
+        &format!("admin/providers/{}", id),
         &serde_json::json!({
             "name": name,
             "type": provider_type,
@@ -284,7 +293,7 @@ pub async fn update_provider(
 }
 
 pub async fn delete_provider(id: &str) -> Result<(), NetError> {
-    api_delete(&format!("providers/{}", id)).await
+    api_delete(&format!("admin/providers/{}", id)).await
 }
 
 // --- Text Generation ---
@@ -297,7 +306,6 @@ pub async fn generate_completion(
     temperature: Option<f32>,
     top_p: Option<f32>,
 ) -> Result<String, NetError> {
-    let url = format!("{}/v1/completions", get_base_url());
     let mut body = serde_json::json!({
         "model": model,
         "prompt": prompt,
@@ -312,23 +320,8 @@ pub async fn generate_completion(
     if let Some(p) = top_p {
         body["top_p"] = serde_json::json!(p);
     }
-    let resp = Request::post(&url)
-        .header("Content-Type", "application/json")
-        .header("Authorization", &format!("Bearer {}", token))
-        .body(body.to_string())
-        .map_err(|e| NetError::GlooError(e.to_string()))?
-        .send()
-        .await?;
-    if !resp.ok() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        let msg = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
-            .unwrap_or_else(|| format!("HTTP {}", status));
-        return Err(NetError::GlooError(msg));
-    }
-    let json: serde_json::Value = resp.json().await?;
+    let auth = format!("Bearer {}", token);
+    let json: serde_json::Value = api_post("v1/completions", &body, &[("Authorization", &auth)]).await?;
     let text = json
         .get("choices")
         .and_then(|c| c.as_array())
