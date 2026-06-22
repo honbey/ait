@@ -9,6 +9,57 @@ use super::dark_mode_toggle::DarkModeToggleProps;
 use crate::i18n::I18n;
 use crate::route::Route;
 
+fn nav_item(
+    route: Signal<Route>,
+    is_active: impl Fn(Route) -> bool + 'static,
+    icon: &str,
+    i18n_key: String,
+    on_click: impl Fn(web_sys::MouseEvent) + 'static,
+    mobile_hidden: bool,
+) -> View {
+    let i18n = use_context::<I18n>();
+    let (active, inactive) = if mobile_hidden {
+        (
+            "hidden md:flex items-center gap-2 px-3 py-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm",
+            "hidden md:flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm",
+        )
+    } else {
+        (
+            "flex items-center gap-2 px-3 py-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm",
+            "flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm",
+        )
+    };
+    let icon_class = format!("{icon} w-4 text-center");
+    div()
+        .class(move || if is_active(route.get()) { active } else { inactive })
+        .on(events::click, on_click)
+        .children((
+            i().class(icon_class),
+            span().class("hidden sm:inline").children({
+                let i18n = i18n.clone();
+                let key = i18n_key.clone();
+                View::from_dynamic(move || i18n.t(&key))
+            }),
+        ))
+        .into()
+}
+
+fn nav_item_static(icon: &str, i18n_key: String) -> View {
+    let i18n = use_context::<I18n>();
+    let icon_class = format!("{icon} w-4 text-center");
+    div()
+        .class("hidden md:flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm")
+        .children((
+            i().class(icon_class),
+            span().class("hidden sm:inline").children({
+                let i18n = i18n.clone();
+                let key = i18n_key.clone();
+                View::from_dynamic(move || i18n.t(&key))
+            }),
+        ))
+        .into()
+}
+
 #[derive(Props)]
 pub struct TopbarProps {
     pub dark: Signal<bool>,
@@ -39,66 +90,21 @@ pub fn Topbar(props: TopbarProps) -> View {
                             .children("Ait"),
                     )),
                 div().class("flex items-center gap-1").children((
-                    // Index
-                    div()
-                        .class(move || {
-                            if route.get() == Route::Index {
-                                "hidden md:flex items-center gap-2 px-3 py-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm"
-                            } else {
-                                "hidden md:flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm"
+                    nav_item(route, |r| r == Route::Index, "fas fa-house", "index".into(),
+                        move |_| route.set(Route::Index), true),
+                    nav_item(route, |r| r.is_console(), "fas fa-terminal", "console".into(),
+                        {
+                            let auth = authenticated;
+                            move |_| {
+                                if auth.get() {
+                                    route.set(Route::Dashboard);
+                                } else {
+                                    route.set(Route::Login);
+                                }
                             }
-                        })
-                        .on(events::click, move |_| route.set(Route::Index))
-                        .children((
-                            i().class("fas fa-house w-4 text-center"),
-                            span().class("hidden sm:inline").children({
-                                let i18n = i18n.clone();
-                                View::from_dynamic(move || i18n.t("index"))
-                            }),
-                        )),
-                    // Console
-                    div()
-                        .class(move || {
-                            if route.get().is_console() {
-                                "flex items-center gap-2 px-3 py-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm"
-                            } else {
-                                "flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm"
-                            }
-                        })
-                        .on(events::click, move |_| {
-                            if authenticated.get() {
-                                route.set(Route::Dashboard);
-                            } else {
-                                route.set(Route::Login);
-                            }
-                        })
-                        .children((
-                            i().class("fas fa-terminal w-4 text-center"),
-                            span().class("hidden md:inline").children({
-                                let i18n = i18n.clone();
-                                View::from_dynamic(move || i18n.t("console"))
-                            }),
-                        )),
-                    // Docs
-                    div()
-                        .class("hidden md:flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm")
-                        .children((
-                            i().class("fas fa-book w-4 text-center"),
-                            span().class("hidden sm:inline").children({
-                                let i18n = i18n.clone();
-                                View::from_dynamic(move || i18n.t("docs"))
-                            }),
-                        )),
-                    // About
-                    div()
-                        .class("hidden md:flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm")
-                        .children((
-                            i().class("fas fa-info-circle w-4 text-center"),
-                            span().class("hidden sm:inline").children({
-                                let i18n = i18n.clone();
-                                View::from_dynamic(move || i18n.t("about"))
-                            }),
-                        )),
+                        }, false),
+                    nav_item_static("fas fa-book", "docs".into()),
+                    nav_item_static("fas fa-info-circle", "about".into()),
                 )),
             )),
             div().class("flex items-center gap-1 sm:gap-3").children((
