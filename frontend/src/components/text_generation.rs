@@ -51,7 +51,7 @@ pub fn TextGeneration(props: TextGenerationProps) -> View {
             spawn_local_scoped(async move {
                 let key = api_key.get_clone();
                 if key.is_empty() {
-                    error.set("API Key is required".into());
+                    error.set(i18n.t(K::TextGenApiKeyRequired));
                     return;
                 }
                 let model = selected_model.get_clone();

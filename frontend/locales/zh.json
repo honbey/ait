@@ -82,6 +82,7 @@
   "text_gen_temperature": "温度",
   "text_gen_top_p": "Top P",
   "text_gen_error": "生成失败：{{ msg }}",
+  "text_gen_api_key_required": "请输入 API 密钥",
   "clear_key": "清空密钥",
   "keep_key_hint": "（留空则保留当前密钥）"
 }
