@@ -3,7 +3,7 @@ use sycamore::web::events;
 use sycamore::web::tags::*;
 use sycamore_futures::spawn_local_scoped;
 
-use crate::api::{create_provider, delete_provider, update_provider};
+use crate::api::{create_provider, delete_provider, fetch_provider_types, update_provider};
 use crate::components::data_table::{
     debounce_refresh, render_add_button, render_table_header, table_container, table_shell,
     th_center, th_left,
@@ -16,16 +16,6 @@ use crate::components::modal::{
 };
 use crate::i18n::I18n;
 use crate::models::Provider;
-
-fn provider_type_options() -> Vec<(String, String)> {
-    vec![
-        ("openai_compat".into(), "OpenAI Compatible".into()),
-        ("deepseek".into(), "DeepSeek".into()),
-        ("zhipu".into(), "Zhipu".into()),
-        ("ollama".into(), "Ollama".into()),
-        ("llamacpp".into(), "llama.cpp".into()),
-    ]
-}
 
 fn render_provider_detail(i18n: &I18n, prov: Provider, show_detail: Signal<Option<usize>>) -> View {
     let enabled_text = i18n.t("status_enabled");
@@ -63,6 +53,7 @@ fn render_add_modal(
     i18n: &I18n,
     provider_refresh: Signal<usize>,
     show_add_modal: Signal<bool>,
+    provider_types: Vec<(String, String)>,
 ) -> View {
     let form_name = create_signal(String::new());
     let form_type = create_signal("openai_compat".to_string());
@@ -120,11 +111,7 @@ fn render_add_modal(
                 form_field(
                     "add-provider-type".into(),
                     i18n.t("provider_api_type"),
-                    select_input(
-                        "add-provider-type".into(),
-                        form_type,
-                        provider_type_options(),
-                    ),
+                    select_input("add-provider-type".into(), form_type, provider_types),
                 ),
                 form_field(
                     "add-provider-url".into(),
@@ -162,6 +149,7 @@ fn render_edit_modal(
     provider_refresh: Signal<usize>,
     show_edit_modal: Signal<Option<Provider>>,
     prov: Provider,
+    provider_types: Vec<(String, String)>,
 ) -> View {
     let form_name = create_signal(prov.name.clone());
     let form_type = create_signal(prov.provider_type.clone());
@@ -220,11 +208,7 @@ fn render_edit_modal(
                 form_field(
                     "edit-provider-type".into(),
                     i18n.t("provider_api_type"),
-                    select_input(
-                        "edit-provider-type".into(),
-                        form_type,
-                        provider_type_options(),
-                    ),
+                    select_input("edit-provider-type".into(), form_type, provider_types),
                 ),
                 form_field(
                     "edit-provider-url".into(),
@@ -333,6 +317,13 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
     let provider_refresh = props.provider_refresh;
     let provider_refreshing = props.provider_refreshing;
 
+    let provider_types = create_signal(Vec::new());
+    spawn_local_scoped(async move {
+        if let Ok(types) = fetch_provider_types().await {
+            provider_types.set(types.into_iter().map(|t| (t.id, t.name)).collect());
+        }
+    });
+
     let rows = make_provider_rows(
         providers.clone(),
         &i18n,
@@ -395,7 +386,12 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
         let i18n = i18n.clone();
         move || {
             if show_add_modal.get() {
-                render_add_modal(&i18n, provider_refresh, show_add_modal)
+                render_add_modal(
+                    &i18n,
+                    provider_refresh,
+                    show_add_modal,
+                    provider_types.get_clone(),
+                )
             } else {
                 View::new()
             }
@@ -405,7 +401,13 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
     let edit_modal = View::from_dynamic({
         let i18n = i18n.clone();
         move || match show_edit_modal.get_clone() {
-            Some(prov) => render_edit_modal(&i18n, provider_refresh, show_edit_modal, prov),
+            Some(prov) => render_edit_modal(
+                &i18n,
+                provider_refresh,
+                show_edit_modal,
+                prov,
+                provider_types.get_clone(),
+            ),
             None => View::new(),
         }
     });

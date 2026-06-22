@@ -12,6 +12,12 @@ pub fn format_timestamp(ts: f64) -> String {
     format!("{}-{:02}-{:02} {:02}:{:02}:{:02}", y, m, d, h, min, s)
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProviderTypeInfo {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Provider {
     pub id: String,

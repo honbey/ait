@@ -5,6 +5,7 @@ use gloo_net::http::Request;
 
 use crate::models::{
     ApiKeyListItem, CreateApiKeyResponse, DashboardData, DashboardStats, Model, Provider,
+    ProviderTypeInfo,
 };
 
 fn get_base_url() -> String {
@@ -232,6 +233,10 @@ pub async fn logout_api() -> Result<(), NetError> {
 
 pub async fn fetch_providers() -> Result<Vec<Provider>, NetError> {
     api_get("providers").await
+}
+
+pub async fn fetch_provider_types() -> Result<Vec<ProviderTypeInfo>, NetError> {
+    api_get("provider-types").await
 }
 
 pub async fn fetch_models() -> Result<Vec<Model>, NetError> {
