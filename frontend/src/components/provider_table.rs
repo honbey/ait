@@ -17,7 +17,20 @@ use crate::components::modal::{
 use crate::i18n::I18n;
 use crate::models::Provider;
 
-fn render_provider_detail(i18n: &I18n, prov: Provider, show_detail: Signal<Option<usize>>) -> View {
+fn provider_display_name(provider_type: &str, provider_types: &[(String, String)]) -> String {
+    provider_types
+        .iter()
+        .find(|(id, _)| id == provider_type)
+        .map(|(_, name)| name.clone())
+        .unwrap_or_else(|| provider_type.to_string())
+}
+
+fn render_provider_detail(
+    i18n: &I18n,
+    prov: Provider,
+    show_detail: Signal<Option<usize>>,
+    provider_types: &[(String, String)],
+) -> View {
     let enabled_text = i18n.t("status_enabled");
     let disabled_text = i18n.t("status_disabled");
     let status = if prov.enabled {
@@ -32,7 +45,10 @@ fn render_provider_detail(i18n: &I18n, prov: Provider, show_detail: Signal<Optio
         vec![
             ("ID".into(), prov.id),
             (i18n.t("name"), prov.name),
-            (i18n.t("provider_api_type"), prov.provider_type),
+            (
+                i18n.t("provider_api_type"),
+                provider_display_name(&prov.provider_type, provider_types),
+            ),
             (i18n.t("provider_base_url"), prov.base_url),
             (i18n.t("api_key"), api_key_display),
             (i18n.t("table_status"), status),
@@ -256,6 +272,7 @@ fn make_provider_rows(
     is_admin: Signal<bool>,
     show_edit_modal: Signal<Option<Provider>>,
     show_delete_confirm: Signal<Option<Provider>>,
+    provider_types: &[(String, String)],
 ) -> Vec<View> {
     let enabled_text = i18n.t("status_enabled");
     let disabled_text = i18n.t("status_disabled");
@@ -268,7 +285,7 @@ fn make_provider_rows(
             tr().class(zebra_bg(idx))
                 .children((
                     name_cell(prov.name),
-                    secondary_cell(prov.provider_type),
+                    secondary_cell(provider_display_name(&prov.provider_type, provider_types)),
                     mono_cell(prov.base_url),
                     text_cell(status_badge(prov.enabled, &enabled_text, &disabled_text)),
                     timestamp_cell(prov.updated_at),
@@ -317,12 +334,31 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
     let provider_refresh = props.provider_refresh;
     let provider_refreshing = props.provider_refreshing;
 
-    let provider_types = create_signal(Vec::new());
-    spawn_local_scoped(async move {
-        if let Ok(types) = fetch_provider_types().await {
-            provider_types.set(types.into_iter().map(|t| (t.id, t.name)).collect());
-        }
-    });
+    let provider_types = create_signal(
+        web_sys::window()
+            .and_then(|w| w.local_storage().ok())
+            .flatten()
+            .and_then(|s| s.get_item("ait_provider_types").ok())
+            .flatten()
+            .and_then(|json| serde_json::from_str::<Vec<(String, String)>>(&json).ok())
+            .unwrap_or_default(),
+    );
+
+    if provider_types.get_clone().is_empty() {
+        spawn_local_scoped(async move {
+            if let Ok(types) = fetch_provider_types().await {
+                let pairs: Vec<(String, String)> =
+                    types.into_iter().map(|t| (t.id, t.name)).collect();
+                if let Ok(json) = serde_json::to_string(&pairs) {
+                    web_sys::window()
+                        .and_then(|w| w.local_storage().ok())
+                        .flatten()
+                        .map(|s| s.set_item("ait_provider_types", &json));
+                }
+                provider_types.set(pairs);
+            }
+        });
+    }
 
     let rows = make_provider_rows(
         providers.clone(),
@@ -331,6 +367,7 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
         is_admin,
         show_edit_modal,
         show_delete_confirm,
+        &provider_types.get_clone(),
     );
     let count = providers.len();
 
@@ -376,7 +413,12 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
         let providers = providers.clone();
         move || match show_detail.get() {
             Some(idx) => providers.get(idx).map_or(View::new(), |prov| {
-                render_provider_detail(&i18n, prov.clone(), show_detail)
+                render_provider_detail(
+                    &i18n,
+                    prov.clone(),
+                    show_detail,
+                    &provider_types.get_clone(),
+                )
             }),
             None => View::new(),
         }
