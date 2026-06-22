@@ -356,16 +356,14 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
         .map(|ts| js_sys::Date::now() - ts < PT_TTL_MS)
         .unwrap_or(false);
 
-    let provider_types = create_signal(
-        if cached_fresh {
-            storage
-                .get_item(PT_KEY)
-                .and_then(|json| serde_json::from_str::<Vec<(String, String)>>(&json).ok())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        },
-    );
+    let provider_types = create_signal(if cached_fresh {
+        storage
+            .get_item(PT_KEY)
+            .and_then(|json| serde_json::from_str::<Vec<(String, String)>>(&json).ok())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    });
 
     if provider_types.get_clone().is_empty() {
         let st = storage;
@@ -431,11 +429,7 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
         let providers = providers.clone();
         move || match show_detail.get() {
             Some(idx) => providers.get(idx).map_or(View::new(), |prov| {
-                render_provider_detail(
-                    prov.clone(),
-                    show_detail,
-                    &provider_types.get_clone(),
-                )
+                render_provider_detail(prov.clone(), show_detail, &provider_types.get_clone())
             }),
             None => View::new(),
         }
@@ -443,11 +437,7 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
 
     let add_modal = View::from_dynamic(move || {
         if show_add_modal.get() {
-            render_add_modal(
-                provider_refresh,
-                show_add_modal,
-                provider_types.get_clone(),
-            )
+            render_add_modal(provider_refresh, show_add_modal, provider_types.get_clone())
         } else {
             View::new()
         }

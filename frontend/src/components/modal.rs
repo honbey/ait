@@ -130,7 +130,9 @@ fn loading_button<F: Fn(web_sys::MouseEvent) + 'static>(
 ) -> View {
     let lbl = label;
     let bt = btn_type.to_string();
-    let color_class = format!("{color} text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 px-4 py-2");
+    let color_class = format!(
+        "{color} text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 px-4 py-2"
+    );
     let mut btn = button()
         .attr("type", bt)
         .disabled(move || loading.get())
@@ -139,16 +141,19 @@ fn loading_button<F: Fn(web_sys::MouseEvent) + 'static>(
         btn = btn.on(events::click, handler);
     }
     btn.children(View::from_dynamic(move || -> View {
-            if loading.get() {
-                div().class("flex items-center gap-2").children((
+        if loading.get() {
+            div()
+                .class("flex items-center gap-2")
+                .children((
                     i().class("fas fa-spinner animate-spin"),
                     span().children(lbl.clone()),
-                )).into()
-            } else {
-                span().children(lbl.clone()).into()
-            }
-        }))
-        .into()
+                ))
+                .into()
+        } else {
+            span().children(lbl.clone()).into()
+        }
+    }))
+    .into()
 }
 
 pub fn form_submit_footer(
@@ -157,12 +162,19 @@ pub fn form_submit_footer(
     loading: Signal<bool>,
     submit_text: String,
 ) -> View {
-    div().class("flex items-center justify-end gap-3").children((
-        cancel_button(cancel_text, on_cancel),
-        loading_button::<fn(web_sys::MouseEvent)>(
-            "bg-blue-500 hover:enabled:bg-blue-600", submit_text, loading, "submit", None,
-        ),
-    )).into()
+    div()
+        .class("flex items-center justify-end gap-3")
+        .children((
+            cancel_button(cancel_text, on_cancel),
+            loading_button::<fn(web_sys::MouseEvent)>(
+                "bg-blue-500 hover:enabled:bg-blue-600",
+                submit_text,
+                loading,
+                "submit",
+                None,
+            ),
+        ))
+        .into()
 }
 
 pub fn form_delete_footer(
@@ -172,12 +184,19 @@ pub fn form_delete_footer(
     delete_text: String,
     on_delete: impl Fn(web_sys::MouseEvent) + 'static,
 ) -> View {
-    div().class("flex items-center justify-end gap-3").children((
-        cancel_button(cancel_text, on_cancel),
-        loading_button(
-            "bg-red-500 hover:enabled:bg-red-600", delete_text, deleting, "button", Some(on_delete),
-        ),
-    )).into()
+    div()
+        .class("flex items-center justify-end gap-3")
+        .children((
+            cancel_button(cancel_text, on_cancel),
+            loading_button(
+                "bg-red-500 hover:enabled:bg-red-600",
+                delete_text,
+                deleting,
+                "button",
+                Some(on_delete),
+            ),
+        ))
+        .into()
 }
 
 // --- Table helpers ---

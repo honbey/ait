@@ -396,9 +396,7 @@ pub fn ModelTable(props: ModelTableProps) -> View {
     let edit_modal = View::from_dynamic({
         let providers = providers.clone();
         move || match show_edit_modal.get_clone() {
-            Some(m) => {
-                render_edit_modal(providers.clone(), model_refresh, show_edit_modal, m)
-            }
+            Some(m) => render_edit_modal(providers.clone(), model_refresh, show_edit_modal, m),
             None => View::new(),
         }
     });

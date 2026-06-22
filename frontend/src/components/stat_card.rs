@@ -3,8 +3,8 @@ use sycamore::web::tags::*;
 
 #[derive(Props)]
 pub struct StatCardProps {
-    pub icon: String,
-    pub bg_color: String,
+    pub icon: &'static str,
+    pub bg_color: &'static str,
     pub value: String,
     pub label: String,
 }

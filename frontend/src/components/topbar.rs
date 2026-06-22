@@ -31,7 +31,13 @@ fn nav_item(
     };
     let icon_class = format!("{icon} w-4 text-center");
     div()
-        .class(move || if is_active(route.get()) { active } else { inactive })
+        .class(move || {
+            if is_active(route.get()) {
+                active
+            } else {
+                inactive
+            }
+        })
         .on(events::click, on_click)
         .children((
             i().class(icon_class),

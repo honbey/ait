@@ -76,13 +76,11 @@ pub fn TextGeneration(props: TextGenerationProps) -> View {
     };
 
     div()
+        .class("bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 max-w-6xl mx-auto")
         .children(
             div()
-                .class("bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 max-w-6xl mx-auto")
-                .children(
-                    div()
-                        .class("flex gap-6")
-                        .children((
+                .class("flex gap-6")
+                .children((
                             // Left column: form (1/3)
                             div()
                                 .class("w-1/3 flex flex-col gap-4")
@@ -181,7 +179,6 @@ pub fn TextGeneration(props: TextGenerationProps) -> View {
                                         ),
                                 ),
                         )),
-                ),
         )
         .into()
 }
