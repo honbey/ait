@@ -61,9 +61,8 @@ fn render_add_modal(
     show_add_modal: Signal<bool>,
 ) -> View {
     let form_name = create_signal(String::new());
-    let form_provider_id = create_signal(
-        providers.first().map(|p| p.id.clone()).unwrap_or_default(),
-    );
+    let form_provider_id =
+        create_signal(providers.first().map(|p| p.id.clone()).unwrap_or_default());
     let form_upstream = create_signal(String::new());
     let form_enabled = create_signal(true);
     let form_err = create_signal(String::new());
@@ -331,8 +330,7 @@ pub fn ModelTable(props: ModelTableProps) -> View {
                 button()
                     .class("px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors flex items-center gap-2 text-sm font-medium cursor-pointer")
                     .on(events::click, {
-                        let sam = show_add_modal;
-                        move |_| sam.set(true)
+                        move |_| show_add_modal.set(true)
                     })
                     .children((
                         i().class("fas fa-plus"),

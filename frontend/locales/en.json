@@ -82,5 +82,7 @@
   "text_gen_max_tokens": "Max Tokens",
   "text_gen_temperature": "Temperature",
   "text_gen_top_p": "Top P",
-  "text_gen_error": "Generation failed: {{ msg }}"
+  "text_gen_error": "Generation failed: {{ msg }}",
+  "clear_key": "Clear key",
+  "keep_key_hint": "(Leave empty to keep current key)"
 }

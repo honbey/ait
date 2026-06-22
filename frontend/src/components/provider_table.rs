@@ -4,19 +4,20 @@ use sycamore::web::tags::*;
 use sycamore_futures::spawn_local_scoped;
 
 use crate::api::{create_provider, delete_provider, fetch_provider_types, update_provider};
-use crate::storage::get_storage;
 use crate::components::data_table::{
     debounce_refresh, render_add_button, render_table_header, table_container, table_shell,
     th_center, th_left,
 };
 use crate::components::delete_confirm::render_delete_confirm;
 use crate::components::modal::{
-    action_cell, form_checkbox, form_error, form_field, form_input, form_submit_footer,
-    icon_button, modal_dialog, modal_title, mono_cell, name_cell, render_detail_modal,
-    secondary_cell, select_input, status_badge, text_cell, timestamp_cell, zebra_bg,
+    action_cell, form_checkbox, form_error, form_field, form_field_with_hint, form_input,
+    form_submit_footer, icon_button, modal_dialog, modal_title, mono_cell, name_cell,
+    render_detail_modal, secondary_cell, select_input, status_badge, text_cell, timestamp_cell,
+    zebra_bg,
 };
 use crate::i18n::I18n;
 use crate::models::Provider;
+use crate::storage::get_storage;
 
 fn provider_display_name(provider_type: &str, provider_types: &[(String, String)]) -> String {
     provider_types
@@ -173,6 +174,7 @@ fn render_edit_modal(
     let form_base_url = create_signal(prov.base_url.clone());
     let form_api_key = create_signal(String::new());
     let form_enabled = create_signal(prov.enabled);
+    let form_clear_key = create_signal(false);
     let form_err = create_signal(String::new());
     let form_loading = create_signal(false);
 
@@ -192,7 +194,13 @@ fn render_edit_modal(
         let pid = prov.id.clone();
         let api_key = {
             let raw = form_api_key.get_clone();
-            if raw.is_empty() { None } else { Some(raw) }
+            if !raw.is_empty() {
+                Some(raw)
+            } else if form_clear_key.get() {
+                Some(String::new())
+            } else {
+                None
+            }
         };
         let ptype = form_type.get_clone();
         let enabled = form_enabled.get();
@@ -236,19 +244,21 @@ fn render_edit_modal(
                         form_base_url,
                     ),
                 ),
-                div().children((
-                    form_field(
+                div().children(form_field_with_hint(
+                    "edit-provider-apikey".into(),
+                    i18n.t("api_key"),
+                    i18n.t("keep_key_hint"),
+                    form_input(
                         "edit-provider-apikey".into(),
                         i18n.t("api_key"),
-                        form_input(
-                            "edit-provider-apikey".into(),
-                            i18n.t("api_key"),
-                            form_api_key,
-                        ),
+                        form_api_key,
                     ),
-                    p().class("text-xs text-gray-400 dark:text-gray-500 mt-1")
-                        .children("Leave empty to keep current key"),
                 )),
+                form_checkbox(
+                    "edit-provider-clear-key".into(),
+                    i18n.t("clear_key"),
+                    form_clear_key,
+                ),
                 form_checkbox(
                     "edit-enabled".into(),
                     i18n.t("status_enabled"),
@@ -381,8 +391,7 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
                 button()
                     .class("px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors flex items-center gap-2 text-sm font-medium cursor-pointer")
                     .on(events::click, {
-                        let sam = show_add_modal;
-                        move |_| sam.set(true)
+                        move |_| show_add_modal.set(true)
                     })
                     .children((
                         i().class("fas fa-plus"),
