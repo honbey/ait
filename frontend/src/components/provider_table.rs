@@ -4,6 +4,7 @@ use sycamore::web::tags::*;
 use sycamore_futures::spawn_local_scoped;
 
 use crate::api::{create_provider, delete_provider, fetch_provider_types, update_provider};
+use crate::storage::get_storage;
 use crate::components::data_table::{
     debounce_refresh, render_add_button, render_table_header, table_container, table_shell,
     th_center, th_left,
@@ -334,26 +335,23 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
     let provider_refresh = props.provider_refresh;
     let provider_refreshing = props.provider_refreshing;
 
+    let storage = get_storage();
+    const PT_KEY: &str = "ait_provider_types";
     let provider_types = create_signal(
-        web_sys::window()
-            .and_then(|w| w.local_storage().ok())
-            .flatten()
-            .and_then(|s| s.get_item("ait_provider_types").ok())
-            .flatten()
+        storage
+            .get_item(PT_KEY)
             .and_then(|json| serde_json::from_str::<Vec<(String, String)>>(&json).ok())
             .unwrap_or_default(),
     );
 
     if provider_types.get_clone().is_empty() {
+        let st = storage;
         spawn_local_scoped(async move {
             if let Ok(types) = fetch_provider_types().await {
                 let pairs: Vec<(String, String)> =
                     types.into_iter().map(|t| (t.id, t.name)).collect();
                 if let Ok(json) = serde_json::to_string(&pairs) {
-                    web_sys::window()
-                        .and_then(|w| w.local_storage().ok())
-                        .flatten()
-                        .map(|s| s.set_item("ait_provider_types", &json));
+                    st.set_item(PT_KEY, &json);
                 }
                 provider_types.set(pairs);
             }
