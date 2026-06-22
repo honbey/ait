@@ -17,7 +17,20 @@ use crate::components::modal::{
 use crate::i18n::I18n;
 use crate::models::{Model, Provider};
 
-fn render_model_detail(i18n: &I18n, model: Model, show_detail: Signal<Option<usize>>) -> View {
+fn provider_name_by_id(provider_id: &str, providers: &[Provider]) -> String {
+    providers
+        .iter()
+        .find(|p| p.id == provider_id)
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| provider_id.to_string())
+}
+
+fn render_model_detail(
+    i18n: &I18n,
+    model: Model,
+    show_detail: Signal<Option<usize>>,
+    providers: &[Provider],
+) -> View {
     let enabled_text = i18n.t("status_enabled");
     let disabled_text = i18n.t("status_disabled");
     let status = if model.enabled {
@@ -31,7 +44,10 @@ fn render_model_detail(i18n: &I18n, model: Model, show_detail: Signal<Option<usi
         vec![
             ("ID".into(), model.id),
             (i18n.t("name"), model.name),
-            (i18n.t("model_provider_id"), model.provider_id),
+            (
+                i18n.t("providers"),
+                provider_name_by_id(&model.provider_id, providers),
+            ),
             (i18n.t("model_upstream_model"), model.upstream_model),
             (i18n.t("table_status"), status),
             (
@@ -113,7 +129,7 @@ fn render_add_modal(
                 ),
                 form_field(
                     "add-model-provider".into(),
-                    i18n.t("model_provider_id"),
+                    i18n.t("providers"),
                     select_input("add-model-provider".into(), form_provider_id, options),
                 ),
                 form_field(
@@ -209,7 +225,7 @@ fn render_edit_modal(
                 ),
                 form_field(
                     "edit-model-provider".into(),
-                    i18n.t("model_provider_id"),
+                    i18n.t("providers"),
                     select_input("edit-model-provider".into(), form_provider_id, options),
                 ),
                 form_field(
@@ -240,6 +256,7 @@ fn render_edit_modal(
 
 fn make_model_rows(
     models: Vec<Model>,
+    providers: &[Provider],
     i18n: &I18n,
     show_detail: Signal<Option<usize>>,
     is_admin: Signal<bool>,
@@ -254,10 +271,11 @@ fn make_model_rows(
         .map(|(idx, m)| {
             let model_modal = m.clone();
             let show = show_detail;
+            let prov_name = provider_name_by_id(&m.provider_id, providers);
             tr().class(zebra_bg(idx))
                 .children((
                     name_cell(m.name),
-                    secondary_cell(m.provider_id),
+                    secondary_cell(prov_name),
                     mono_cell(m.upstream_model),
                     text_cell(status_badge(m.enabled, &enabled_text, &disabled_text)),
                     timestamp_cell(m.updated_at),
@@ -310,6 +328,7 @@ pub fn ModelTable(props: ModelTableProps) -> View {
 
     let rows = make_model_rows(
         models.clone(),
+        &providers,
         &i18n,
         show_detail,
         is_admin,
@@ -344,10 +363,10 @@ pub fn ModelTable(props: ModelTableProps) -> View {
     let table = table_shell(
         vec![
             th_left(i18n.t("name")),
-            th_left(i18n.t("model_provider_id")),
+            th_left(i18n.t("providers")),
             th_left(i18n.t("model_upstream_model")),
             th_left(i18n.t("table_status")),
-            th_center(i18n.t("updated_at")),
+            th_left(i18n.t("updated_at")),
             th_center(i18n.t("provider_detail")),
             th_center(i18n.t("provider_actions")),
         ],
@@ -357,9 +376,10 @@ pub fn ModelTable(props: ModelTableProps) -> View {
     let detail_modal = View::from_dynamic({
         let i18n = i18n.clone();
         let models = models.clone();
+        let providers = providers.clone();
         move || match show_detail.get() {
             Some(idx) => models.get(idx).map_or(View::new(), |m| {
-                render_model_detail(&i18n, m.clone(), show_detail)
+                render_model_detail(&i18n, m.clone(), show_detail, &providers)
             }),
             None => View::new(),
         }
