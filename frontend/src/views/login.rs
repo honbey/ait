@@ -33,16 +33,14 @@ pub fn render_login_view(
         }
 
         loading.set(true);
-        let u = form_user.get_clone();
-        let p = form_pass.get_clone();
+        let user = form_user.get_clone();
+        let pass = form_pass.get_clone();
         let i18n_async = i18n_submit.clone();
         spawn_local_scoped(async move {
-            match crate::api::login_api(&u, &p).await {
-                Ok(()) => {
-                    if let Ok(Some((uname, r))) = crate::api::check_session().await {
-                        username.set(Some(uname));
-                        role.set(Some(r));
-                    }
+            match crate::api::login_api(&user, &pass).await {
+                Ok(role_str) => {
+                    username.set(Some(user));
+                    role.set(Some(role_str));
                     authenticated.set(true);
                     route.set(Route::Dashboard);
                 }

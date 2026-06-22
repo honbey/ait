@@ -4,8 +4,8 @@ use gloo_net::Error as NetError;
 use gloo_net::http::Request;
 
 use crate::models::{
-    ApiKeyListItem, CreateApiKeyResponse, DashboardData, DashboardStats, Model, Provider,
-    ProviderTypeInfo,
+    ApiKeyListItem, CreateApiKeyResponse, DashboardData, DashboardStats, LoginResponse, Model,
+    Provider, ProviderTypeInfo,
 };
 
 fn get_base_url() -> String {
@@ -17,23 +17,26 @@ fn get_base_url() -> String {
 
 // --- Core request helpers ---
 
-fn check_response(resp: &gloo_net::http::Response, context: &str) -> Result<(), NetError> {
-    if resp.ok() {
-        Ok(())
-    } else {
-        Err(NetError::GlooError(format!(
-            "HTTP {}: {}",
-            resp.status(),
-            context
-        )))
-    }
+async fn response_to_error(resp: gloo_net::http::Response) -> NetError {
+    let status = resp.status();
+    let msg = resp
+        .text()
+        .await
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
+        .unwrap_or_else(|| format!("HTTP {status}"));
+    NetError::GlooError(msg)
 }
 
 async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
     let url = format!("{}/admin/{}", get_base_url(), path);
     let resp = Request::get(&url).send().await?;
-    check_response(&resp, path)?;
-    resp.json().await
+    if resp.ok() {
+        resp.json().await
+    } else {
+        Err(response_to_error(resp).await)
+    }
 }
 
 async fn api_post<T: DeserializeOwned>(
@@ -47,8 +50,11 @@ async fn api_post<T: DeserializeOwned>(
         .map_err(|e| NetError::GlooError(e.to_string()))?
         .send()
         .await?;
-    check_response(&resp, path)?;
-    resp.json().await
+    if resp.ok() {
+        resp.json().await
+    } else {
+        Err(response_to_error(resp).await)
+    }
 }
 
 async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> Result<T, NetError> {
@@ -59,36 +65,21 @@ async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> R
         .map_err(|e| NetError::GlooError(e.to_string()))?
         .send()
         .await?;
-    check_response(&resp, path)?;
-    resp.json().await
+    if resp.ok() {
+        resp.json().await
+    } else {
+        Err(response_to_error(resp).await)
+    }
 }
 
 async fn api_delete(path: &str) -> Result<(), NetError> {
     let url = format!("{}/admin/{}", get_base_url(), path);
     let resp = Request::delete(&url).send().await?;
-    check_response(&resp, path)?;
-    Ok(())
-}
-
-// POST with JSON error body parsing (for auth endpoints that return structured errors)
-async fn api_post_auth(path: &str, body: &serde_json::Value) -> Result<(), NetError> {
-    let url = format!("{}/admin/{}", get_base_url(), path);
-    let resp = Request::post(&url)
-        .header("Content-Type", "application/json")
-        .body(body.to_string())
-        .map_err(|e| NetError::GlooError(e.to_string()))?
-        .send()
-        .await?;
-    if !resp.ok() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        let msg = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
-            .unwrap_or_else(|| format!("HTTP {}", status));
-        return Err(NetError::GlooError(msg));
+    if resp.ok() {
+        Ok(())
+    } else {
+        Err(response_to_error(resp).await)
     }
-    Ok(())
 }
 
 fn api_key_value(api_key: Option<&str>) -> serde_json::Value {
@@ -179,7 +170,7 @@ pub async fn register_api(
     password: &str,
     registration_code: &str,
 ) -> Result<(), NetError> {
-    api_post_auth(
+    api_post::<serde_json::Value>(
         "register",
         &serde_json::json!({
             "username": username,
@@ -187,15 +178,17 @@ pub async fn register_api(
             "registration_code": registration_code,
         }),
     )
-    .await
+    .await?;
+    Ok(())
 }
 
-pub async fn login_api(username: &str, password: &str) -> Result<(), NetError> {
-    api_post_auth(
+pub async fn login_api(username: &str, password: &str) -> Result<String, NetError> {
+    let resp: LoginResponse = api_post(
         "login",
         &serde_json::json!({ "username": username, "password": password }),
     )
-    .await
+    .await?;
+    Ok(resp.role)
 }
 
 pub async fn check_session() -> Result<Option<(String, String)>, NetError> {
@@ -219,13 +212,7 @@ pub async fn check_session() -> Result<Option<(String, String)>, NetError> {
 }
 
 pub async fn logout_api() -> Result<(), NetError> {
-    let url = format!("{}/admin/logout", get_base_url());
-    let resp = Request::post(&url)
-        .body("")
-        .map_err(|e| NetError::GlooError(e.to_string()))?
-        .send()
-        .await?;
-    check_response(&resp, "logout")?;
+    api_post::<serde_json::Value>("logout", &serde_json::json!({})).await?;
     Ok(())
 }
 
