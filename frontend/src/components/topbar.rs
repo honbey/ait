@@ -31,8 +31,7 @@ fn nav_item(
         )
     };
     let icon_class = format!("{icon} w-4 text-center");
-    a()
-        .attr("href", href)
+    a().attr("href", href)
         .class(move || {
             if is_active(route.get()) {
                 active

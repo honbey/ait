@@ -29,8 +29,7 @@ fn NavItem(props: NavItemProps) -> View {
     let i18n = use_context::<I18n>();
     let label_key = props.label_key;
 
-    a()
-        .attr("href", props.href)
+    a().attr("href", props.href)
         .class(class)
         .children((
             i().class(format!("fas {} w-5 text-center", props.icon)),
