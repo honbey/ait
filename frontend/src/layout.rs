@@ -136,6 +136,7 @@ pub fn Layout(props: LayoutProps) -> View {
     let dep = create_memo(move || {
         (
             route.get(),
+            username.get_clone(),
             provider_refresh.get(),
             model_refresh.get(),
             api_key_refresh.get(),
