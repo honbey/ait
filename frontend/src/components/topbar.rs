@@ -88,7 +88,7 @@ pub fn Topbar(props: TopbarProps) -> View {
                     .attr("href", "/")
                     .class("flex items-center gap-2 mr-2 cursor-pointer")
                     .children((
-                        img().class("h-8").src("ait-logo.svg").alt("ait"),
+                        img().class("h-8").src("/ait-logo.svg").alt("ait"),
                         span().class("text-xl font-bold text-gray-900 dark:text-gray-100")
                             .children("Ait"),
                     )),
