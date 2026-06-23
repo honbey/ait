@@ -10,8 +10,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::events::AuditEvent;
-use crate::db::{Permission, Session, User, UserRole};
+use crate::db::{AuditEvent, Permission, Session, User, UserRole};
 use crate::error::{AitError, conflict, forbidden, internal_error, unauthorized};
 use crate::middleware::extract_session_key;
 

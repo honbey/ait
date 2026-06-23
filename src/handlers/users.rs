@@ -7,8 +7,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::events::AuditEvent;
-use crate::db::{Permission, SessionUser, User, UserRole};
+use crate::db::{AuditEvent, Permission, SessionUser, User, UserRole};
 use crate::error::{AitError, conflict, forbidden, internal_error, not_found, require_admin};
 
 #[derive(Serialize)]

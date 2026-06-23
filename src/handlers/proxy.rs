@@ -10,8 +10,7 @@ use std::time::Instant;
 use tracing::{info, warn};
 
 use crate::app::AppState;
-use crate::db::events::ProxyEvent;
-use crate::db::{Permission, SessionUser, UserRole};
+use crate::db::{Permission, ProxyEvent, SessionUser, UserRole};
 use crate::error::AitError;
 use crate::providers::create_provider;
 

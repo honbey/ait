@@ -1,6 +1,5 @@
 use crate::app::AppState;
-use crate::db::events::AccessEvent;
-use crate::db::{SessionUser, UserRole};
+use crate::db::{AccessEvent, SessionUser, UserRole};
 use crate::error::{AitError, db_error, too_many_requests};
 use axum::{
     Json,

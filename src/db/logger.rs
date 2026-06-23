@@ -4,7 +4,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use super::events::{AccessEvent, AuditEvent, LogEvent, ProxyEvent};
+use super::models::{AccessEvent, AuditEvent, LogEvent, ProxyEvent};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(10);
 const FLUSH_BATCH: usize = 100;
