@@ -5,6 +5,7 @@ use std::thread;
 use std::time::Duration;
 use tracing::{error, info, warn};
 
+use super::analytics::Analytics;
 use super::models::{AccessEvent, AuditEvent, LogEvent, ProxyEvent};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(10);
@@ -16,7 +17,7 @@ const RETENTION_EVERY: usize = 100;
 #[derive(Clone)]
 pub struct LogManager {
     sender: mpsc::SyncSender<LogEvent>,
-    db_path: String,
+    analytics: Analytics,
 }
 
 impl LogManager {
@@ -40,7 +41,6 @@ impl LogManager {
                 prompt_tokens     BIGINT,
                 completion_tokens BIGINT,
                 total_tokens      BIGINT,
-                cached_tokens     BIGINT,
                 latency_ms        BIGINT NOT NULL,
                 status            VARCHAR NOT NULL
             );
@@ -64,8 +64,8 @@ impl LogManager {
         });
 
         Ok(Self {
+            analytics: Analytics::new(db_path),
             sender,
-            db_path: db_path.to_string(),
         })
     }
 
@@ -88,26 +88,14 @@ impl LogManager {
     }
 
     pub fn query_stats(&self) -> (u64, u64) {
-        let conn = match Connection::open(&self.db_path) {
-            Ok(c) => c,
-            Err(e) => {
-                error!("[logs] failed to open DuckDB for stats: {e}");
-                return (0, 0);
-            }
-        };
-        let count = conn
-            .query_row("SELECT COUNT(*) FROM proxy_log", [], |row| {
-                row.get::<_, u64>(0)
-            })
-            .unwrap_or(0);
-        let tokens = conn
-            .query_row(
-                "SELECT COALESCE(SUM(total_tokens), 0) FROM proxy_log",
-                [],
-                |row| row.get::<_, u64>(0),
-            )
-            .unwrap_or(0);
-        (count, tokens)
+        (
+            self.analytics.total_requests(0),
+            self.analytics.total_tokens(),
+        )
+    }
+
+    pub fn requests_last_7d(&self) -> u64 {
+        self.analytics.total_requests(7)
     }
 }
 
@@ -143,15 +131,16 @@ fn worker_loop(db_path: &str, receiver: mpsc::Receiver<LogEvent>) -> Result<()> 
 }
 
 fn flush_buffer(conn: &Connection, buffer: &mut Vec<LogEvent>, flush_count: &mut u64) {
-    flush_events(conn, buffer);
-    *flush_count += 1;
-    if flush_count.is_multiple_of(RETENTION_EVERY as u64) {
-        cleanup_expired(conn);
+    if flush_events(conn, buffer) {
+        *flush_count += 1;
+        if flush_count.is_multiple_of(RETENTION_EVERY as u64) {
+            cleanup_expired(conn);
+        }
+        buffer.clear();
     }
-    buffer.clear();
 }
 
-fn flush_events(conn: &Connection, events: &[LogEvent]) {
+fn flush_events(conn: &Connection, events: &[LogEvent]) -> bool {
     let mut access = Vec::new();
     let mut proxy = Vec::new();
     let mut audit = Vec::new();
@@ -165,21 +154,29 @@ fn flush_events(conn: &Connection, events: &[LogEvent]) {
 
     if let Err(e) = conn.execute_batch("BEGIN TRANSACTION") {
         error!("[logs] begin tx failed: {e}");
-        return;
+        return false;
     }
 
-    let ok = flush_accesses(conn, &access).is_ok()
-        && flush_proxies(conn, &proxy).is_ok()
-        && flush_audits(conn, &audit).is_ok();
-
-    if ok {
+    if flush_accesses(conn, &access)
+        .map_err(|e| error!("[logs] flush access_log failed: {e}"))
+        .is_ok()
+        && flush_proxies(conn, &proxy)
+            .map_err(|e| error!("[logs] flush proxy_log failed: {e}"))
+            .is_ok()
+        && flush_audits(conn, &audit)
+            .map_err(|e| error!("[logs] flush audit_log failed: {e}"))
+            .is_ok()
+    {
         if let Err(e) = conn.execute_batch("COMMIT") {
             error!("[logs] commit failed: {e}");
+            return false;
         }
+        true
     } else {
         if let Err(e) = conn.execute_batch("ROLLBACK") {
             error!("[logs] rollback failed: {e}");
         }
+        false
     }
 }
 

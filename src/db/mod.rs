@@ -1,3 +1,4 @@
+pub mod analytics;
 pub mod logger;
 pub mod models;
 mod store;

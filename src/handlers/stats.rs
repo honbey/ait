@@ -21,7 +21,8 @@ pub async fn dashboard_stats(
 
     let providers = state.db.list_providers()?;
     let models = state.db.list_models()?;
-    let (api_request_count, token_consumption) = state.log_manager.query_stats();
+    let api_request_count = state.log_manager.requests_last_7d();
+    let (_, token_consumption) = state.log_manager.query_stats();
 
     Ok(Json(DashboardStats {
         provider_count: providers.len(),
