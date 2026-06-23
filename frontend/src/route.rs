@@ -1,24 +1,32 @@
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Route {
+use sycamore_router::Route;
+
+#[derive(Route, Clone, Copy, Debug, PartialEq)]
+pub enum AppRoute {
+    #[to("/")]
     Index,
+    #[to("/login")]
     Login,
+    #[to("/register")]
     Register,
+    #[to("/console/dashboard")]
     Dashboard,
+    #[to("/console/providers")]
     Providers,
+    #[to("/console/models")]
     Models,
+    #[to("/console/api-keys")]
     ApiKeys,
+    #[to("/console/text-generation")]
     TextGeneration,
+    #[not_found]
+    NotFound,
 }
 
-impl Route {
-    pub fn is_console(self) -> bool {
+impl AppRoute {
+    pub fn is_console(&self) -> bool {
         matches!(
             self,
-            Route::Dashboard
-                | Route::Providers
-                | Route::Models
-                | Route::ApiKeys
-                | Route::TextGeneration
+            Self::Dashboard | Self::Providers | Self::Models | Self::ApiKeys | Self::TextGeneration
         )
     }
 }

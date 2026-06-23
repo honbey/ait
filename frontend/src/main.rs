@@ -1,57 +1,20 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
-use sycamore::web::console_error;
-
 use sycamore::prelude::*;
 use sycamore_futures::spawn_local_scoped;
+use sycamore_router::{HistoryIntegration, Router, RouterProps};
+
+use crate::route::AppRoute;
 
 mod api;
 mod i18n;
 mod layout;
 mod models;
 mod route;
+mod storage;
 
 mod components;
 mod views;
 
-pub const THEME_KEY: &str = "ait-theme";
-pub const LANG_KEY: &str = "ait-lang";
-
-#[derive(Clone)]
-pub enum AppStorage {
-    Local(web_sys::Storage),
-    Memory(Rc<RefCell<HashMap<String, String>>>),
-}
-
-impl AppStorage {
-    pub fn get_item(&self, key: &str) -> Option<String> {
-        match self {
-            AppStorage::Local(s) => s.get_item(key).ok().flatten(),
-            AppStorage::Memory(map) => map.borrow().get(key).cloned(),
-        }
-    }
-
-    pub fn set_item(&self, key: &str, value: &str) {
-        match self {
-            AppStorage::Local(s) => {
-                if let Err(e) = s.set_item(key, value) {
-                    console_error!("localStorage set_item failed: {:?}", e);
-                }
-            }
-            AppStorage::Memory(map) => {
-                map.borrow_mut().insert(key.to_string(), value.to_string());
-            }
-        }
-    }
-}
-
-pub fn get_storage() -> AppStorage {
-    match window().local_storage() {
-        Ok(Some(s)) => AppStorage::Local(s),
-        _ => AppStorage::Memory(Rc::new(RefCell::new(HashMap::new()))),
-    }
-}
+use crate::storage::{LANG_KEY, THEME_KEY, get_storage};
 
 // ─── App Component ─────────────────────────────────────────────
 
@@ -60,8 +23,8 @@ fn App() -> View {
     let storage = get_storage();
     let initial_dark = matches!(storage.get_item(THEME_KEY), Some(v) if v == "dark");
     let dark = create_signal(initial_dark);
-    let route = create_signal(route::Route::Index);
     let authenticated = create_signal(false);
+    let session_checked = create_signal(false);
 
     let initial_lang = storage
         .get_item(LANG_KEY)
@@ -78,6 +41,7 @@ fn App() -> View {
             role.set(Some(r));
             authenticated.set(true);
         }
+        session_checked.set(true);
     });
 
     let i18n_clone = i18n.clone();
@@ -88,13 +52,19 @@ fn App() -> View {
 
     provide_context(i18n);
 
-    layout::Layout(layout::LayoutProps {
-        dark,
-        route,
-        authenticated,
-        username,
-        role,
-    })
+    Router(RouterProps::new(
+        HistoryIntegration::new(),
+        move |route: ReadSignal<AppRoute>| {
+            provide_context(route);
+            layout::Layout(layout::LayoutProps {
+                dark,
+                session_checked,
+                authenticated,
+                username,
+                role,
+            })
+        },
+    ))
 }
 
 fn main() {

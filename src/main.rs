@@ -12,7 +12,7 @@ use axum::{
     routing::{Router, delete, get, post, put},
 };
 use std::net::SocketAddr;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -159,11 +159,14 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
         ));
 
     // Serve frontend static files
-    let frontend_service = ServeDir::new("frontend/dist");
+    let frontend_root = ServeDir::new("frontend/dist");
+    let frontend_spa = frontend_root
+        .clone()
+        .fallback(ServeFile::new("frontend/dist/index.html"));
 
     Router::new()
-        .nest_service("/static", frontend_service.clone())
-        .fallback_service(frontend_service)
+        .nest_service("/static", frontend_root)
+        .fallback_service(frontend_spa)
         .merge(auth_route)
         .merge(admin_api)
         .merge(health_route)

@@ -3,16 +3,71 @@ use sycamore::prelude::*;
 use sycamore::web::events;
 use sycamore::web::tags::*;
 use sycamore_futures::spawn_local_scoped;
+use sycamore_router::navigate;
 
 use super::dark_mode_toggle::DarkModeToggle;
 use super::dark_mode_toggle::DarkModeToggleProps;
-use crate::i18n::I18n;
-use crate::route::Route;
+use crate::i18n::{I18n, K};
+use crate::route::AppRoute;
+
+fn nav_item(
+    href: &'static str,
+    is_active: impl Fn(AppRoute) -> bool + 'static,
+    icon: &str,
+    i18n_key: K,
+    mobile_hidden: bool,
+) -> View {
+    let i18n = use_context::<I18n>();
+    let route = use_context::<ReadSignal<AppRoute>>();
+    let (active, inactive) = if mobile_hidden {
+        (
+            "hidden md:flex items-center gap-2 px-3 py-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm",
+            "hidden md:flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm",
+        )
+    } else {
+        (
+            "flex items-center gap-2 px-3 py-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm",
+            "flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm",
+        )
+    };
+    let icon_class = format!("{icon} w-4 text-center");
+    a().attr("href", href)
+        .class(move || {
+            if is_active(route.get()) {
+                active
+            } else {
+                inactive
+            }
+        })
+        .children((
+            i().class(icon_class),
+            span().class("hidden sm:inline").children({
+                let i18n = i18n.clone();
+                View::from_dynamic(move || i18n.t(i18n_key))
+            }),
+        ))
+        .into()
+}
+
+fn nav_item_static(icon: &str, i18n_key: K) -> View {
+    let i18n = use_context::<I18n>();
+    let icon_class = format!("{icon} w-4 text-center");
+    a()
+        .attr("href", "/")
+        .class("hidden md:flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm")
+        .children((
+            i().class(icon_class),
+            span().class("hidden sm:inline").children({
+                let i18n = i18n.clone();
+                View::from_dynamic(move || i18n.t(i18n_key))
+            }),
+        ))
+        .into()
+}
 
 #[derive(Props)]
 pub struct TopbarProps {
     pub dark: Signal<bool>,
-    pub route: Signal<Route>,
     pub authenticated: Signal<bool>,
     pub username: Signal<Option<String>>,
 }
@@ -20,7 +75,6 @@ pub struct TopbarProps {
 #[component]
 pub fn Topbar(props: TopbarProps) -> View {
     let i18n = use_context::<I18n>();
-    let route = props.route;
     let authenticated = props.authenticated;
     let username = props.username;
 
@@ -30,75 +84,19 @@ pub fn Topbar(props: TopbarProps) -> View {
         )
         .children((
             div().class("flex items-center gap-4").children((
-                div()
-                    .class("flex items-center gap-2 cursor-pointer mr-2")
-                    .on(events::click, move |_| route.set(Route::Index))
+                a()
+                    .attr("href", "/")
+                    .class("flex items-center gap-2 mr-2 cursor-pointer")
                     .children((
-                        img().class("h-8").src("ait-logo.svg").alt("ait"),
+                        img().class("h-8").src("/ait-logo.svg").alt("ait"),
                         span().class("text-xl font-bold text-gray-900 dark:text-gray-100")
                             .children("Ait"),
                     )),
                 div().class("flex items-center gap-1").children((
-                    // Index
-                    div()
-                        .class(move || {
-                            if route.get() == Route::Index {
-                                "hidden md:flex items-center gap-2 px-3 py-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm"
-                            } else {
-                                "hidden md:flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm"
-                            }
-                        })
-                        .on(events::click, move |_| route.set(Route::Index))
-                        .children((
-                            i().class("fas fa-house w-4 text-center"),
-                            span().class("hidden sm:inline").children({
-                                let i18n = i18n.clone();
-                                View::from_dynamic(move || i18n.t("index"))
-                            }),
-                        )),
-                    // Console
-                    div()
-                        .class(move || {
-                            if route.get().is_console() {
-                                "flex items-center gap-2 px-3 py-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm"
-                            } else {
-                                "flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm"
-                            }
-                        })
-                        .on(events::click, move |_| {
-                            if authenticated.get() {
-                                route.set(Route::Dashboard);
-                            } else {
-                                route.set(Route::Login);
-                            }
-                        })
-                        .children((
-                            i().class("fas fa-terminal w-4 text-center"),
-                            span().class("hidden md:inline").children({
-                                let i18n = i18n.clone();
-                                View::from_dynamic(move || i18n.t("console"))
-                            }),
-                        )),
-                    // Docs
-                    div()
-                        .class("hidden md:flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm")
-                        .children((
-                            i().class("fas fa-book w-4 text-center"),
-                            span().class("hidden sm:inline").children({
-                                let i18n = i18n.clone();
-                                View::from_dynamic(move || i18n.t("docs"))
-                            }),
-                        )),
-                    // About
-                    div()
-                        .class("hidden md:flex items-center gap-2 px-3 py-2 text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm")
-                        .children((
-                            i().class("fas fa-info-circle w-4 text-center"),
-                            span().class("hidden sm:inline").children({
-                                let i18n = i18n.clone();
-                                View::from_dynamic(move || i18n.t("about"))
-                            }),
-                        )),
+                    nav_item("/", |r| r == AppRoute::Index, "fas fa-house", K::Index, true),
+                    nav_item("/console/dashboard", |r| r.is_console(), "fas fa-terminal", K::Console, false),
+                    nav_item_static("fas fa-book", K::Docs),
+                    nav_item_static("fas fa-info-circle", K::About),
                 )),
             )),
             div().class("flex items-center gap-1 sm:gap-3").children((
@@ -116,40 +114,42 @@ pub fn Topbar(props: TopbarProps) -> View {
                         })
                         .children((
                             i().class("fas fa-globe w-4 text-center"),
-                            span().class("hidden sm:inline").children(View::from_dynamic(move || i18n_label.t("language"))),
+                            span().class("hidden sm:inline").children(View::from_dynamic(move || i18n_label.t(K::Language))),
                         ))
                 },
                 DarkModeToggle(DarkModeToggleProps { dark: props.dark }),
                 div().class("hidden sm:block w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1"),
                 {
                     let show_dropdown = create_signal(false);
-                    let auth = authenticated;
-                    let uname = username;
-                    let r = route;
 
                     View::from_dynamic(move || -> sycamore::web::View {
-                        if !auth.get() {
+                        if !authenticated.get() {
                             let i18n_login = i18n.clone();
-                            button()
+                            a()
+                                .attr("href", "/login")
                                 .class(
                                     "flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer transition-colors text-sm text-gray-600 dark:text-gray-300",
                                 )
-                                .on(events::click, move |_| r.set(crate::route::Route::Login))
                                 .children((
                                     i().class("fas fa-sign-in-alt w-4 text-center"),
                                     span().class("hidden sm:inline")
-                                        .children(View::from_dynamic(move || i18n_login.t("login"))),
+                                        .children(View::from_dynamic(move || i18n_login.t(K::Login))),
                                 ))
                                 .into()
                         } else {
                             let i18n_logout = i18n.clone();
-                            let avatar_letter = uname.get_clone().and_then(|s| s.chars().next().map(|c| c.to_uppercase().to_string())).unwrap_or_else(|| "U".to_string());
+                            let uname = username;
+                            let avatar_letter = create_memo(move || {
+                                uname.get_clone()
+                                .and_then(|s| s.chars().next().map(|c| c.to_uppercase().to_string()))
+                                .unwrap_or_else(|| "U".to_string())
+                            });
                             div()
                                 .class("relative")
                                 .children((
                                     div()
                                         .class(
-                                            "flex items-center gap-2 cursor-pointer px-2 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors relative z-50",
+                                            "flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer transition-colors relative z-50",
                                         )
                                         .on(events::click, move |_| show_dropdown.set(!show_dropdown.get()))
                                         .children((
@@ -185,18 +185,18 @@ pub fn Topbar(props: TopbarProps) -> View {
                                                 .on(events::click, move |e: web_sys::MouseEvent| e.stop_propagation())
                                                 .children(
                                                     button()
-                                                        .class("w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700")
+                                                        .class("w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer")
                                                         .on(events::click, move |_e: web_sys::MouseEvent| {
                                                             spawn_local_scoped(async move {
                                                                 crate::api::logout_api().await.ok();
                                                                 Timeout::new(0, move || {
                                                                     show_dropdown.set(false);
-                                                                    auth.set(false);
-                                                                    r.set(crate::route::Route::Index);
+                                                                    authenticated.set(false);
+                                                                    navigate("/");
                                                                 }).forget();
                                                             });
                                                         })
-                                                        .children(i18n_logout.t("logout")),
+                                                        .children(i18n_logout.t(K::Logout)),
                                                 )
                                                 .into()
                                         } else {

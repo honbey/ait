@@ -12,15 +12,12 @@ pub fn render_providers_view(
     provider_refreshing: sycamore::reactive::Signal<bool>,
 ) -> View {
     div()
-        .children(
-            div()
-                .class("p-4 sm:p-8")
-                .children(ProviderTable(ProviderTableProps {
-                    providers,
-                    is_admin,
-                    provider_refresh,
-                    provider_refreshing,
-                })),
-        )
+        .class("p-4 sm:p-8")
+        .children(ProviderTable(ProviderTableProps {
+            providers,
+            is_admin,
+            provider_refresh,
+            provider_refreshing,
+        }))
         .into()
 }

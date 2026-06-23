@@ -3,7 +3,7 @@ use sycamore::prelude::*;
 use sycamore::web::events;
 use sycamore::web::tags::*;
 
-use crate::i18n::I18n;
+use crate::i18n::{I18n, K};
 
 pub fn debounce_refresh(refresh: Signal<usize>, refreshing: Signal<bool>) -> impl Fn() + 'static {
     move || {
@@ -17,13 +17,13 @@ pub fn debounce_refresh(refresh: Signal<usize>, refreshing: Signal<bool>) -> imp
 }
 
 pub fn render_table_header(
-    i18n: &I18n,
     title: String,
     count: usize,
     refreshing: Signal<bool>,
     on_refresh: impl Fn() + 'static,
     add_button: View,
 ) -> View {
+    let i18n = use_context::<I18n>();
     div()
         .class("p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between")
         .children((
@@ -33,7 +33,7 @@ pub fn render_table_header(
                 span().class(
                     "text-sm text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-3 py-1 rounded-full",
                 )
-                .children(i18n.t_replace("total_count", "count", &count.to_string())),
+                .children(i18n.t_replace(K::TotalCount, "count", &count.to_string())),
                 button()
                     .disabled(move || refreshing.get())
                     .class("text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed")
