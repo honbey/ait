@@ -41,6 +41,7 @@ impl LogManager {
                 prompt_tokens     BIGINT,
                 completion_tokens BIGINT,
                 total_tokens      BIGINT,
+                cached_tokens     BIGINT,
                 latency_ms        BIGINT NOT NULL,
                 status            VARCHAR NOT NULL
             );
@@ -208,8 +209,8 @@ fn flush_proxies(conn: &Connection, events: &[&ProxyEvent]) -> Result<()> {
     }
     let mut stmt = conn.prepare_cached(
         "INSERT INTO proxy_log (timestamp, username, model_name, provider_name,
-         prompt_tokens, completion_tokens, total_tokens, latency_ms, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+         prompt_tokens, completion_tokens, total_tokens, cached_tokens, latency_ms, status)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
     )?;
     for e in events {
         stmt.execute(params![
@@ -220,6 +221,7 @@ fn flush_proxies(conn: &Connection, events: &[&ProxyEvent]) -> Result<()> {
             e.prompt_tokens,
             e.completion_tokens,
             e.total_tokens,
+            e.cached_tokens,
             e.latency_ms,
             e.status,
         ])?;

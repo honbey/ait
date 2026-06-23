@@ -220,6 +220,7 @@ pub async fn proxy_request(
         prompt_tokens: None,
         completion_tokens: None,
         total_tokens: None,
+        cached_tokens: None,
         latency_ms: latency.as_millis() as i64,
         status: status_code.to_string(),
     });

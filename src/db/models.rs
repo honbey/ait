@@ -204,6 +204,7 @@ pub struct ProxyEvent {
     pub prompt_tokens: Option<i64>,
     pub completion_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
+    pub cached_tokens: Option<i64>,
     pub latency_ms: i64,
     pub status: String,
 }
