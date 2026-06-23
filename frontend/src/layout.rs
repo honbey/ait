@@ -2,11 +2,12 @@ use sycamore::prelude::*;
 use sycamore::web::create_client_resource;
 use sycamore::web::events;
 use sycamore::web::tags::*;
+use sycamore_router::navigate;
 
 use crate::api::{fetch_api_keys, fetch_dashboard, fetch_models, fetch_providers};
 use crate::i18n::{I18n, K};
 use crate::models::{ApiKeyListItem, DashboardData, Model, Provider};
-use crate::route::Route;
+use crate::route::AppRoute;
 
 use crate::components::sidebar::{Sidebar, SidebarProps};
 use crate::components::topbar::{Topbar, TopbarProps};
@@ -95,7 +96,6 @@ fn render_placeholder(title_key: K) -> View {
 #[derive(Props)]
 pub struct LayoutProps {
     pub dark: Signal<bool>,
-    pub route: Signal<Route>,
     pub authenticated: Signal<bool>,
     pub username: Signal<Option<String>>,
     pub role: Signal<Option<String>>,
@@ -104,16 +104,24 @@ pub struct LayoutProps {
 #[component]
 pub fn Layout(props: LayoutProps) -> View {
     let dark = props.dark;
-    let route = props.route;
     let authenticated = props.authenticated;
     let username = props.username;
     let role = props.role;
     let sidebar_open = create_signal(false);
 
+    let route = use_context::<ReadSignal<AppRoute>>();
+
     // Auth guard: redirect to Login if not authenticated
     create_effect(move || {
         if route.get().is_console() && !authenticated.get() {
-            route.set(Route::Login);
+            navigate("/login");
+        }
+    });
+
+    // NotFound redirect
+    create_effect(move || {
+        if route.get() == AppRoute::NotFound {
+            navigate("/");
         }
     });
 
@@ -138,15 +146,15 @@ pub fn Layout(props: LayoutProps) -> View {
         let uname = username;
         async move {
             let result = match route.get() {
-                Route::Dashboard => fetch_dashboard()
+                AppRoute::Dashboard => fetch_dashboard()
                     .await
                     .map(RouteData::Dashboard)
                     .unwrap_or_else(|e| RouteData::Error(e.to_string())),
-                Route::Providers => fetch_providers()
+                AppRoute::Providers => fetch_providers()
                     .await
                     .map(RouteData::Providers)
                     .unwrap_or_else(|e| RouteData::Error(e.to_string())),
-                Route::Models => {
+                AppRoute::Models => {
                     let models = fetch_models().await;
                     let providers = fetch_providers().await;
                     match (models, providers) {
@@ -154,23 +162,23 @@ pub fn Layout(props: LayoutProps) -> View {
                         (Err(e), _) | (_, Err(e)) => RouteData::Error(e.to_string()),
                     }
                 }
-                Route::ApiKeys => match uname.get_clone() {
+                AppRoute::ApiKeys => match uname.get_clone() {
                     Some(u) => fetch_api_keys(&u)
                         .await
                         .map(RouteData::ApiKeys)
                         .unwrap_or_else(|e| RouteData::Error(e.to_string())),
                     None => RouteData::Placeholder,
                 },
-                Route::TextGeneration => fetch_models()
+                AppRoute::TextGeneration => fetch_models()
                     .await
                     .map(RouteData::TextGeneration)
                     .unwrap_or_else(|e| RouteData::Error(e.to_string())),
                 _ => RouteData::Placeholder,
             };
             match route.get() {
-                Route::Providers => pr.set(false),
-                Route::Models => mr.set(false),
-                Route::ApiKeys => ar.set(false),
+                AppRoute::Providers => pr.set(false),
+                AppRoute::Models => mr.set(false),
+                AppRoute::ApiKeys => ar.set(false),
                 _ => {}
             }
             result
@@ -184,7 +192,7 @@ pub fn Layout(props: LayoutProps) -> View {
             div()
                 .class("min-h-screen bg-gray-50 dark:bg-gray-900")
                 .children((
-                    Topbar(TopbarProps { dark, route, authenticated, username }),
+                    Topbar(TopbarProps { dark, authenticated, username }),
                     // Mobile overlay backdrop
                     View::from_dynamic(move || {
                         if route.get().is_console() {
@@ -205,7 +213,7 @@ pub fn Layout(props: LayoutProps) -> View {
                     View::from_dynamic(move || {
                         if route.get().is_console() {
                             div().children((
-                                Sidebar(SidebarProps { open: sidebar_open, route }),
+                                Sidebar(SidebarProps { open: sidebar_open }),
                                 button()
                                     .class(move || {
                                         "md:hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-10 h-10 rounded-full bg-indigo-600 dark:bg-indigo-400 text-white shadow-lg flex items-center justify-center transition-all duration-200 opacity-30 hover:opacity-100"
@@ -235,25 +243,22 @@ pub fn Layout(props: LayoutProps) -> View {
                         })
                         .children(View::from_dynamic(move || {
                             match route.get() {
-                                Route::Index => {
+                                AppRoute::Index => {
                                     crate::views::index::render_index_view(
-                                        route,
                                         authenticated,
                                     )
                                 }
-                                Route::Login => {
+                                AppRoute::Login => {
                                     crate::views::login::render_login_view(
                                         authenticated,
-                                        route,
                                         username,
                                         role,
                                     )
                                 }
-                                Route::Register => {
-                                    crate::views::register::render_register_view(
-                                        route,
-                                    )
+                                AppRoute::Register => {
+                                    crate::views::register::render_register_view()
                                 }
+                                AppRoute::NotFound => render_loading(),
                                 _ => match data.get_clone() {
                                     Some(RouteData::Dashboard(d)) => {
                                         crate::views::dashboard::render_dashboard_view(d)
@@ -274,15 +279,15 @@ pub fn Layout(props: LayoutProps) -> View {
                                         crate::views::text_generation::render_text_generation_view(m)
                                     }
                                     Some(RouteData::Placeholder) => match route.get() {
-                                        Route::ApiKeys => {
+                                        AppRoute::ApiKeys => {
                                             render_placeholder(K::ApiKey)
                                         }
-                                        Route::TextGeneration => {
+                                        AppRoute::TextGeneration => {
                                             render_placeholder(K::TextGeneration)
                                         }
-                                        Route::Dashboard
-                                        | Route::Providers
-                                        | Route::Models => render_loading(),
+                                        AppRoute::Dashboard
+                                        | AppRoute::Providers
+                                        | AppRoute::Models => render_loading(),
                                         _ => render_loading(),
                                     },
                                     Some(RouteData::Error(e)) => {

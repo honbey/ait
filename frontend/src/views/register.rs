@@ -1,13 +1,13 @@
 use sycamore::prelude::*;
 use sycamore_futures::spawn_local_scoped;
+use sycamore_router::navigate;
 
 use crate::components::auth_form::{
     auth_error_display, auth_input_field, auth_link_footer, auth_page_shell, auth_submit_button,
 };
 use crate::i18n::{I18n, K};
-use crate::route::Route;
 
-pub fn render_register_view(route: Signal<Route>) -> View {
+pub fn render_register_view() -> View {
     let i18n = use_context::<I18n>();
     let username = create_signal(String::new());
     let password = create_signal(String::new());
@@ -36,7 +36,7 @@ pub fn render_register_view(route: Signal<Route>) -> View {
         spawn_local_scoped(async move {
             match crate::api::register_api(&u, &p, &c).await {
                 Ok(()) => {
-                    route.set(Route::Login);
+                    navigate("/login");
                 }
                 Err(e) => {
                     error.set(i18n_async.t_replace(K::RegisterError, "msg", &e.to_string()));
@@ -77,7 +77,7 @@ pub fn render_register_view(route: Signal<Route>) -> View {
             auth_error_display(error),
             auth_submit_button(loading, i18n.t(K::RegisterBtn)),
             auth_link_footer(i18n.t(K::HaveAccountLogin), i18n.t(K::Login), move |_| {
-                route.set(Route::Login)
+                navigate("/login")
             }),
         ),
     )

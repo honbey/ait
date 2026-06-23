@@ -1,11 +1,9 @@
 use sycamore::prelude::*;
-use sycamore::web::events;
 use sycamore::web::tags::*;
 
 use crate::i18n::{I18n, K};
-use crate::route::Route;
 
-pub fn render_index_view(route: Signal<Route>, authenticated: Signal<bool>) -> View {
+pub fn render_index_view(authenticated: Signal<bool>) -> View {
     let i18n = use_context::<I18n>();
     div()
         .class("min-h-[calc(100vh-3.5rem)] flex items-center justify-center bg-gray-50 dark:bg-gray-900")
@@ -24,21 +22,21 @@ pub fn render_index_view(route: Signal<Route>, authenticated: Signal<bool>) -> V
                         View::from_dynamic(move || -> View {
                             if authenticated.get() {
                                 div().class("mt-8 flex items-center justify-center gap-4").children(
-                                    button()
-                                        .class("px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg cursor-pointer transition-colors")
-                                        .on(events::click, move |_| route.set(Route::Dashboard))
+                                    a()
+                                        .attr("href", "/console/dashboard")
+                                        .class("px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg cursor-pointer transition-colors inline-block")
                                         .children(i18n.t(K::Console)),
                                 )
                                     .into()
                             } else {
                                 div().class("mt-8 flex items-center justify-center gap-4").children((
-                                    button()
-                                        .class("px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg cursor-pointer transition-colors")
-                                        .on(events::click, move |_| route.set(Route::Login))
+                                    a()
+                                        .attr("href", "/login")
+                                        .class("px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg cursor-pointer transition-colors inline-block")
                                         .children(i18n.t(K::Login)),
-                                    button()
-                                        .class("px-6 py-3 border border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 font-semibold rounded-lg cursor-pointer transition-colors")
-                                        .on(events::click, move |_| route.set(Route::Register))
+                                    a()
+                                        .attr("href", "/register")
+                                        .class("px-6 py-3 border border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 font-semibold rounded-lg cursor-pointer transition-colors inline-block")
                                         .children(i18n.t(K::Register)),
                                 ))
                                     .into()

@@ -1,5 +1,8 @@
 use sycamore::prelude::*;
 use sycamore_futures::spawn_local_scoped;
+use sycamore_router::{HistoryIntegration, Router, RouterProps};
+
+use crate::route::AppRoute;
 
 mod api;
 mod i18n;
@@ -20,7 +23,6 @@ fn App() -> View {
     let storage = get_storage();
     let initial_dark = matches!(storage.get_item(THEME_KEY), Some(v) if v == "dark");
     let dark = create_signal(initial_dark);
-    let route = create_signal(route::Route::Index);
     let authenticated = create_signal(false);
 
     let initial_lang = storage
@@ -48,13 +50,18 @@ fn App() -> View {
 
     provide_context(i18n);
 
-    layout::Layout(layout::LayoutProps {
-        dark,
-        route,
-        authenticated,
-        username,
-        role,
-    })
+    Router(RouterProps::new(
+        HistoryIntegration::new(),
+        move |route: ReadSignal<AppRoute>| {
+            provide_context(route);
+            layout::Layout(layout::LayoutProps {
+                dark,
+                authenticated,
+                username,
+                role,
+            })
+        },
+    ))
 }
 
 fn main() {
