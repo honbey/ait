@@ -72,6 +72,7 @@ enum RouteData {
     Error(String),
 }
 
+#[expect(dead_code)]
 fn render_placeholder(title_key: K) -> View {
     let i18n = use_context::<I18n>();
     let title = i18n.t(title_key);
@@ -281,17 +282,8 @@ pub fn Layout(props: LayoutProps) -> View {
                                     Some(RouteData::TextGeneration(m)) => {
                                         crate::views::text_generation::render_text_generation_view(m)
                                     }
-                                    Some(RouteData::Placeholder) => match route.get() {
-                                        AppRoute::ApiKeys => {
-                                            render_placeholder(K::ApiKey)
-                                        }
-                                        AppRoute::TextGeneration => {
-                                            render_placeholder(K::TextGeneration)
-                                        }
-                                        AppRoute::Dashboard
-                                        | AppRoute::Providers
-                                        | AppRoute::Models => render_loading(),
-                                        _ => render_loading(),
+                                    Some(RouteData::Placeholder) => {
+                                        render_loading()
                                     },
                                     Some(RouteData::Error(e)) => {
                                         render_error_view(e)
