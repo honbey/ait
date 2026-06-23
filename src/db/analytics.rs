@@ -1,27 +1,50 @@
 use duckdb::{Connection, params};
+use std::sync::{Arc, Mutex};
 use tracing::error;
 
 #[derive(Clone)]
 pub struct Analytics {
-    db_path: String,
+    conn: Arc<Mutex<Connection>>,
 }
 
 impl Analytics {
-    pub fn new(db_path: &str) -> Self {
+    pub fn new(conn: Connection) -> Self {
         Self {
-            db_path: db_path.to_string(),
+            conn: Arc::new(Mutex::new(conn)),
         }
     }
 
-    pub fn total_requests(&self, days: i64) -> u64 {
-        let conn = match Connection::open(&self.db_path) {
+    pub fn query_stats(&self) -> (u64, u64) {
+        let conn = match self.conn.lock() {
             Ok(c) => c,
             Err(e) => {
-                error!("[analytics] failed to open DuckDB: {e}");
+                error!("[analytics] lock failed: {e}");
+                return (0, 0);
+            }
+        };
+        let count = conn
+            .query_row("SELECT COUNT(*) FROM proxy_log", [], |row| {
+                row.get::<_, u64>(0)
+            })
+            .unwrap_or(0);
+        let tokens = conn
+            .query_row(
+                "SELECT COALESCE(SUM(total_tokens), 0) FROM proxy_log",
+                [],
+                |row| row.get::<_, u64>(0),
+            )
+            .unwrap_or(0);
+        (count, tokens)
+    }
+
+    pub fn total_requests(&self, days: i64) -> u64 {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                error!("[analytics] lock failed: {e}");
                 return 0;
             }
         };
-
         if days > 0 {
             conn.query_row(
                 "SELECT COUNT(*) FROM proxy_log WHERE timestamp >= CURRENT_DATE - ?1",
@@ -38,10 +61,10 @@ impl Analytics {
     }
 
     pub fn total_tokens(&self) -> u64 {
-        let conn = match Connection::open(&self.db_path) {
+        let conn = match self.conn.lock() {
             Ok(c) => c,
             Err(e) => {
-                error!("[analytics] failed to open DuckDB: {e}");
+                error!("[analytics] lock failed: {e}");
                 return 0;
             }
         };

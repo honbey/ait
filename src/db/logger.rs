@@ -56,18 +56,20 @@ impl LogManager {
         )?;
 
         let (sender, receiver) = mpsc::sync_channel(CHANNEL_CAP);
-        let db_path_owned = db_path.to_string();
+        let analytics = Analytics::new(conn.try_clone()?);
 
         thread::spawn(move || {
-            if let Err(e) = worker_loop(&db_path_owned, receiver) {
-                error!("[logs] worker exited with error: {e}");
+            match conn.try_clone() {
+                Ok(worker_conn) => {
+                    if let Err(e) = worker_loop(receiver, worker_conn) {
+                        error!("[logs] worker exited with error: {e}");
+                    }
+                }
+                Err(e) => error!("[logs] failed to clone worker connection: {e}"),
             }
         });
 
-        Ok(Self {
-            analytics: Analytics::new(db_path),
-            sender,
-        })
+        Ok(Self { sender, analytics })
     }
 
     pub fn log_access(&self, event: AccessEvent) {
@@ -89,10 +91,7 @@ impl LogManager {
     }
 
     pub fn query_stats(&self) -> (u64, u64) {
-        (
-            self.analytics.total_requests(0),
-            self.analytics.total_tokens(),
-        )
+        self.analytics.query_stats()
     }
 
     pub fn requests_last_7d(&self) -> u64 {
@@ -100,8 +99,7 @@ impl LogManager {
     }
 }
 
-fn worker_loop(db_path: &str, receiver: mpsc::Receiver<LogEvent>) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+fn worker_loop(receiver: mpsc::Receiver<LogEvent>, conn: Connection) -> Result<()> {
     let mut buffer: Vec<LogEvent> = Vec::with_capacity(FLUSH_BATCH);
     let mut flush_count = 0u64;
 
