@@ -120,7 +120,10 @@ fn render_add_modal(
             .on(events::submit, on_submit)
             .class("space-y-4")
             .children((
-                modal_title(i18n.t(K::ProviderAdd), move |_| show_add_modal.set(false)),
+                modal_title(
+                    i18n.t_replace(K::Add, "entity", &i18n.t(K::Providers)),
+                    move |_| show_add_modal.set(false),
+                ),
                 form_field(
                     "add-provider-name".into(),
                     i18n.t(K::Name),
@@ -224,7 +227,10 @@ fn render_edit_modal(
             .on(events::submit, on_submit)
             .class("space-y-4")
             .children((
-                modal_title(i18n.t(K::ProviderEdit), move |_| show_edit_modal.set(None)),
+                modal_title(
+                    i18n.t_replace(K::Edit, "entity", &i18n.t(K::Providers)),
+                    move |_| show_edit_modal.set(None),
+                ),
                 form_field(
                     "edit-provider-name".into(),
                     i18n.t(K::Name),
@@ -405,7 +411,7 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
                     })
                     .children((
                         i().class("fas fa-plus"),
-                        span().children(i18n.t(K::ProviderAdd)),
+                        span().children(i18n.t_replace(K::Add, "entity", &i18n.t(K::Providers))),
                     ))
                     .into()
             }
@@ -419,8 +425,8 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
             th_left(i18n.t(K::ProviderBaseUrl)),
             th_left(i18n.t(K::TableStatus)),
             th_left(i18n.t(K::UpdatedAt)),
-            th_center(i18n.t(K::ProviderDetail)),
-            th_center(i18n.t(K::ProviderActions)),
+            th_center(i18n.t(K::Detail)),
+            th_center(i18n.t(K::Actions)),
         ],
         rows,
     );

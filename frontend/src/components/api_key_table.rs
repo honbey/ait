@@ -273,7 +273,7 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
             th_left(i18n.t(K::ExpiresAt)),
             th_left(i18n.t(K::TableStatus)),
             th_left(i18n.t(K::UpdatedAt)),
-            th_center(i18n.t(K::ProviderActions)),
+            th_center(i18n.t(K::Actions)),
         ],
         rows,
     );
@@ -298,7 +298,7 @@ pub fn ApiKeyTable(props: ApiKeyTableProps) -> View {
                 let key_id = item.id.clone();
                 let u = uname.clone();
                 render_delete_confirm(
-                    i18n.t_replace(K::ApiKeyDeleteConfirm, "name", &item.name),
+                    i18n.t_replace(K::DeleteConfirmMessage, "name", &item.name),
                     deleting,
                     move |_| {
                         if deleting.get() {

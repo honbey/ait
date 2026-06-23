@@ -121,7 +121,10 @@ fn render_add_modal(
             .on(events::submit, on_submit)
             .class("space-y-4")
             .children((
-                modal_title(i18n.t(K::ModelAdd), move |_| show_add_modal.set(false)),
+                modal_title(
+                    i18n.t_replace(K::Add, "entity", &i18n.t(K::Models)),
+                    move |_| show_add_modal.set(false),
+                ),
                 form_field(
                     "add-model-name".into(),
                     i18n.t(K::Name),
@@ -211,7 +214,7 @@ fn render_edit_modal(
             .on(events::submit, on_submit)
             .class("space-y-4")
             .children((
-                modal_title(i18n.t(K::ModelEdit), move |_| show_edit_modal.set(None)),
+                modal_title(i18n.t_replace(K::Edit, "entity", &i18n.t(K::Models)), move |_| show_edit_modal.set(None)),
                 form_field(
                     "edit-model-name".into(),
                     i18n.t(K::Name),
@@ -351,7 +354,7 @@ pub fn ModelTable(props: ModelTableProps) -> View {
                     })
                     .children((
                         i().class("fas fa-plus"),
-                        span().children(i18n.t(K::ModelAdd)),
+                        span().children(i18n.t_replace(K::Add, "entity", &i18n.t(K::Models))),
                     ))
                     .into()
             }
@@ -365,8 +368,8 @@ pub fn ModelTable(props: ModelTableProps) -> View {
             th_left(i18n.t(K::ModelUpstreamModel)),
             th_left(i18n.t(K::TableStatus)),
             th_left(i18n.t(K::UpdatedAt)),
-            th_center(i18n.t(K::ProviderDetail)),
-            th_center(i18n.t(K::ProviderActions)),
+            th_center(i18n.t(K::Detail)),
+            th_center(i18n.t(K::Actions)),
         ],
         rows,
     );

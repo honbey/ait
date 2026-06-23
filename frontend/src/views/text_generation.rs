@@ -127,7 +127,7 @@ pub fn render_text_generation_view(models: Vec<Model>) -> View {
                                                 if loading.get() {
                                                     div().class("flex items-center gap-2").children((
                                                         i().class("fas fa-spinner animate-spin"),
-                                                        span().children(i18n.t(K::TextGenGenerating)),
+                                                        span().children(i18n.t(K::TextGenGenerate)),
                                                     )).into()
                                                 } else {
                                                     span().children(i18n.t(K::TextGenGenerate)).into()
