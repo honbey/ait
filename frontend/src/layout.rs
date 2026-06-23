@@ -96,6 +96,7 @@ fn render_placeholder(title_key: K) -> View {
 #[derive(Props)]
 pub struct LayoutProps {
     pub dark: Signal<bool>,
+    pub session_checked: Signal<bool>,
     pub authenticated: Signal<bool>,
     pub username: Signal<Option<String>>,
     pub role: Signal<Option<String>>,
@@ -104,6 +105,7 @@ pub struct LayoutProps {
 #[component]
 pub fn Layout(props: LayoutProps) -> View {
     let dark = props.dark;
+    let session_checked = props.session_checked;
     let authenticated = props.authenticated;
     let username = props.username;
     let role = props.role;
@@ -113,7 +115,7 @@ pub fn Layout(props: LayoutProps) -> View {
 
     // Auth guard: redirect to Login if not authenticated
     create_effect(move || {
-        if route.get().is_console() && !authenticated.get() {
+        if session_checked.get() && route.get().is_console() && !authenticated.get() {
             navigate("/login");
         }
     });

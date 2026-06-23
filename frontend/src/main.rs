@@ -24,6 +24,7 @@ fn App() -> View {
     let initial_dark = matches!(storage.get_item(THEME_KEY), Some(v) if v == "dark");
     let dark = create_signal(initial_dark);
     let authenticated = create_signal(false);
+    let session_checked = create_signal(false);
 
     let initial_lang = storage
         .get_item(LANG_KEY)
@@ -40,6 +41,7 @@ fn App() -> View {
             role.set(Some(r));
             authenticated.set(true);
         }
+        session_checked.set(true);
     });
 
     let i18n_clone = i18n.clone();
@@ -56,6 +58,7 @@ fn App() -> View {
             provide_context(route);
             layout::Layout(layout::LayoutProps {
                 dark,
+                session_checked,
                 authenticated,
                 username,
                 role,
