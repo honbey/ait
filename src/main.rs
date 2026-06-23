@@ -13,7 +13,7 @@ use axum::{
 };
 use std::net::SocketAddr;
 use tower_http::services::{ServeDir, ServeFile};
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::info;
 
 use handlers::admin::{
@@ -27,8 +27,8 @@ use handlers::proxy::{chat_completions, completions, embeddings, health, list_mo
 use handlers::stats::dashboard_stats;
 use handlers::users::{change_password, delete_user, list_users, update_user};
 use middleware::{
-    access_log_middleware, admin_auth_middleware, auth_middleware,
-    login_rate_limit_middleware, register_rate_limit_middleware,
+    access_log_middleware, admin_auth_middleware, auth_middleware, login_rate_limit_middleware,
+    register_rate_limit_middleware,
 };
 
 #[tokio::main]
@@ -185,5 +185,8 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
         .merge(proxy_api)
         .with_state(state)
         .layer(Extension(config.clone()))
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .on_response(DefaultOnResponse::new().level(tracing::Level::DEBUG)),
+        )
 }

@@ -3,6 +3,7 @@ use duckdb::{Connection, Result, params};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+use tracing::{error, info, warn};
 
 use super::models::{AccessEvent, AuditEvent, LogEvent, ProxyEvent};
 
@@ -58,7 +59,7 @@ impl LogManager {
 
         thread::spawn(move || {
             if let Err(e) = worker_loop(&db_path_owned, receiver) {
-                eprintln!("[logs] worker exited with error: {e}");
+                error!("[logs] worker exited with error: {e}");
             }
         });
 
@@ -70,19 +71,19 @@ impl LogManager {
 
     pub fn log_access(&self, event: AccessEvent) {
         if let Err(e) = self.sender.try_send(LogEvent::Access(event)) {
-            eprintln!("[logs] access buffer full, dropping event: {e}");
+            warn!("[logs] access buffer full, dropping event: {e}");
         }
     }
 
     pub fn log_proxy(&self, event: ProxyEvent) {
         if let Err(e) = self.sender.try_send(LogEvent::Proxy(event)) {
-            eprintln!("[logs] proxy buffer full, dropping event: {e}");
+            warn!("[logs] proxy buffer full, dropping event: {e}");
         }
     }
 
     pub fn log_audit(&self, event: AuditEvent) {
         if let Err(e) = self.sender.try_send(LogEvent::Audit(event)) {
-            eprintln!("[logs] audit buffer full, dropping event: {e}");
+            warn!("[logs] audit buffer full, dropping event: {e}");
         }
     }
 
@@ -90,7 +91,7 @@ impl LogManager {
         let conn = match Connection::open(&self.db_path) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("[logs] failed to open DuckDB for stats: {e}");
+                error!("[logs] failed to open DuckDB for stats: {e}");
                 return (0, 0);
             }
         };
@@ -163,7 +164,7 @@ fn flush_events(conn: &Connection, events: &[LogEvent]) {
     }
 
     if let Err(e) = conn.execute_batch("BEGIN TRANSACTION") {
-        eprintln!("[logs] begin tx failed: {e}");
+        error!("[logs] begin tx failed: {e}");
         return;
     }
 
@@ -173,11 +174,11 @@ fn flush_events(conn: &Connection, events: &[LogEvent]) {
 
     if ok {
         if let Err(e) = conn.execute_batch("COMMIT") {
-            eprintln!("[logs] commit failed: {e}");
+            error!("[logs] commit failed: {e}");
         }
     } else {
         if let Err(e) = conn.execute_batch("ROLLBACK") {
-            eprintln!("[logs] rollback failed: {e}");
+            error!("[logs] rollback failed: {e}");
         }
     }
 }
@@ -253,11 +254,13 @@ fn flush_audits(conn: &Connection, events: &[&AuditEvent]) -> Result<()> {
 fn cleanup_expired(conn: &Connection) {
     let cutoff = (Utc::now() - chrono::Duration::days(RETENTION_DAYS)).naive_utc();
     for table in &["access_log", "proxy_log", "audit_log"] {
-        if let Err(e) = conn.execute(
+        match conn.execute(
             &format!("DELETE FROM {table} WHERE timestamp < ?1"),
             params![cutoff],
         ) {
-            eprintln!("[logs] cleanup {table} failed: {e}");
+            Ok(n) if n > 0 => info!("[logs] cleanup {table}: deleted {n} rows"),
+            Ok(_) => {}
+            Err(e) => warn!("[logs] cleanup {table} failed: {e}"),
         }
     }
 }

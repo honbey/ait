@@ -7,7 +7,7 @@ use axum::{
 use chrono::Utc;
 use futures_util::StreamExt;
 use std::time::Instant;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 use crate::app::AppState;
 use crate::db::{Permission, ProxyEvent, SessionUser, UserRole};
@@ -148,8 +148,6 @@ pub async fn proxy_request(
         AitError::bad_request("Missing 'model' field in request body").into_response()
     })?;
 
-    info!("Routing request for model: {}", model_name);
-
     // Resolve model -> provider
     let (model, provider) = match state.db.resolve_model(model_name) {
         Ok(Some((m, p))) => (m, p),
@@ -191,9 +189,12 @@ pub async fn proxy_request(
         .await
         .map_err(|e| AitError::bad_request(e).into_response())?;
 
-    info!(
+    debug!(
         "Proxying to provider '{}' for model '{}' -> upstream '{}', base_url: {}",
-        provider_name, model_name, model.upstream_model, request.url()
+        provider_name,
+        model_name,
+        model.upstream_model,
+        request.url()
     );
 
     let result = if stream {
