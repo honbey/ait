@@ -4,17 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Ait</title>
-    <link rel="icon" href="/ait-logo.svg" />
-    <link data-trunk rel="copy-file" href="public/ait-logo.svg" />
-    <!-- TEST -->
-    <link data-trunk rel="copy-dir" href="assets/fontawesome-free-6.7.2-web" />
+    <link rel="icon" href="ait-logo.svg" />
     <link rel="stylesheet" href="/fontawesome-free-6.7.2-web/css/all.min.css" />
-    <link data-trunk rel="tailwind-css" href="tailwind.css" />
-    <link data-trunk rel="rust" data-wasm-opt="s" />
+    <link data-trunk rel="copy-file" href="public/ait-logo.svg" />
     <link data-trunk rel="copy-dir" href="locales" />
+    <link data-trunk rel="copy-dir" href="assets/fontawesome-free-6.7.2-web" />
+    <link data-trunk rel="tailwind-css" href="tailwind.css" />
+    <base data-trunk-public-url />
   </head>
   <body
     class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 m-0"
   >
+    <link data-trunk rel="rust" data-wasm-opt="z" data-bin="ait-frontend" />
   </body>
 </html>
