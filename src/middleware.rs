@@ -1,4 +1,5 @@
 use crate::app::AppState;
+use crate::db::events::AccessEvent;
 use crate::db::{SessionUser, UserRole};
 use crate::error::{AitError, db_error, too_many_requests};
 use axum::{
@@ -8,7 +9,9 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use chrono::Utc;
 use std::net::{IpAddr, SocketAddr};
+use std::time::Instant;
 
 fn full_access(username: &str) -> SessionUser {
     SessionUser {
@@ -203,4 +206,36 @@ pub async fn register_rate_limit_middleware(
     )?;
 
     Ok(next.run(req).await)
+}
+
+pub async fn access_log_middleware(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let start = Instant::now();
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+    let username = req
+        .extensions()
+        .get::<SessionUser>()
+        .map(|u| u.username.clone());
+
+    let client_ip = get_client_ip(&req).map(|ip| ip.to_string());
+    let response = next.run(req).await;
+
+    let latency = start.elapsed();
+    let status = response.status().as_u16() as i32;
+
+    state.log_manager.log_access(AccessEvent {
+        timestamp: Utc::now(),
+        method,
+        path,
+        status,
+        latency_ms: latency.as_millis() as i64,
+        username,
+        client_ip,
+    });
+
+    response
 }

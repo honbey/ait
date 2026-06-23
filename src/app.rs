@@ -1,4 +1,5 @@
 use crate::config::ConfigApp;
+use crate::db::logger::LogManager;
 use crate::db::{Database, User, UserRole};
 use crate::rate_limiter::RateLimiter;
 use chrono::{DateTime, Utc};
@@ -10,6 +11,7 @@ pub struct AppState {
     pub config: ConfigApp,
     pub db: Arc<Database>,
     pub http_client: reqwest::Client,
+    pub log_manager: LogManager,
     pub start_time: DateTime<Utc>,
     pub login_rate_limiter: RateLimiter,
     pub register_rate_limiter: RateLimiter,
@@ -80,10 +82,14 @@ impl AppState {
         spawn_rate_limiter_cleanup(login_limiter.clone(), cleanup_interval);
         spawn_rate_limiter_cleanup(register_limiter.clone(), cleanup_interval);
 
+        let log_manager = LogManager::new(&config.log.path)
+            .expect("Failed to initialize DuckDB log database");
+
         Self {
             config,
             db,
             http_client,
+            log_manager,
             start_time: Utc::now(),
             login_rate_limiter: login_limiter,
             register_rate_limiter: register_limiter,

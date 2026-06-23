@@ -6,9 +6,11 @@ use axum::{
 };
 use chrono::Utc;
 use futures_util::StreamExt;
+use std::time::Instant;
 use tracing::{info, warn};
 
 use crate::app::AppState;
+use crate::db::events::ProxyEvent;
 use crate::db::{Permission, SessionUser, UserRole};
 use crate::error::AitError;
 use crate::providers::create_provider;
@@ -139,6 +141,9 @@ pub async fn proxy_request(
     body: serde_json::Value,
     upstream_path: &str,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
+    let start = Instant::now();
+    let username = session.username.clone();
+
     // Extract model name
     let model_name = body.get("model").and_then(|m| m.as_str()).ok_or_else(|| {
         AitError::bad_request("Missing 'model' field in request body").into_response()
@@ -161,8 +166,11 @@ pub async fn proxy_request(
         }
     };
 
+    let model_name = model.name.clone();
+    let provider_name = provider.name.clone();
+
     // Check access permissions
-    check_model_access(provider.id.as_str(), model_name, &session)?;
+    check_model_access(provider.id.as_str(), &model_name, &session)?;
 
     // Check if stream is requested
     let stream = body
@@ -186,19 +194,36 @@ pub async fn proxy_request(
 
     info!(
         "Proxying to provider '{}' for model '{}' -> upstream '{}', base_url: {}",
-        provider.name,
-        model.name,
-        model.upstream_model,
-        request.url()
+        provider_name, model_name, model.upstream_model, request.url()
     );
 
-    if stream {
-        let resp = proxy_streamed(state, request, &provider, &model).await?;
-        Ok(resp.into_response())
+    let result = if stream {
+        proxy_streamed(state.clone(), request, &provider, &model)
+            .await
+            .map(|r| r.into_response())
     } else {
-        let resp = proxy_non_streamed(state, request, &provider, &model).await?;
-        Ok(resp.into_response())
-    }
+        proxy_non_streamed(state.clone(), request, &provider, &model)
+            .await
+            .map(|r| r.into_response())
+    };
+
+    let latency = start.elapsed();
+    let status_code = match &result {
+        Ok(r) => r.status().as_u16(),
+        Err(e) => e.0.as_u16(),
+    };
+    state.log_manager.log_proxy(ProxyEvent {
+        timestamp: Utc::now(),
+        username: Some(username),
+        model_name,
+        provider_name,
+        prompt_tokens: None,
+        completion_tokens: None,
+        total_tokens: None,
+        latency_ms: latency.as_millis() as i64,
+        status: status_code.to_string(),
+    });
+    result
 }
 
 async fn proxy_non_streamed(

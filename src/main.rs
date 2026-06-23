@@ -27,8 +27,8 @@ use handlers::proxy::{chat_completions, completions, embeddings, health, list_mo
 use handlers::stats::dashboard_stats;
 use handlers::users::{change_password, delete_user, list_users, update_user};
 use middleware::{
-    admin_auth_middleware, auth_middleware, login_rate_limit_middleware,
-    register_rate_limit_middleware,
+    access_log_middleware, admin_auth_middleware, auth_middleware,
+    login_rate_limit_middleware, register_rate_limit_middleware,
 };
 
 #[tokio::main]
@@ -104,7 +104,11 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
         .merge(login_route)
         .merge(register_route)
         .route("/admin/logout", post(logout))
-        .route("/admin/session", get(session_check));
+        .route("/admin/session", get(session_check))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            access_log_middleware,
+        ));
 
     // Admin API routes (admin auth required)
     let admin_api = Router::new()
@@ -141,6 +145,10 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
         .route("/admin/stats", get(dashboard_stats))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
+            access_log_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
             admin_auth_middleware,
         ));
 
@@ -153,6 +161,10 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
         .route("/v1/completions", post(completions))
         .route("/v1/embeddings", post(embeddings))
         .route("/v1/models", get(list_models_proxy))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            access_log_middleware,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

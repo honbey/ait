@@ -3,9 +3,11 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
+use crate::db::events::AuditEvent;
 use crate::db::{Permission, SessionUser, User, UserRole};
 use crate::error::{AitError, conflict, forbidden, internal_error, not_found, require_admin};
 
@@ -80,6 +82,15 @@ pub async fn update_user(
 
     let updated = state.db.update_user(&user)?;
 
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "update".into(),
+        resource: "user".into(),
+        resource_id: username,
+        detail: None,
+    });
+
     Ok(Json(updated.into()))
 }
 
@@ -107,6 +118,16 @@ pub async fn delete_user(
     }
 
     state.db.delete_user(&username)?;
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "delete".into(),
+        resource: "user".into(),
+        resource_id: username,
+        detail: None,
+    });
+
     Ok((StatusCode::NO_CONTENT,))
 }
 
@@ -141,5 +162,15 @@ pub async fn change_password(
     user.password_hash = new_hash;
 
     state.db.update_user(&user)?;
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "change_password".into(),
+        resource: "user".into(),
+        resource_id: username,
+        detail: None,
+    });
+
     Ok(Json(serde_json::json!({"ok": true})))
 }

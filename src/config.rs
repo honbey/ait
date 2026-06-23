@@ -6,6 +6,7 @@ pub struct ConfigApp {
     pub server: ServerConfig,
     pub auth: AuthConfig,
     pub database: DatabaseConfig,
+    pub log: LogConfig,
     pub proxy: ProxyConfig,
 }
 
@@ -45,6 +46,11 @@ pub struct DatabaseConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct LogConfig {
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct ProxyConfig {
     pub timeout_secs: u64,
     pub stream: bool,
@@ -77,6 +83,7 @@ impl ConfigApp {
             .set_default("auth.register_rate_limit.window_secs", 3600u64)?
             .set_default("auth.register_rate_limit.ban_secs", 3600u64)?
             .set_default("database.path", "./data/ait.rocksdb")?
+            .set_default("log.path", "./data/ait-logs.duckdb")?
             .set_default("proxy.timeout_secs", 300u64)?
             .set_default("proxy.stream", true)?
             .add_source(File::new(config_file, FileFormat::Toml).required(false))
@@ -102,6 +109,7 @@ mod tests {
         assert!(config.auth.enabled);
         assert_eq!(config.auth.max_api_keys_per_user, 10);
         assert_eq!(config.database.path, "./data/ait.rocksdb");
+        assert_eq!(config.log.path, "./data/ait-logs.duckdb");
         assert_eq!(config.auth.login_rate_limit.max_attempts, 5);
         assert_eq!(config.auth.login_rate_limit.window_secs, 300);
         assert_eq!(config.auth.login_rate_limit.ban_secs, 900);
