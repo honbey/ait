@@ -78,10 +78,24 @@ pub struct DashboardStats {
     pub token_consumption: u64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct DailyRequests {
+    pub date: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DailyTokens {
+    pub date: String,
+    pub tokens: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct DashboardData {
     pub provider_count: u64,
     pub model_count: u64,
     pub api_request_count: u64,
     pub token_consumption: u64,
+    pub daily_requests: Vec<DailyRequests>,
+    pub daily_tokens: Vec<DailyTokens>,
 }

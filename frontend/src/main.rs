@@ -5,6 +5,7 @@ use sycamore_router::{HistoryIntegration, Router, RouterProps};
 use crate::route::AppRoute;
 
 mod api;
+mod chart;
 mod i18n;
 mod layout;
 mod models;

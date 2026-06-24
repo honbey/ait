@@ -4,8 +4,8 @@ use gloo_net::Error as NetError;
 use gloo_net::http::Request;
 
 use crate::models::{
-    ApiKeyListItem, CreateApiKeyResponse, DashboardData, DashboardStats, LoginResponse, Model,
-    Provider, ProviderTypeInfo,
+    ApiKeyListItem, CreateApiKeyResponse, DailyRequests, DailyTokens, DashboardStats,
+    LoginResponse, Model, Provider, ProviderTypeInfo,
 };
 
 fn get_base_url() -> String {
@@ -238,14 +238,16 @@ pub async fn fetch_models() -> Result<Vec<Model>, NetError> {
     api_get("admin/models").await
 }
 
-pub async fn fetch_dashboard() -> Result<DashboardData, NetError> {
-    let stats = api_get::<DashboardStats>("admin/stats").await?;
-    Ok(DashboardData {
-        provider_count: stats.provider_count,
-        model_count: stats.model_count,
-        api_request_count: stats.api_request_count,
-        token_consumption: stats.token_consumption,
-    })
+pub async fn fetch_dashboard_stats() -> Result<DashboardStats, NetError> {
+    api_get("admin/stats").await
+}
+
+pub async fn fetch_daily_requests(days: u32) -> Result<Vec<DailyRequests>, NetError> {
+    api_get(&format!("admin/stats/requests?days={}", days)).await
+}
+
+pub async fn fetch_daily_tokens(days: u32) -> Result<Vec<DailyTokens>, NetError> {
+    api_get(&format!("admin/stats/tokens?days={}", days)).await
 }
 
 // --- Provider CRUD ---

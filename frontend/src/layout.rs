@@ -4,7 +4,7 @@ use sycamore::web::events;
 use sycamore::web::tags::*;
 use sycamore_router::navigate;
 
-use crate::api::{fetch_api_keys, fetch_dashboard, fetch_models, fetch_providers};
+use crate::api::{fetch_api_keys, fetch_dashboard_stats, fetch_daily_requests, fetch_daily_tokens, fetch_models, fetch_providers};
 use crate::i18n::{I18n, K};
 use crate::models::{ApiKeyListItem, DashboardData, Model, Provider};
 use crate::route::AppRoute;
@@ -150,10 +150,26 @@ pub fn Layout(props: LayoutProps) -> View {
         let uname = username;
         async move {
             let result = match route.get() {
-                AppRoute::Dashboard => fetch_dashboard()
-                    .await
-                    .map(RouteData::Dashboard)
-                    .unwrap_or_else(|e| RouteData::Error(e.to_string())),
+                AppRoute::Dashboard => {
+                    let (stats, req, tok) = futures_util::join!(
+                        fetch_dashboard_stats(),
+                        fetch_daily_requests(7),
+                        fetch_daily_tokens(7),
+                    );
+                    match (stats, req, tok) {
+                        (Ok(s), Ok(r), Ok(t)) => RouteData::Dashboard(DashboardData {
+                            provider_count: s.provider_count,
+                            model_count: s.model_count,
+                            api_request_count: s.api_request_count,
+                            token_consumption: s.token_consumption,
+                            daily_requests: r,
+                            daily_tokens: t,
+                        }),
+                        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+                            RouteData::Error(e.to_string())
+                        }
+                    }
+                }
                 AppRoute::Providers => fetch_providers()
                     .await
                     .map(RouteData::Providers)

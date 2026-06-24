@@ -7,5 +7,6 @@ pub mod modal;
 pub mod model_table;
 pub mod provider_table;
 pub mod sidebar;
+pub mod line_chart;
 pub mod stat_card;
 pub mod topbar;
