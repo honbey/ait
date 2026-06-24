@@ -68,24 +68,26 @@ pub fn render_dashboard_view(data: DashboardData) -> View {
                         .children((
                             div()
                                 .class("bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm")
-                                .children(
+                                .children((
+                                    h3().class("text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4")
+                                        .children(i18n.t(K::ApiRequestCountTrendingTableTitle)),
                                     LineChart(LineChartProps {
                                         id: "chart-requests",
-                                        title: i18n.t(K::ApiRequestCountTrendingTableTitle),
                                         x_data: req_x_data,
                                         series_list: req_series,
                                     }),
-                                ),
+                                )),
                             div()
                                 .class("bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm")
-                                .children(
+                                .children((
+                                    h3().class("text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4")
+                                        .children(i18n.t(K::TokenConsumptionTrendingTableTitle)),
                                     LineChart(LineChartProps {
                                         id: "chart-tokens",
-                                        title: i18n.t(K::TokenConsumptionTrendingTableTitle),
                                         x_data: tok_x_data,
                                         series_list: tok_series,
                                     }),
-                                ),
+                                )),
                         )),
                 )),
         )

@@ -38,7 +38,7 @@ pub struct ChartSeries {
     pub data: Vec<f64>,
 }
 
-pub fn build_line_option(title: &str, x_data: &[String], series_list: &[ChartSeries]) -> JsValue {
+pub fn build_line_option(x_data: &[String], series_list: &[ChartSeries]) -> JsValue {
     let series_json: Vec<serde_json::Value> = series_list
         .iter()
         .map(|s| {
@@ -54,9 +54,8 @@ pub fn build_line_option(title: &str, x_data: &[String], series_list: &[ChartSer
         .collect();
 
     let option = serde_json::json!({
-        "title": { "text": title, "left": "center" },
         "tooltip": { "trigger": "axis" },
-        "grid": { "left": "3%", "right": "4%", "bottom": "3%", "containLabel": true },
+        "grid": { "left": "5%", "right": "5%", "top": "5%", "bottom": "5%", "containLabel": true },
         "xAxis": {
             "type": "category",
             "data": x_data,
