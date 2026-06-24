@@ -82,8 +82,8 @@ impl AppState {
         spawn_rate_limiter_cleanup(login_limiter.clone(), cleanup_interval);
         spawn_rate_limiter_cleanup(register_limiter.clone(), cleanup_interval);
 
-        let log_manager = LogManager::new(&config.log.path)
-            .expect("Failed to initialize DuckDB log database");
+        let log_manager =
+            LogManager::new(&config.log.path).expect("Failed to initialize DuckDB log database");
 
         Self {
             config,

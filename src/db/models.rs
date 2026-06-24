@@ -222,4 +222,5 @@ pub enum LogEvent {
     Access(AccessEvent),
     Proxy(ProxyEvent),
     Audit(AuditEvent),
+    Shutdown,
 }

@@ -45,6 +45,7 @@ async fn main() {
     };
 
     let state = app::AppState::new(config.clone());
+    let log_manager = state.log_manager.clone();
 
     let app = build_app(state, &config);
 
@@ -59,8 +60,13 @@ async fn main() {
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
+    .with_graceful_shutdown(async {
+        tokio::signal::ctrl_c().await.ok();
+    })
     .await
     .unwrap();
+
+    log_manager.shutdown();
 }
 
 fn parse_config_path() -> Option<String> {

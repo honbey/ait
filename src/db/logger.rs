@@ -58,15 +58,13 @@ impl LogManager {
         let (sender, receiver) = mpsc::sync_channel(CHANNEL_CAP);
         let analytics = Analytics::new(conn.try_clone()?);
 
-        thread::spawn(move || {
-            match conn.try_clone() {
-                Ok(worker_conn) => {
-                    if let Err(e) = worker_loop(receiver, worker_conn) {
-                        error!("[logs] worker exited with error: {e}");
-                    }
+        thread::spawn(move || match conn.try_clone() {
+            Ok(worker_conn) => {
+                if let Err(e) = worker_loop(receiver, worker_conn) {
+                    error!("[logs] worker exited with error: {e}");
                 }
-                Err(e) => error!("[logs] failed to clone worker connection: {e}"),
             }
+            Err(e) => error!("[logs] failed to clone worker connection: {e}"),
         });
 
         Ok(Self { sender, analytics })
@@ -90,12 +88,19 @@ impl LogManager {
         }
     }
 
-    pub fn query_stats(&self) -> (u64, u64) {
-        self.analytics.query_stats()
+    pub async fn query_stats(&self) -> (u64, u64) {
+        self.analytics.query_stats().await
     }
 
-    pub fn requests_last_7d(&self) -> u64 {
-        self.analytics.total_requests(7)
+    pub async fn requests_last_7d(&self) -> u64 {
+        self.analytics.total_requests(7).await
+    }
+
+    pub fn shutdown(&self) {
+        while self.sender.try_send(LogEvent::Shutdown).is_err() {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        self.analytics.shutdown();
     }
 }
 
@@ -104,7 +109,10 @@ fn worker_loop(receiver: mpsc::Receiver<LogEvent>, conn: Connection) -> Result<(
     let mut flush_count = 0u64;
 
     loop {
+        let mut shutdown = false;
+
         match receiver.recv_timeout(FLUSH_INTERVAL) {
+            Ok(LogEvent::Shutdown) => shutdown = true,
             Ok(event) => buffer.push(event),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if !buffer.is_empty() {
@@ -115,16 +123,28 @@ fn worker_loop(receiver: mpsc::Receiver<LogEvent>, conn: Connection) -> Result<(
                 if !buffer.is_empty() {
                     flush_events(&conn, &buffer);
                 }
+                let _ = conn.execute_batch("CHECKPOINT");
                 return Ok(());
             }
         }
 
         while let Ok(event) = receiver.try_recv() {
-            buffer.push(event);
+            match event {
+                LogEvent::Shutdown => shutdown = true,
+                other => buffer.push(other),
+            }
         }
 
         if buffer.len() >= FLUSH_BATCH {
             flush_buffer(&conn, &mut buffer, &mut flush_count);
+        }
+
+        if shutdown {
+            if !buffer.is_empty() {
+                flush_events(&conn, &buffer);
+            }
+            let _ = conn.execute_batch("CHECKPOINT");
+            return Ok(());
         }
     }
 }
@@ -133,6 +153,7 @@ fn flush_buffer(conn: &Connection, buffer: &mut Vec<LogEvent>, flush_count: &mut
     if flush_events(conn, buffer) {
         *flush_count += 1;
         if flush_count.is_multiple_of(RETENTION_EVERY as u64) {
+            let _ = conn.execute_batch("CHECKPOINT");
             cleanup_expired(conn);
         }
         buffer.clear();
@@ -148,6 +169,7 @@ fn flush_events(conn: &Connection, events: &[LogEvent]) -> bool {
             LogEvent::Access(e) => access.push(e),
             LogEvent::Proxy(e) => proxy.push(e),
             LogEvent::Audit(e) => audit.push(e),
+            LogEvent::Shutdown => {}
         }
     }
 
