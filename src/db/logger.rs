@@ -88,12 +88,12 @@ impl LogManager {
         }
     }
 
-    pub async fn query_stats(&self) -> (u64, u64) {
-        self.analytics.query_stats().await
+    pub async fn total_requests(&self, days: i64) -> u64 {
+        self.analytics.total_requests(days).await
     }
 
-    pub async fn requests_last_7d(&self) -> u64 {
-        self.analytics.total_requests(7).await
+    pub async fn total_tokens(&self, days: i64) -> u64 {
+        self.analytics.total_tokens(days).await
     }
 
     pub fn shutdown(&self) {

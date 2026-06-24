@@ -162,8 +162,8 @@ fn parse_usage(body: &[u8]) -> UsageTokens {
     let total_tokens = usage
         .and_then(|u| u.get("total_tokens").and_then(|v| v.as_i64()))
         .or_else(|| {
-            if prompt_tokens.is_some() && completion_tokens.is_some() {
-                Some(prompt_tokens.unwrap() + completion_tokens.unwrap())
+            if let (Some(p), Some(c)) = (prompt_tokens, completion_tokens) {
+                Some(p + c)
             } else {
                 None
             }

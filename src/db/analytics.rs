@@ -1,3 +1,4 @@
+use chrono::{Duration, Utc};
 use duckdb::{Connection, params};
 use std::sync::mpsc;
 use tokio::sync::oneshot;
@@ -8,14 +9,12 @@ pub struct Analytics {
 }
 
 enum AnalyticsRequest {
-    QueryStats {
-        resp: oneshot::Sender<(u64, u64)>,
-    },
     TotalRequests {
         days: i64,
         resp: oneshot::Sender<u64>,
     },
     TotalTokens {
+        days: i64,
         resp: oneshot::Sender<u64>,
     },
     Shutdown,
@@ -27,14 +26,11 @@ impl Analytics {
         std::thread::spawn(move || {
             for req in rx {
                 match req {
-                    AnalyticsRequest::QueryStats { resp } => {
-                        let _ = resp.send(query_stats_impl(&conn));
-                    }
                     AnalyticsRequest::TotalRequests { days, resp } => {
                         let _ = resp.send(total_requests_impl(&conn, days));
                     }
-                    AnalyticsRequest::TotalTokens { resp } => {
-                        let _ = resp.send(total_tokens_impl(&conn));
+                    AnalyticsRequest::TotalTokens { days, resp } => {
+                        let _ = resp.send(total_tokens_impl(&conn, days));
                     }
                     AnalyticsRequest::Shutdown => {
                         let _ = conn.execute_batch("CHECKPOINT");
@@ -44,14 +40,6 @@ impl Analytics {
             }
         });
         Self { tx }
-    }
-
-    pub async fn query_stats(&self) -> (u64, u64) {
-        let (resp, rx) = oneshot::channel();
-        if self.tx.send(AnalyticsRequest::QueryStats { resp }).is_err() {
-            return (0, 0);
-        }
-        rx.await.unwrap_or((0, 0))
     }
 
     pub async fn total_requests(&self, days: i64) -> u64 {
@@ -66,11 +54,11 @@ impl Analytics {
         rx.await.unwrap_or(0)
     }
 
-    pub async fn total_tokens(&self) -> u64 {
+    pub async fn total_tokens(&self, days: i64) -> u64 {
         let (resp, rx) = oneshot::channel();
         if self
             .tx
-            .send(AnalyticsRequest::TotalTokens { resp })
+            .send(AnalyticsRequest::TotalTokens { days, resp })
             .is_err()
         {
             return 0;
@@ -83,27 +71,12 @@ impl Analytics {
     }
 }
 
-fn query_stats_impl(conn: &Connection) -> (u64, u64) {
-    let count = conn
-        .query_row("SELECT COUNT(*) FROM proxy_log", [], |row| {
-            row.get::<_, u64>(0)
-        })
-        .unwrap_or(0);
-    let tokens = conn
-        .query_row(
-            "SELECT COALESCE(SUM(total_tokens), 0) FROM proxy_log",
-            [],
-            |row| row.get::<_, u64>(0),
-        )
-        .unwrap_or(0);
-    (count, tokens)
-}
-
 fn total_requests_impl(conn: &Connection, days: i64) -> u64 {
     if days > 0 {
+        let cutoff = (Utc::now() - Duration::days(days)).naive_utc();
         conn.query_row(
-            "SELECT COUNT(*) FROM proxy_log WHERE timestamp >= CURRENT_DATE - ?1",
-            params![days],
+            "SELECT COUNT(*) FROM proxy_log WHERE timestamp >= ?1",
+            params![cutoff],
             |row| row.get::<_, u64>(0),
         )
         .unwrap_or(0)
@@ -115,11 +88,21 @@ fn total_requests_impl(conn: &Connection, days: i64) -> u64 {
     }
 }
 
-fn total_tokens_impl(conn: &Connection) -> u64 {
-    conn.query_row(
-        "SELECT COALESCE(SUM(total_tokens), 0) FROM proxy_log",
-        [],
-        |row| row.get::<_, u64>(0),
-    )
-    .unwrap_or(0)
+fn total_tokens_impl(conn: &Connection, days: i64) -> u64 {
+    if days > 0 {
+        let cutoff = (Utc::now() - Duration::days(days)).naive_utc();
+        conn.query_row(
+            "SELECT COALESCE(SUM(total_tokens), 0) FROM proxy_log WHERE timestamp >= ?1",
+            params![cutoff],
+            |row| row.get::<_, u64>(0),
+        )
+        .unwrap_or(0)
+    } else {
+        conn.query_row(
+            "SELECT COALESCE(SUM(total_tokens), 0) FROM proxy_log",
+            [],
+            |row| row.get::<_, u64>(0),
+        )
+        .unwrap_or(0)
+    }
 }
