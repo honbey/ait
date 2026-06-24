@@ -8,6 +8,7 @@ use crate::chart::{build_line_option, Chart, ChartSeries};
 #[derive(Props)]
 pub struct LineChartProps {
     pub id: &'static str,
+    pub title: String,
     pub x_data: Vec<String>,
     pub series_list: Vec<ChartSeries>,
 }
@@ -18,6 +19,7 @@ pub fn LineChart(props: LineChartProps) -> View {
 
     // Defer init after DOM mount via microtask
     let id = props.id;
+    let title = props.title.clone();
     let x_data = props.x_data.clone();
     let series_list = props.series_list.clone();
     let chart_w = chart.clone();
@@ -28,7 +30,7 @@ pub fn LineChart(props: LineChartProps) -> View {
             .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
         {
             let c = Chart::new(&el);
-            let option = build_line_option(&x_data, &series_list);
+            let option = build_line_option(&title, &x_data, &series_list);
             c.set_option(&option);
             chart_w.set(Some(c));
         }
