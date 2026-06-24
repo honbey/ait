@@ -6,7 +6,7 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 
 use super::analytics::Analytics;
-use super::models::{AccessEvent, AuditEvent, LogEvent, ProxyEvent};
+use super::models::{AccessEvent, AuditEvent, DailyRequests, DailyTokens, LogEvent, ProxyEvent};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(10);
 const FLUSH_BATCH: usize = 100;
@@ -94,6 +94,14 @@ impl LogManager {
 
     pub async fn total_tokens(&self, days: i64) -> u64 {
         self.analytics.total_tokens(days).await
+    }
+
+    pub async fn daily_requests(&self, days: i64) -> Vec<DailyRequests> {
+        self.analytics.daily_requests(days).await
+    }
+
+    pub async fn daily_tokens(&self, days: i64) -> Vec<DailyTokens> {
+        self.analytics.daily_tokens(days).await
     }
 
     pub fn shutdown(&self) {

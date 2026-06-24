@@ -218,6 +218,18 @@ pub struct AuditEvent {
     pub detail: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyRequests {
+    pub date: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyTokens {
+    pub date: String,
+    pub tokens: u64,
+}
+
 pub enum LogEvent {
     Access(AccessEvent),
     Proxy(ProxyEvent),
