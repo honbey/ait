@@ -132,6 +132,59 @@ fn check_model_access(
     }
 }
 
+struct UsageTokens {
+    prompt_tokens: Option<i64>,
+    completion_tokens: Option<i64>,
+    total_tokens: Option<i64>,
+    cached_tokens: Option<i64>,
+}
+
+fn parse_usage(body: &[u8]) -> UsageTokens {
+    let Ok(val) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return UsageTokens {
+            prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
+            cached_tokens: None,
+        };
+    };
+
+    let usage = val.get("usage");
+
+    let prompt_tokens = usage
+        .and_then(|u| u.get("prompt_tokens").and_then(|v| v.as_i64()))
+        .or_else(|| val.get("prompt_eval_count").and_then(|v| v.as_i64()));
+
+    let completion_tokens = usage
+        .and_then(|u| u.get("completion_tokens").and_then(|v| v.as_i64()))
+        .or_else(|| val.get("eval_count").and_then(|v| v.as_i64()));
+
+    let total_tokens = usage
+        .and_then(|u| u.get("total_tokens").and_then(|v| v.as_i64()))
+        .or_else(|| {
+            if prompt_tokens.is_some() && completion_tokens.is_some() {
+                Some(prompt_tokens.unwrap() + completion_tokens.unwrap())
+            } else {
+                None
+            }
+        });
+
+    let cached_tokens = usage
+        .and_then(|u| {
+            u.get("prompt_tokens_details")
+                .or_else(|| u.get("completion_tokens_details"))
+        })
+        .and_then(|d| d.get("cached_tokens").and_then(|v| v.as_i64()))
+        .or_else(|| usage.and_then(|u| u.get("cached_tokens").and_then(|v| v.as_i64())));
+
+    UsageTokens {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        cached_tokens,
+    }
+}
+
 // --- Core Proxy Logic ---
 
 pub async fn proxy_request(
@@ -197,14 +250,25 @@ pub async fn proxy_request(
         request.url()
     );
 
-    let result = if stream {
-        proxy_streamed(state.clone(), request, &provider, &model)
+    let (result, prompt_tokens, completion_tokens, total_tokens, cached_tokens) = if stream {
+        let r = proxy_streamed(state.clone(), request, &provider, &model)
             .await
-            .map(|r| r.into_response())
+            .map(|r| r.into_response());
+        (r, None, None, None, None)
     } else {
-        proxy_non_streamed(state.clone(), request, &provider, &model)
-            .await
-            .map(|r| r.into_response())
+        match proxy_non_streamed(state.clone(), request, &provider, &model).await {
+            Ok((resp, usage)) => {
+                let r = Ok(resp.into_response());
+                (
+                    r,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.total_tokens,
+                    usage.cached_tokens,
+                )
+            }
+            Err(e) => (Err(e), None, None, None, None),
+        }
     };
 
     let latency = start.elapsed();
@@ -217,10 +281,10 @@ pub async fn proxy_request(
         username: Some(username),
         model_name,
         provider_name,
-        prompt_tokens: None,
-        completion_tokens: None,
-        total_tokens: None,
-        cached_tokens: None,
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        cached_tokens,
         latency_ms: latency.as_millis() as i64,
         status: status_code.to_string(),
     });
@@ -232,7 +296,7 @@ async fn proxy_non_streamed(
     request: reqwest::Request,
     provider: &crate::db::Provider,
     _model: &crate::db::Model,
-) -> Result<impl IntoResponse + use<>, (StatusCode, Json<AitError>)> {
+) -> Result<(impl IntoResponse, UsageTokens), (StatusCode, Json<AitError>)> {
     let response = state.http_client.execute(request).await.map_err(|e| {
         AitError::upstream_error(
             502,
@@ -268,7 +332,8 @@ async fn proxy_non_streamed(
         .into_response());
     }
 
-    Ok((StatusCode::OK, headers, bytes.to_vec()))
+    let usage = parse_usage(&bytes);
+    Ok(((StatusCode::OK, headers, bytes.to_vec()), usage))
 }
 
 async fn proxy_streamed(
