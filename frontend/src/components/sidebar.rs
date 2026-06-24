@@ -1,5 +1,7 @@
 use sycamore::prelude::*;
+use sycamore::web::events;
 use sycamore::web::tags::*;
+use sycamore_router::navigate;
 
 use crate::i18n::{I18n, K};
 use crate::route::AppRoute;
@@ -29,7 +31,12 @@ fn NavItem(props: NavItemProps) -> View {
     let i18n = use_context::<I18n>();
     let label_key = props.label_key;
 
-    a().attr("href", props.href)
+    let href = props.href;
+    a().attr("href", href)
+        .on(events::click, move |e: web_sys::MouseEvent| {
+            e.prevent_default();
+            navigate(href);
+        })
         .class(class)
         .children((
             i().class(format!("fas {} w-5 text-center", props.icon)),

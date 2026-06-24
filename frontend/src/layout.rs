@@ -279,32 +279,31 @@ pub fn Layout(props: LayoutProps) -> View {
                                     crate::views::register::render_register_view()
                                 }
                                 AppRoute::NotFound => render_loading(),
-                                _ => match data.get_clone() {
-                                    Some(RouteData::Dashboard(d)) => {
-                                        crate::views::dashboard::render_dashboard_view(d)
+                                _ => {
+                                    let current_route = route.get();
+                                    match data.get_clone() {
+                                        Some(RouteData::Dashboard(d)) if current_route == AppRoute::Dashboard => {
+                                            crate::views::dashboard::render_dashboard_view(d)
+                                        }
+                                        Some(RouteData::Providers(p)) if current_route == AppRoute::Providers => {
+                                            let is_admin = create_signal(role.get_clone().as_deref() == Some("admin"));
+                                            crate::views::providers::render_providers_view(p, is_admin, provider_refresh, provider_refreshing)
+                                        }
+                                        Some(RouteData::Models(m, p)) if current_route == AppRoute::Models => {
+                                            let is_admin = create_signal(role.get_clone().as_deref() == Some("admin"));
+                                            crate::views::models::render_models_view(m, p, is_admin, model_refresh, model_refreshing)
+                                        }
+                                        Some(RouteData::ApiKeys(k)) if current_route == AppRoute::ApiKeys => {
+                                            let uname = username.get_clone().unwrap_or_default();
+                                            crate::views::api_keys::render_api_keys_view(k, uname, api_key_refresh, api_key_refreshing)
+                                        }
+                                        Some(RouteData::TextGeneration(m)) if current_route == AppRoute::TextGeneration => {
+                                            crate::views::text_generation::render_text_generation_view(m)
+                                        }
+                                        Some(RouteData::Placeholder) | None => render_loading(),
+                                        Some(RouteData::Error(e)) => render_error_view(e),
+                                        _ => render_loading(),
                                     }
-                                    Some(RouteData::Providers(p)) => {
-                                        let is_admin = create_signal(role.get_clone().as_deref() == Some("admin"));
-                                        crate::views::providers::render_providers_view(p, is_admin, provider_refresh, provider_refreshing)
-                                    }
-                                    Some(RouteData::Models(m, p)) => {
-                                        let is_admin = create_signal(role.get_clone().as_deref() == Some("admin"));
-                                        crate::views::models::render_models_view(m, p, is_admin, model_refresh, model_refreshing)
-                                    }
-                                    Some(RouteData::ApiKeys(k)) => {
-                                        let uname = username.get_clone().unwrap_or_default();
-                                        crate::views::api_keys::render_api_keys_view(k, uname, api_key_refresh, api_key_refreshing)
-                                    }
-                                    Some(RouteData::TextGeneration(m)) => {
-                                        crate::views::text_generation::render_text_generation_view(m)
-                                    }
-                                    Some(RouteData::Placeholder) => {
-                                        render_loading()
-                                    },
-                                    Some(RouteData::Error(e)) => {
-                                        render_error_view(e)
-                                    }
-                                    None => render_loading(),
                                 },
                             }
                         })),
