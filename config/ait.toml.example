@@ -18,15 +18,15 @@ bootstrap_admin = true
 bootstrap_username = "admin"
 bootstrap_password = "admin123"
 # 是否允许用户自行注册
-# allow_registration = false
+allow_registration = false
 # 注册码，不为空时注册需匹配此码
-# registration_code = ""
+registration_code = ""
 # 每个用户最大 API key 数量
-# max_api_keys_per_user = 10
+max_api_keys_per_user = 10
 # 登录频率限制 (最多5次/300秒，超限封禁900秒)
-# login_rate_limit = { max_attempts = 5, window_secs = 300, ban_secs = 900 }
+login_rate_limit = { max_attempts = 5, window_secs = 300, ban_secs = 900 }
 # 注册频率限制 (最多3次/3600秒，超限封禁3600秒)
-# register_rate_limit = { max_attempts = 3, window_secs = 3600, ban_secs = 3600 }
+register_rate_limit = { max_attempts = 3, window_secs = 3600, ban_secs = 3600 }
 
 [database]
 path = "./data/ait.rocksdb"
