@@ -1,9 +1,21 @@
-use axum::{Extension, Json, extract::State, http::StatusCode};
-use serde::Serialize;
+use axum::{
+    Extension, Json,
+    extract::{Query, State},
+    http::StatusCode,
+};
+use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::db::SessionUser;
+use crate::db::models::{DailyRequests, DailyTokens};
 use crate::error::{AitError, require_admin};
+
+const MAX_DAYS: u64 = 365;
+
+#[derive(Deserialize)]
+pub struct DaysQuery {
+    pub days: Option<u64>,
+}
 
 #[derive(Serialize)]
 pub struct DashboardStats {
@@ -11,6 +23,26 @@ pub struct DashboardStats {
     pub model_count: usize,
     pub api_request_count: u64,
     pub token_consumption: u64,
+}
+
+pub async fn daily_requests(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionUser>,
+    Query(q): Query<DaysQuery>,
+) -> Result<Json<Vec<DailyRequests>>, (StatusCode, Json<AitError>)> {
+    require_admin(&session)?;
+    let days = q.days.unwrap_or(1).min(MAX_DAYS);
+    Ok(Json(state.log_manager.daily_requests(days as i64).await))
+}
+
+pub async fn daily_tokens(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionUser>,
+    Query(q): Query<DaysQuery>,
+) -> Result<Json<Vec<DailyTokens>>, (StatusCode, Json<AitError>)> {
+    require_admin(&session)?;
+    let days = q.days.unwrap_or(1).min(MAX_DAYS);
+    Ok(Json(state.log_manager.daily_tokens(days as i64).await))
 }
 
 pub async fn dashboard_stats(
@@ -21,11 +53,13 @@ pub async fn dashboard_stats(
 
     let providers = state.db.list_providers()?;
     let models = state.db.list_models()?;
+    let api_request_count = state.log_manager.total_requests(7).await;
+    let token_consumption = state.log_manager.total_tokens(7).await;
 
     Ok(Json(DashboardStats {
         provider_count: providers.len(),
         model_count: models.len(),
-        api_request_count: 0,
-        token_consumption: 0,
+        api_request_count,
+        token_consumption,
     }))
 }

@@ -3,11 +3,34 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{Permission, SessionUser, User, UserRole};
-use crate::error::{AitError, forbidden, internal_error, not_found, require_admin};
+use crate::db::{AuditEvent, Database, Permission, SessionUser, User, UserRole};
+use crate::error::{AitError, conflict, forbidden, internal_error, not_found, require_admin};
+
+pub fn create_user(
+    db: &Database,
+    username: &str,
+    password: &str,
+    role: UserRole,
+) -> Result<User, String> {
+    let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
+        .map_err(|e| format!("Failed to hash password: {e}"))?;
+    let user = User {
+        username: username.to_string(),
+        password_hash,
+        role,
+        allowed: vec![],
+        api_keys: vec![],
+        created_at: Default::default(),
+        updated_at: Default::default(),
+    };
+    db.insert_user(user.clone())
+        .map_err(|e| format!("Failed to create user: {e}"))?;
+    Ok(user)
+}
 
 #[derive(Serialize)]
 pub struct UserInfoResponse {
@@ -65,6 +88,13 @@ pub async fn update_user(
         .ok_or_else(|| not_found(format!("User '{}' not found", username)))?;
 
     if let Some(role) = input.role {
+        // Prevent demoting the last admin
+        if role != UserRole::Admin
+            && user.role == UserRole::Admin
+            && state.db.count_admins().map_err(internal_error)? <= 1
+        {
+            return Err(conflict("Cannot demote the last admin"));
+        }
         user.role = role;
     }
     if let Some(allowed) = input.allowed {
@@ -72,6 +102,15 @@ pub async fn update_user(
     }
 
     let updated = state.db.update_user(&user)?;
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "update".into(),
+        resource: "user".into(),
+        resource_id: username,
+        detail: None,
+    });
 
     Ok(Json(updated.into()))
 }
@@ -82,7 +121,34 @@ pub async fn delete_user(
     Path(username): Path<String>,
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
+
+    // Cannot delete yourself
+    if session.username == username {
+        return Err(conflict("Cannot delete yourself"));
+    }
+
+    let user = state
+        .db
+        .get_user(&username)
+        .map_err(internal_error)?
+        .ok_or_else(|| not_found(format!("User '{}' not found", username)))?;
+
+    // Prevent deleting the last admin
+    if user.role == UserRole::Admin && state.db.count_admins().map_err(internal_error)? <= 1 {
+        return Err(conflict("Cannot delete the last admin"));
+    }
+
     state.db.delete_user(&username)?;
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "delete".into(),
+        resource: "user".into(),
+        resource_id: username,
+        detail: None,
+    });
+
     Ok((StatusCode::NO_CONTENT,))
 }
 
@@ -117,5 +183,15 @@ pub async fn change_password(
     user.password_hash = new_hash;
 
     state.db.update_user(&user)?;
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "change_password".into(),
+        resource: "user".into(),
+        resource_id: username,
+        detail: None,
+    });
+
     Ok(Json(serde_json::json!({"ok": true})))
 }

@@ -1,14 +1,21 @@
 use crate::config::ConfigApp;
-use crate::db::{Database, User, UserRole};
+use crate::db::logger::LogManager;
+use crate::db::{Database, UserRole};
+use crate::handlers::users::create_user;
+use crate::rate_limiter::RateLimiter;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: ConfigApp,
     pub db: Arc<Database>,
     pub http_client: reqwest::Client,
+    pub log_manager: LogManager,
     pub start_time: DateTime<Utc>,
+    pub login_rate_limiter: RateLimiter,
+    pub register_rate_limiter: RateLimiter,
 }
 
 impl AppState {
@@ -16,7 +23,7 @@ impl AppState {
         let db = match Database::new(&config.database.path, config.auth.max_api_keys_per_user) {
             Ok(d) => Arc::new(d),
             Err(e) => {
-                eprintln!("Failed to open database: {}", e);
+                tracing::error!("Failed to open database: {}", e);
                 std::process::exit(1);
             }
         };
@@ -26,29 +33,27 @@ impl AppState {
             .build()
             .expect("Failed to build HTTP client");
 
-        // Bootstrap admin user on first startup if configured
-        if config.auth.bootstrap_admin {
-            let users = db.list_users().unwrap_or_default();
-            if users.is_empty() {
-                let password_hash =
-                    bcrypt::hash(&config.auth.bootstrap_password, bcrypt::DEFAULT_COST)
-                        .expect("Failed to hash bootstrap password");
-                let user = User {
-                    username: config.auth.bootstrap_username.clone(),
-                    password_hash,
-                    role: UserRole::Admin,
-                    allowed: vec![],
-                    api_keys: vec![],
-                    created_at: Utc::now(),
-                    updated_at: Default::default(),
-                };
-                db.insert_user(user)
-                    .expect("Failed to bootstrap admin user");
-                tracing::info!(
-                    "Bootstrapped admin user '{}'",
-                    config.auth.bootstrap_username
-                );
-            }
+        // Bootstrap initial admin user if none exists
+        if db.count_admins().unwrap_or(0) == 0 {
+            let password = config
+                .auth
+                .bootstrap_password
+                .as_deref()
+                .unwrap_or_else(|| {
+                    tracing::error!(
+                        "No admin user found and [auth] bootstrap_password is not set. \
+                     Set it in the config or restart with an existing database."
+                    );
+                    std::process::exit(1);
+                });
+            let user = create_user(
+                &db,
+                &config.auth.bootstrap_username,
+                password,
+                UserRole::Admin,
+            )
+            .expect("Failed to bootstrap admin user");
+            tracing::info!("Created initial admin user '{}'", user.username);
         }
 
         // Periodic cleanup of expired sessions
@@ -69,11 +74,34 @@ impl AppState {
             }
         });
 
+        // Rate limiter cleanup tasks
+        let login_limiter = RateLimiter::new();
+        let register_limiter = RateLimiter::new();
+        let cleanup_interval = config.server.rate_limiter_cleanup_interval_secs;
+        spawn_rate_limiter_cleanup(login_limiter.clone(), cleanup_interval);
+        spawn_rate_limiter_cleanup(register_limiter.clone(), cleanup_interval);
+
+        let log_manager =
+            LogManager::new(&config.log).expect("Failed to initialize DuckDB log database");
+
         Self {
             config,
             db,
             http_client,
+            log_manager,
             start_time: Utc::now(),
+            login_rate_limiter: login_limiter,
+            register_rate_limiter: register_limiter,
         }
     }
+}
+
+fn spawn_rate_limiter_cleanup(limiter: RateLimiter, interval_secs: u64) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+        loop {
+            interval.tick().await;
+            limiter.cleanup();
+        }
+    });
 }

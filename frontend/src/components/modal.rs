@@ -58,6 +58,23 @@ pub fn form_field(id: String, label_text: String, input: View) -> View {
         .into()
 }
 
+pub fn form_field_with_hint(id: String, label_text: String, hint: String, input: View) -> View {
+    div()
+        .children((
+            label()
+                .attr("for", id)
+                .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
+                .children((
+                    span().children(label_text),
+                    span()
+                        .class("text-xs text-gray-400 dark:text-gray-500 ml-1")
+                        .children(hint),
+                )),
+            input,
+        ))
+        .into()
+}
+
 pub fn form_input(id: String, placeholder: String, value: Signal<String>) -> View {
     input()
         .attr("id", id)
@@ -95,35 +112,69 @@ pub fn form_error(error: Signal<String>) -> View {
     })
 }
 
+fn cancel_button(text: String, on_click: impl Fn(web_sys::MouseEvent) + 'static) -> View {
+    button()
+        .attr("type", "button")
+        .class("px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 cursor-pointer transition-colors")
+        .on(events::click, on_click)
+        .children(text)
+        .into()
+}
+
+fn loading_button<F: Fn(web_sys::MouseEvent) + 'static>(
+    color: &str,
+    label: String,
+    loading: Signal<bool>,
+    btn_type: &str,
+    on_click: Option<F>,
+) -> View {
+    let lbl = label;
+    let bt = btn_type.to_string();
+    let color_class = format!(
+        "{color} text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 px-4 py-2"
+    );
+    let mut btn = button()
+        .attr("type", bt)
+        .disabled(move || loading.get())
+        .class(color_class);
+    if let Some(handler) = on_click {
+        btn = btn.on(events::click, handler);
+    }
+    btn.children(View::from_dynamic(move || -> View {
+        if loading.get() {
+            div()
+                .class("flex items-center gap-2")
+                .children((
+                    i().class("fas fa-spinner animate-spin"),
+                    span().children(lbl.clone()),
+                ))
+                .into()
+        } else {
+            span().children(lbl.clone()).into()
+        }
+    }))
+    .into()
+}
+
 pub fn form_submit_footer(
     cancel_text: String,
     on_cancel: impl Fn(web_sys::MouseEvent) + 'static,
     loading: Signal<bool>,
     submit_text: String,
 ) -> View {
-    let st = submit_text;
-    div().class("flex items-center justify-end gap-3").children((
-        button()
-            .attr("type", "button")
-            .class("px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 cursor-pointer transition-colors")
-            .on(events::click, on_cancel)
-            .children(cancel_text),
-        button()
-            .attr("type", "submit")
-            .disabled(move || loading.get())
-            .class("px-4 py-2 bg-blue-500 hover:enabled:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2")
-            .children(View::from_dynamic(move || -> View {
-                if loading.get() {
-                    div().class("flex items-center gap-2").children((
-                        i().class("fas fa-spinner animate-spin"),
-                        span().children(st.clone()),
-                    )).into()
-                } else {
-                    span().children(st.clone()).into()
-                }
-            })),
-    ))
-    .into()
+    div()
+        .class("flex items-center justify-end gap-3")
+        .children((
+            cancel_button(cancel_text, on_cancel),
+            loading_button::<fn(web_sys::MouseEvent)>(
+                "bg-blue-500 hover:enabled:bg-blue-600",
+                submit_text,
+                loading,
+                "submit",
+                None,
+            ),
+        ))
+        .into()
 }
 
 pub fn form_delete_footer(
@@ -133,30 +184,19 @@ pub fn form_delete_footer(
     delete_text: String,
     on_delete: impl Fn(web_sys::MouseEvent) + 'static,
 ) -> View {
-    let dt = delete_text;
-    div().class("flex items-center justify-end gap-3").children((
-        button()
-            .attr("type", "button")
-            .class("px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 cursor-pointer transition-colors")
-            .on(events::click, on_cancel)
-            .children(cancel_text),
-        button()
-            .attr("type", "button")
-            .disabled(move || deleting.get())
-            .class("px-4 py-2 bg-red-500 hover:enabled:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2")
-            .on(events::click, on_delete)
-            .children(View::from_dynamic(move || -> View {
-                if deleting.get() {
-                    div().class("flex items-center gap-2").children((
-                        i().class("fas fa-spinner animate-spin"),
-                        span().children(dt.clone()),
-                    )).into()
-                } else {
-                    span().children(dt.clone()).into()
-                }
-            })),
-    ))
-    .into()
+    div()
+        .class("flex items-center justify-end gap-3")
+        .children((
+            cancel_button(cancel_text, on_cancel),
+            loading_button(
+                "bg-red-500 hover:enabled:bg-red-600",
+                delete_text,
+                deleting,
+                "button",
+                Some(on_delete),
+            ),
+        ))
+        .into()
 }
 
 // --- Table helpers ---

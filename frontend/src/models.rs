@@ -1,5 +1,12 @@
 use serde::Deserialize;
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoginResponse {
+    #[allow(dead_code)]
+    pub ok: bool,
+    pub role: String,
+}
+
 pub fn format_timestamp(ts: f64) -> String {
     let ms = ts * 1000.0;
     let date = js_sys::Date::new(&ms.into());
@@ -10,6 +17,12 @@ pub fn format_timestamp(ts: f64) -> String {
     let min = date.get_minutes();
     let s = date.get_seconds();
     format!("{}-{:02}-{:02} {:02}:{:02}:{:02}", y, m, d, h, min, s)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProviderTypeInfo {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -65,10 +78,24 @@ pub struct DashboardStats {
     pub token_consumption: u64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct DailyRequests {
+    pub date: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DailyTokens {
+    pub date: String,
+    pub tokens: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct DashboardData {
     pub provider_count: u64,
     pub model_count: u64,
     pub api_request_count: u64,
     pub token_consumption: u64,
+    pub daily_requests: Vec<DailyRequests>,
+    pub daily_tokens: Vec<DailyTokens>,
 }

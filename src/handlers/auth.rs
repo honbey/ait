@@ -10,8 +10,9 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{Permission, Session, User, UserRole};
+use crate::db::{AuditEvent, Permission, Session, UserRole};
 use crate::error::{AitError, conflict, forbidden, internal_error, unauthorized};
+use crate::handlers::users::create_user;
 use crate::middleware::extract_session_key;
 
 #[derive(Deserialize)]
@@ -81,7 +82,7 @@ pub async fn login(
     let ttl = state.config.auth.session_ttl_secs;
     let session = Session {
         session_key: session_key.clone(),
-        username: input.username,
+        username: input.username.clone(),
         created_at: Utc::now(),
         expires_at: Utc::now() + chrono::Duration::seconds(ttl as i64),
     };
@@ -96,6 +97,15 @@ pub async fn login(
         header::SET_COOKIE,
         set_cookie_header(&session_key, ttl as i64).parse().unwrap(),
     );
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: input.username.clone(),
+        action: "login".into(),
+        resource: "session".into(),
+        resource_id: input.username.clone(),
+        detail: None,
+    });
 
     Ok((
         headers,
@@ -130,23 +140,17 @@ pub async fn register(
         return Err(conflict("Username already exists"));
     }
 
-    let password_hash = bcrypt::hash(&input.password, bcrypt::DEFAULT_COST)
-        .map_err(|_| internal_error("Failed to hash password"))?;
+    create_user(&state.db, &input.username, &input.password, UserRole::User)
+        .map_err(internal_error)?;
 
-    let user = User {
-        username: input.username,
-        password_hash,
-        role: UserRole::User,
-        allowed: vec![],
-        api_keys: vec![],
-        created_at: Default::default(),
-        updated_at: Default::default(),
-    };
-
-    state
-        .db
-        .insert_user(user)
-        .map_err(|_| internal_error("Failed to create user"))?;
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: input.username.clone(),
+        action: "register".into(),
+        resource: "user".into(),
+        resource_id: input.username.clone(),
+        detail: None,
+    });
 
     Ok(Json(serde_json::json!({"ok": true})))
 }

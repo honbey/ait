@@ -3,10 +3,11 @@ use axum::{
     extract::{Json, Path, State},
     http::StatusCode,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{Model, Provider, ProviderType, SessionUser, UserRole};
+use crate::db::{AuditEvent, Model, Provider, ProviderType, SessionUser, UserRole};
 use crate::error::{AitError, forbidden, internal_error, not_found, require_admin};
 
 // --- Provider request/response types ---
@@ -163,6 +164,26 @@ impl From<UpdateModelRequest> for Model {
     }
 }
 
+// --- Provider type info ---
+
+#[derive(Serialize)]
+pub struct ProviderTypeInfo {
+    pub id: String,
+    pub name: String,
+}
+
+pub async fn list_provider_types() -> Json<Vec<ProviderTypeInfo>> {
+    Json(
+        ProviderType::all()
+            .iter()
+            .map(|t| ProviderTypeInfo {
+                id: t.serde_name().to_string(),
+                name: t.display_name().to_string(),
+            })
+            .collect(),
+    )
+}
+
 // --- Provider CRUD ---
 
 pub async fn create_provider(
@@ -172,6 +193,15 @@ pub async fn create_provider(
 ) -> Result<(StatusCode, Json<ProviderResponse>), (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
     let inserted = state.db.insert_provider(input.into())?;
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "create".into(),
+        resource: "provider".into(),
+        resource_id: inserted.id.clone(),
+        detail: None,
+    });
 
     Ok((StatusCode::CREATED, Json(ProviderResponse::from(inserted))))
 }
@@ -239,8 +269,17 @@ pub async fn update_provider(
 ) -> Result<Json<ProviderResponse>, (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
     let mut updates: Provider = input.into();
-    updates.id = id;
+    updates.id = id.clone();
     let provider = state.db.update_provider(&updates)?;
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "update".into(),
+        resource: "provider".into(),
+        resource_id: id,
+        detail: None,
+    });
 
     Ok(Json(ProviderResponse::from(provider)))
 }
@@ -252,6 +291,16 @@ pub async fn delete_provider(
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
     state.db.delete_provider(&id)?;
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "delete".into(),
+        resource: "provider".into(),
+        resource_id: id,
+        detail: None,
+    });
+
     Ok((StatusCode::NO_CONTENT,))
 }
 
@@ -264,6 +313,15 @@ pub async fn create_model(
 ) -> Result<(StatusCode, Json<ModelResponse>), (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
     let inserted = state.db.insert_model(input.into())?;
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "create".into(),
+        resource: "model".into(),
+        resource_id: inserted.name.clone(),
+        detail: None,
+    });
 
     Ok((StatusCode::CREATED, Json(ModelResponse::from(inserted))))
 }
@@ -296,6 +354,16 @@ pub async fn delete_model(
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
     state.db.delete_model(&name)?;
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "delete".into(),
+        resource: "model".into(),
+        resource_id: name,
+        detail: None,
+    });
+
     Ok((StatusCode::NO_CONTENT,))
 }
 
@@ -307,7 +375,17 @@ pub async fn update_model(
 ) -> Result<Json<ModelResponse>, (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
     let mut updates: Model = input.into();
-    updates.name = name;
+    updates.name = name.clone();
     let model = state.db.update_model(&updates)?;
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "update".into(),
+        resource: "model".into(),
+        resource_id: name,
+        detail: None,
+    });
+
     Ok(Json(ModelResponse::from(model)))
 }

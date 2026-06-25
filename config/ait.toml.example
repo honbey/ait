@@ -5,6 +5,8 @@ port = 8000
 health_detail = false
 # 过期 session 自动清理间隔（秒）
 session_cleanup_interval_secs = 3600
+# 频率限制器过期条目清理间隔（秒）
+# rate_limiter_cleanup_interval_secs = 600
 
 [auth]
 # 仅控制 /v1/* 代理接口的认证开关，Admin 接口始终需要认证
@@ -12,18 +14,34 @@ enabled = true
 # Session 有效期（秒），Web 登录使用
 session_ttl_secs = 86400
 # 首次启动时自动创建初始管理员
-bootstrap_admin = true
 bootstrap_username = "admin"
 bootstrap_password = "admin123"
 # 是否允许用户自行注册
-# allow_registration = false
+allow_registration = false
 # 注册码，不为空时注册需匹配此码
-# registration_code = ""
+registration_code = ""
 # 每个用户最大 API key 数量
-# max_api_keys_per_user = 10
+max_api_keys_per_user = 10
+# 登录频率限制 (最多5次/300秒，超限封禁900秒)
+login_rate_limit = { max_attempts = 5, window_secs = 300, ban_secs = 900 }
+# 注册频率限制 (最多3次/3600秒，超限封禁3600秒)
+register_rate_limit = { max_attempts = 3, window_secs = 3600, ban_secs = 3600 }
 
 [database]
 path = "./data/ait.rocksdb"
+
+[log]
+path = "./data/ait-logs.duckdb"
+# 日志保留天数（默认 30 天），过期的日志会自动清理
+retention_days = 30
+# 日志刷盘间隔（秒）
+flush_interval_secs = 10
+# 批量刷盘阈值
+flush_batch = 100
+# 通道缓冲区大小，满时丢弃日志
+channel_cap = 10000
+# 每 flush_batch * retention_every 次写入后执行一次过期清理
+retention_every = 100
 
 [proxy]
 timeout_secs = 300

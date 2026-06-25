@@ -6,6 +6,7 @@ pub struct ConfigApp {
     pub server: ServerConfig,
     pub auth: AuthConfig,
     pub database: DatabaseConfig,
+    pub log: LogConfig,
     pub proxy: ProxyConfig,
 }
 
@@ -15,23 +16,42 @@ pub struct ServerConfig {
     pub port: u16,
     pub health_detail: bool,
     pub session_cleanup_interval_secs: u64,
+    pub rate_limiter_cleanup_interval_secs: u64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct RateLimitConfig {
+    pub max_attempts: u64,
+    pub window_secs: u64,
+    pub ban_secs: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AuthConfig {
     pub enabled: bool,
     pub session_ttl_secs: u64,
-    pub bootstrap_admin: bool,
     pub bootstrap_username: String,
-    pub bootstrap_password: String,
+    pub bootstrap_password: Option<String>,
     pub allow_registration: bool,
     pub registration_code: String,
     pub max_api_keys_per_user: u64,
+    pub login_rate_limit: RateLimitConfig,
+    pub register_rate_limit: RateLimitConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
     pub path: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LogConfig {
+    pub path: String,
+    pub retention_days: u64,
+    pub flush_interval_secs: u64,
+    pub flush_batch: u64,
+    pub channel_cap: u64,
+    pub retention_every: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -51,15 +71,26 @@ impl ConfigApp {
             .set_default("server.port", 8000u16)?
             .set_default("server.health_detail", false)?
             .set_default("server.session_cleanup_interval_secs", 3600u64)?
+            .set_default("server.rate_limiter_cleanup_interval_secs", 600u64)?
             .set_default("auth.enabled", true)?
             .set_default("auth.session_ttl_secs", 86400u64)?
-            .set_default("auth.bootstrap_admin", false)?
             .set_default("auth.bootstrap_username", "admin")?
-            .set_default("auth.bootstrap_password", "admin123")?
             .set_default("auth.allow_registration", false)?
             .set_default("auth.registration_code", "")?
             .set_default("auth.max_api_keys_per_user", 10u64)?
+            .set_default("auth.login_rate_limit.max_attempts", 5u64)?
+            .set_default("auth.login_rate_limit.window_secs", 300u64)?
+            .set_default("auth.login_rate_limit.ban_secs", 900u64)?
+            .set_default("auth.register_rate_limit.max_attempts", 3u64)?
+            .set_default("auth.register_rate_limit.window_secs", 3600u64)?
+            .set_default("auth.register_rate_limit.ban_secs", 3600u64)?
             .set_default("database.path", "./data/ait.rocksdb")?
+            .set_default("log.path", "./data/ait-logs.duckdb")?
+            .set_default("log.retention_days", 30u64)?
+            .set_default("log.flush_interval_secs", 10u64)?
+            .set_default("log.flush_batch", 100u64)?
+            .set_default("log.channel_cap", 10000u64)?
+            .set_default("log.retention_every", 100u64)?
             .set_default("proxy.timeout_secs", 300u64)?
             .set_default("proxy.stream", true)?
             .add_source(File::new(config_file, FileFormat::Toml).required(false))
@@ -81,8 +112,21 @@ mod tests {
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 8000);
         assert_eq!(config.server.session_cleanup_interval_secs, 3600);
+        assert_eq!(config.server.rate_limiter_cleanup_interval_secs, 600);
         assert!(config.auth.enabled);
         assert_eq!(config.auth.max_api_keys_per_user, 10);
         assert_eq!(config.database.path, "./data/ait.rocksdb");
+        assert_eq!(config.log.path, "./data/ait-logs.duckdb");
+        assert_eq!(config.log.retention_days, 30);
+        assert_eq!(config.log.flush_interval_secs, 10);
+        assert_eq!(config.log.flush_batch, 100);
+        assert_eq!(config.log.channel_cap, 10000);
+        assert_eq!(config.log.retention_every, 100);
+        assert_eq!(config.auth.login_rate_limit.max_attempts, 5);
+        assert_eq!(config.auth.login_rate_limit.window_secs, 300);
+        assert_eq!(config.auth.login_rate_limit.ban_secs, 900);
+        assert_eq!(config.auth.register_rate_limit.max_attempts, 3);
+        assert_eq!(config.auth.register_rate_limit.window_secs, 3600);
+        assert_eq!(config.auth.register_rate_limit.ban_secs, 3600);
     }
 }

@@ -14,12 +14,25 @@ use crate::components::modal::{
     icon_button, modal_dialog, modal_title, mono_cell, name_cell, render_detail_modal,
     secondary_cell, select_input, status_badge, text_cell, timestamp_cell, zebra_bg,
 };
-use crate::i18n::I18n;
+use crate::i18n::{I18n, K};
 use crate::models::{Model, Provider};
 
-fn render_model_detail(i18n: &I18n, model: Model, show_detail: Signal<Option<usize>>) -> View {
-    let enabled_text = i18n.t("status_enabled");
-    let disabled_text = i18n.t("status_disabled");
+fn provider_name_by_id(provider_id: &str, providers: &[Provider]) -> String {
+    providers
+        .iter()
+        .find(|p| p.id == provider_id)
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| provider_id.to_string())
+}
+
+fn render_model_detail(
+    model: Model,
+    show_detail: Signal<Option<usize>>,
+    providers: &[Provider],
+) -> View {
+    let i18n = use_context::<I18n>();
+    let enabled_text = i18n.t(K::StatusEnabled);
+    let disabled_text = i18n.t(K::StatusDisabled);
     let status = if model.enabled {
         enabled_text
     } else {
@@ -27,19 +40,22 @@ fn render_model_detail(i18n: &I18n, model: Model, show_detail: Signal<Option<usi
     };
 
     render_detail_modal(
-        i18n.t_replace("detail_title", "entity", &i18n.t("models")),
+        i18n.t_replace(K::DetailTitle, "entity", &i18n.t(K::Models)),
         vec![
             ("ID".into(), model.id),
-            (i18n.t("name"), model.name),
-            (i18n.t("model_provider_id"), model.provider_id),
-            (i18n.t("model_upstream_model"), model.upstream_model),
-            (i18n.t("table_status"), status),
+            (i18n.t(K::Name), model.name),
             (
-                i18n.t("created_at"),
+                i18n.t(K::Providers),
+                provider_name_by_id(&model.provider_id, providers),
+            ),
+            (i18n.t(K::ModelUpstreamModel), model.upstream_model),
+            (i18n.t(K::TableStatus), status),
+            (
+                i18n.t(K::CreatedAt),
                 crate::models::format_timestamp(model.created_at),
             ),
             (
-                i18n.t("updated_at"),
+                i18n.t(K::UpdatedAt),
                 crate::models::format_timestamp(model.updated_at),
             ),
         ],
@@ -55,13 +71,14 @@ fn provider_select_options(providers: &[Provider]) -> Vec<(String, String)> {
 }
 
 fn render_add_modal(
-    i18n: &I18n,
     providers: Vec<Provider>,
     model_refresh: Signal<usize>,
     show_add_modal: Signal<bool>,
 ) -> View {
+    let i18n = use_context::<I18n>();
     let form_name = create_signal(String::new());
-    let form_provider_id = create_signal(String::new());
+    let form_provider_id =
+        create_signal(providers.first().map(|p| p.id.clone()).unwrap_or_default());
     let form_upstream = create_signal(String::new());
     let form_enabled = create_signal(true);
     let form_err = create_signal(String::new());
@@ -82,17 +99,16 @@ fn render_add_modal(
         form_err.set(String::new());
         let upstream = form_upstream.get_clone();
         let enabled = form_enabled.get();
-        let refresh = model_refresh;
-        let loading = form_loading;
-        let err = form_err;
         spawn_local_scoped(async move {
             match create_model(&n, &p, &upstream, enabled).await {
                 Ok(_) => {
-                    refresh.update(|v| *v += 1);
+                    form_loading.set(false);
+                    show_add_modal.set(false);
+                    model_refresh.update(|v| *v += 1);
                 }
                 Err(e) => {
-                    loading.set(false);
-                    err.set(e.to_string());
+                    form_loading.set(false);
+                    form_err.set(e.to_string());
                 }
             }
         });
@@ -105,37 +121,40 @@ fn render_add_modal(
             .on(events::submit, on_submit)
             .class("space-y-4")
             .children((
-                modal_title(i18n.t("model_add"), move |_| show_add_modal.set(false)),
+                modal_title(
+                    i18n.t_replace(K::Add, "entity", &i18n.t(K::Models)),
+                    move |_| show_add_modal.set(false),
+                ),
                 form_field(
                     "add-model-name".into(),
-                    i18n.t("name"),
-                    form_input("add-model-name".into(), i18n.t("name"), form_name),
+                    i18n.t(K::Name),
+                    form_input("add-model-name".into(), i18n.t(K::Name), form_name),
                 ),
                 form_field(
                     "add-model-provider".into(),
-                    i18n.t("model_provider_id"),
+                    i18n.t(K::Providers),
                     select_input("add-model-provider".into(), form_provider_id, options),
                 ),
                 form_field(
                     "add-model-upstream".into(),
-                    i18n.t("model_upstream_model"),
+                    i18n.t(K::ModelUpstreamModel),
                     form_input(
                         "add-model-upstream".into(),
-                        i18n.t("model_upstream_model"),
+                        i18n.t(K::ModelUpstreamModel),
                         form_upstream,
                     ),
                 ),
                 form_checkbox(
                     "model-enabled".into(),
-                    i18n.t("status_enabled"),
+                    i18n.t(K::StatusEnabled),
                     form_enabled,
                 ),
                 form_error(form_err),
                 form_submit_footer(
-                    i18n.t("cancel"),
+                    i18n.t(K::Cancel),
                     move |_| show_add_modal.set(false),
                     form_loading,
-                    i18n.t("save"),
+                    i18n.t(K::Save),
                 ),
             )),
         move |_| show_add_modal.set(false),
@@ -143,12 +162,13 @@ fn render_add_modal(
 }
 
 fn render_edit_modal(
-    i18n: &I18n,
     providers: Vec<Provider>,
     model_refresh: Signal<usize>,
     show_edit_modal: Signal<Option<Model>>,
     model: Model,
 ) -> View {
+    let i18n = use_context::<I18n>();
+    let model_name_for_display = model.name.clone();
     let form_name = create_signal(model.name.clone());
     let form_provider_id = create_signal(model.provider_id.clone());
     let form_upstream = create_signal(model.upstream_model.clone());
@@ -172,17 +192,16 @@ fn render_edit_modal(
         let model_name = model.name.clone();
         let upstream = form_upstream.get_clone();
         let enabled = form_enabled.get();
-        let refresh = model_refresh;
-        let loading = form_loading;
-        let err = form_err;
         spawn_local_scoped(async move {
             match update_model(&model_name, &p, &upstream, enabled).await {
                 Ok(_) => {
-                    refresh.update(|v| *v += 1);
+                    form_loading.set(false);
+                    show_edit_modal.set(None);
+                    model_refresh.update(|v| *v += 1);
                 }
                 Err(e) => {
-                    loading.set(false);
-                    err.set(e.to_string());
+                    form_loading.set(false);
+                    form_err.set(e.to_string());
                 }
             }
         });
@@ -195,37 +214,43 @@ fn render_edit_modal(
             .on(events::submit, on_submit)
             .class("space-y-4")
             .children((
-                modal_title(i18n.t("model_edit"), move |_| show_edit_modal.set(None)),
+                modal_title(i18n.t_replace(K::Edit, "entity", &i18n.t(K::Models)), move |_| show_edit_modal.set(None)),
                 form_field(
                     "edit-model-name".into(),
-                    i18n.t("name"),
-                    form_input("edit-model-name".into(), i18n.t("name"), form_name),
+                    i18n.t(K::Name),
+                    input()
+                        .attr("id", "edit-model-name")
+                        .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-600 text-gray-900 dark:text-gray-100 cursor-not-allowed")
+                        .attr("type", "text")
+                        .attr("value", model_name_for_display)
+                        .attr("disabled", "")
+                        .into(),
                 ),
                 form_field(
                     "edit-model-provider".into(),
-                    i18n.t("model_provider_id"),
+                    i18n.t(K::Providers),
                     select_input("edit-model-provider".into(), form_provider_id, options),
                 ),
                 form_field(
                     "edit-model-upstream".into(),
-                    i18n.t("model_upstream_model"),
+                    i18n.t(K::ModelUpstreamModel),
                     form_input(
                         "edit-model-upstream".into(),
-                        i18n.t("model_upstream_model"),
+                        i18n.t(K::ModelUpstreamModel),
                         form_upstream,
                     ),
                 ),
                 form_checkbox(
                     "edit-enabled".into(),
-                    i18n.t("status_enabled"),
+                    i18n.t(K::StatusEnabled),
                     form_enabled,
                 ),
                 form_error(form_err),
                 form_submit_footer(
-                    i18n.t("cancel"),
+                    i18n.t(K::Cancel),
                     move |_| show_edit_modal.set(None),
                     form_loading,
-                    i18n.t("save"),
+                    i18n.t(K::Save),
                 ),
             )),
         move |_| show_edit_modal.set(None),
@@ -234,24 +259,26 @@ fn render_edit_modal(
 
 fn make_model_rows(
     models: Vec<Model>,
-    i18n: &I18n,
+    providers: &[Provider],
     show_detail: Signal<Option<usize>>,
     is_admin: Signal<bool>,
     show_delete_confirm: Signal<Option<Model>>,
     show_edit_modal: Signal<Option<Model>>,
 ) -> Vec<View> {
-    let enabled_text = i18n.t("status_enabled");
-    let disabled_text = i18n.t("status_disabled");
+    let i18n = use_context::<I18n>();
+    let enabled_text = i18n.t(K::StatusEnabled);
+    let disabled_text = i18n.t(K::StatusDisabled);
     models
         .into_iter()
         .enumerate()
         .map(|(idx, m)| {
             let model_modal = m.clone();
             let show = show_detail;
+            let prov_name = provider_name_by_id(&m.provider_id, providers);
             tr().class(zebra_bg(idx))
                 .children((
                     name_cell(m.name),
-                    secondary_cell(m.provider_id),
+                    secondary_cell(prov_name),
                     mono_cell(m.upstream_model),
                     text_cell(status_badge(m.enabled, &enabled_text, &disabled_text)),
                     timestamp_cell(m.updated_at),
@@ -304,7 +331,7 @@ pub fn ModelTable(props: ModelTableProps) -> View {
 
     let rows = make_model_rows(
         models.clone(),
-        &i18n,
+        &providers,
         show_detail,
         is_admin,
         show_delete_confirm,
@@ -313,8 +340,7 @@ pub fn ModelTable(props: ModelTableProps) -> View {
     let count = models.len();
 
     let header = render_table_header(
-        &i18n,
-        i18n.t("model_title"),
+        i18n.t(K::ModelTitle),
         count,
         model_refreshing,
         debounce_refresh(model_refresh, model_refreshing),
@@ -324,12 +350,11 @@ pub fn ModelTable(props: ModelTableProps) -> View {
                 button()
                     .class("px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors flex items-center gap-2 text-sm font-medium cursor-pointer")
                     .on(events::click, {
-                        let sam = show_add_modal;
-                        move |_| sam.set(true)
+                        move |_| show_add_modal.set(true)
                     })
                     .children((
                         i().class("fas fa-plus"),
-                        span().children(i18n.t("model_add")),
+                        span().children(i18n.t_replace(K::Add, "entity", &i18n.t(K::Models))),
                     ))
                     .into()
             }
@@ -338,34 +363,33 @@ pub fn ModelTable(props: ModelTableProps) -> View {
 
     let table = table_shell(
         vec![
-            th_left(i18n.t("name")),
-            th_left(i18n.t("model_provider_id")),
-            th_left(i18n.t("model_upstream_model")),
-            th_left(i18n.t("table_status")),
-            th_center(i18n.t("updated_at")),
-            th_center(i18n.t("provider_detail")),
-            th_center(i18n.t("provider_actions")),
+            th_left(i18n.t(K::Name)),
+            th_left(i18n.t(K::Providers)),
+            th_left(i18n.t(K::ModelUpstreamModel)),
+            th_left(i18n.t(K::TableStatus)),
+            th_left(i18n.t(K::UpdatedAt)),
+            th_center(i18n.t(K::Detail)),
+            th_center(i18n.t(K::Actions)),
         ],
         rows,
     );
 
     let detail_modal = View::from_dynamic({
-        let i18n = i18n.clone();
         let models = models.clone();
+        let providers = providers.clone();
         move || match show_detail.get() {
             Some(idx) => models.get(idx).map_or(View::new(), |m| {
-                render_model_detail(&i18n, m.clone(), show_detail)
+                render_model_detail(m.clone(), show_detail, &providers)
             }),
             None => View::new(),
         }
     });
 
     let add_modal = View::from_dynamic({
-        let i18n = i18n.clone();
         let providers = providers.clone();
         move || {
             if show_add_modal.get() {
-                render_add_modal(&i18n, providers.clone(), model_refresh, show_add_modal)
+                render_add_modal(providers.clone(), model_refresh, show_add_modal)
             } else {
                 View::new()
             }
@@ -373,12 +397,9 @@ pub fn ModelTable(props: ModelTableProps) -> View {
     });
 
     let edit_modal = View::from_dynamic({
-        let i18n = i18n.clone();
         let providers = providers.clone();
         move || match show_edit_modal.get_clone() {
-            Some(m) => {
-                render_edit_modal(&i18n, providers.clone(), model_refresh, show_edit_modal, m)
-            }
+            Some(m) => render_edit_modal(providers.clone(), model_refresh, show_edit_modal, m),
             None => View::new(),
         }
     });
@@ -389,10 +410,8 @@ pub fn ModelTable(props: ModelTableProps) -> View {
             Some(m) => {
                 let deleting = create_signal(false);
                 let model_name = m.name.clone();
-                let refresh = model_refresh;
                 render_delete_confirm(
-                    &i18n,
-                    i18n.t_replace("delete_confirm_message", "name", &m.name),
+                    i18n.t_replace(K::DeleteConfirmMessage, "name", &m.name),
                     deleting,
                     move |_| {
                         if deleting.get() {
@@ -400,14 +419,13 @@ pub fn ModelTable(props: ModelTableProps) -> View {
                         }
                         deleting.set(true);
                         let mn = model_name.clone();
-                        let d = deleting;
                         spawn_local_scoped(async move {
                             match delete_model(&mn).await {
                                 Ok(_) => {
-                                    refresh.update(|v| *v += 1);
+                                    model_refresh.update(|v| *v += 1);
                                 }
                                 Err(e) => {
-                                    d.set(false);
+                                    deleting.set(false);
                                     sycamore::web::console_log!("Failed: {}", e);
                                 }
                             }

@@ -1,27 +1,12 @@
-use chrono::serde::{ts_seconds, ts_seconds_option};
 use chrono::{DateTime, Utc};
-use rocksdb::{DB as RocksDB, IteratorMode, Options};
-use serde::{Deserialize, Serialize};
+use rocksdb::{DB as RocksDB, IteratorMode, Options, WriteBatch};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum UserRole {
-    #[default]
-    User,
-    Admin,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Permission {
-    pub provider_id: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub model_names: Vec<String>,
-}
+use super::models::*;
 
 // RocksDB Column Family
 const PROVIDERS_CF: &str = "providers";
@@ -29,148 +14,6 @@ const MODELS_CF: &str = "models";
 const USERS_CF: &str = "users";
 const SESSIONS_CF: &str = "sessions";
 const API_KEYS_CF: &str = "api_keys";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Provider {
-    pub id: String,
-    pub name: String,
-    #[serde(rename = "type")]
-    pub provider_type: ProviderType,
-    pub base_url: String,
-    pub api_key: Option<String>,
-    pub enabled: bool,
-    #[serde(with = "ts_seconds")]
-    pub created_at: DateTime<chrono::Utc>,
-    #[serde(with = "ts_seconds")]
-    pub updated_at: DateTime<chrono::Utc>,
-}
-
-#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderType {
-    #[default]
-    #[serde(rename = "openai_compat")]
-    OpenAICompat,
-    #[serde(rename = "deepseek")]
-    DeepSeek,
-    Zhipu,
-    Ollama,
-    Llamacpp,
-}
-
-pub fn mask_api_key(key: &str) -> String {
-    if key.len() <= 9 {
-        "******".to_string()
-    } else {
-        let prefix = &key[..6];
-        let suffix = &key[key.len() - 3..];
-        format!("{}******{}", prefix, suffix)
-    }
-}
-
-impl Provider {
-    pub fn masked_api_key(&self) -> Option<String> {
-        self.api_key.as_ref().map(|key| mask_api_key(key))
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Model {
-    pub id: String,
-    pub name: String,
-    pub provider_id: String,
-    pub upstream_model: String,
-    pub enabled: bool,
-    #[serde(with = "ts_seconds")]
-    pub created_at: DateTime<chrono::Utc>,
-    #[serde(with = "ts_seconds")]
-    pub updated_at: DateTime<chrono::Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiKey {
-    pub id: String,
-    pub key: String,
-    pub display: String,
-    pub name: String,
-    #[serde(with = "ts_seconds")]
-    pub created_at: DateTime<chrono::Utc>,
-    #[serde(with = "ts_seconds")]
-    pub updated_at: DateTime<chrono::Utc>,
-    pub enabled: bool,
-    #[serde(
-        default,
-        with = "ts_seconds_option",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub expires_at: Option<DateTime<chrono::Utc>>,
-}
-
-/// Stored in the api_keys CF for O(1) reverse lookup by key value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiKeyInfo {
-    pub id: String,
-    pub username: String,
-    pub name: String,
-    #[serde(with = "ts_seconds")]
-    pub created_at: DateTime<chrono::Utc>,
-}
-
-impl ApiKey {
-    pub fn masked(&self) -> String {
-        self.display.clone()
-    }
-
-    fn mask_key(key: &str) -> String {
-        mask_api_key(key)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct User {
-    pub username: String,
-    pub password_hash: String,
-    pub role: UserRole,
-    pub allowed: Vec<Permission>,
-    pub api_keys: Vec<ApiKey>,
-    #[serde(with = "ts_seconds")]
-    pub created_at: DateTime<chrono::Utc>,
-    #[serde(with = "ts_seconds")]
-    pub updated_at: DateTime<chrono::Utc>,
-}
-
-impl User {
-    pub fn to_session_user(&self) -> SessionUser {
-        SessionUser {
-            username: self.username.clone(),
-            role: self.role.clone(),
-            allowed: self.allowed.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionUser {
-    pub username: String,
-    pub role: UserRole,
-    pub allowed: Vec<Permission>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Session {
-    pub session_key: String,
-    pub username: String,
-    #[serde(with = "ts_seconds")]
-    pub created_at: DateTime<chrono::Utc>,
-    #[serde(with = "ts_seconds")]
-    pub expires_at: DateTime<chrono::Utc>,
-}
-
-impl Session {
-    pub fn is_expired(&self) -> bool {
-        self.expires_at <= Utc::now()
-    }
-}
 
 fn hash_key(key: &str) -> String {
     let mut hasher = Sha256::new();
@@ -274,6 +117,36 @@ impl Database {
             .map_err(|e| DbError::Storage(e.to_string()))
     }
 
+    fn cf_put_batch<T: serde::Serialize>(
+        &self,
+        batch: &mut WriteBatch,
+        cf_name: &str,
+        key: impl AsRef<[u8]>,
+        val: &T,
+    ) -> Result<(), DbError> {
+        let cf = self.cf(cf_name)?;
+        let bytes = serde_json::to_string(val).map_err(|e| DbError::Storage(e.to_string()))?;
+        batch.put_cf(cf, key, bytes);
+        Ok(())
+    }
+
+    fn cf_del_batch(
+        &self,
+        batch: &mut WriteBatch,
+        cf_name: &str,
+        key: impl AsRef<[u8]>,
+    ) -> Result<(), DbError> {
+        let cf = self.cf(cf_name)?;
+        batch.delete_cf(cf, key);
+        Ok(())
+    }
+
+    fn write_batch(&self, batch: WriteBatch) -> Result<(), DbError> {
+        self.db
+            .write(batch)
+            .map_err(|e| DbError::Storage(e.to_string()))
+    }
+
     // --- Provider CRUD ---
 
     pub fn insert_provider(&self, mut provider: Provider) -> Result<Provider, DbError> {
@@ -296,7 +169,11 @@ impl Database {
         provider.name = updates.name.clone();
         provider.provider_type = updates.provider_type.clone();
         provider.base_url = updates.base_url.clone();
-        provider.api_key = updates.api_key.clone();
+        provider.api_key = match &updates.api_key {
+            None => provider.api_key,
+            Some(s) if s.is_empty() => None,
+            Some(s) => Some(s.clone()),
+        };
         provider.enabled = updates.enabled;
         provider.updated_at = Utc::now();
 
@@ -309,15 +186,16 @@ impl Database {
             return Ok(false);
         }
 
-        self.cf_del(PROVIDERS_CF, format!("prov:{}", id))?;
+        let mut batch = WriteBatch::default();
+        self.cf_del_batch(&mut batch, PROVIDERS_CF, format!("prov:{}", id))?;
 
-        // Also delete associated models
         for item in self.cf_list::<Model>(MODELS_CF)? {
             if item.provider_id == id {
-                self.cf_del(MODELS_CF, format!("model:{}", item.name))?;
+                self.cf_del_batch(&mut batch, MODELS_CF, format!("model:{}", item.name))?;
             }
         }
 
+        self.write_batch(batch)?;
         Ok(true)
     }
 
@@ -335,8 +213,9 @@ impl Database {
         if model.id.is_empty() {
             model.id = Uuid::new_v4().to_string();
         }
-        model.created_at = Utc::now();
-        model.updated_at = Utc::now();
+        let now = Utc::now();
+        model.created_at = now;
+        model.updated_at = now;
 
         // Check provider exists
 
@@ -401,8 +280,9 @@ impl Database {
     // --- User CRUD ---
 
     pub fn insert_user(&self, mut user: User) -> Result<User, DbError> {
-        user.created_at = Utc::now();
-        user.updated_at = Utc::now();
+        let now = Utc::now();
+        user.created_at = now;
+        user.updated_at = now;
         self.cf_put(USERS_CF, format!("user:{}", user.username), &user)?;
         Ok(user)
     }
@@ -422,9 +302,34 @@ impl Database {
         Ok(updated)
     }
 
-    pub fn delete_user(&self, username: &str) -> Result<bool, DbError> {
-        self.cf_del(USERS_CF, format!("user:{}", username))?;
-        Ok(true)
+    pub fn delete_user(&self, username: &str) -> Result<(), DbError> {
+        let user = self.get_user_or_err(username)?;
+
+        let mut batch = WriteBatch::default();
+
+        for api_key in &user.api_keys {
+            self.cf_del_batch(&mut batch, API_KEYS_CF, &api_key.key)?;
+        }
+
+        let sessions: Vec<Session> = self.cf_list(SESSIONS_CF)?;
+        for session in &sessions {
+            if session.username == username {
+                self.cf_del_batch(
+                    &mut batch,
+                    SESSIONS_CF,
+                    format!("sess:{}", &session.session_key),
+                )?;
+            }
+        }
+
+        self.cf_del_batch(&mut batch, USERS_CF, format!("user:{}", username))?;
+        self.write_batch(batch)?;
+        Ok(())
+    }
+
+    pub fn count_admins(&self) -> Result<u64, DbError> {
+        let users: Vec<User> = self.cf_list(USERS_CF)?;
+        Ok(users.iter().filter(|u| u.role == UserRole::Admin).count() as u64)
     }
 
     fn get_user_or_err(&self, username: &str) -> Result<User, DbError> {
@@ -499,7 +404,7 @@ impl Database {
         let stored = ApiKey {
             id: id.clone(),
             key: hash.clone(),
-            display: ApiKey::mask_key(&raw_key),
+            display: mask_api_key(&raw_key),
             name: name.to_string(),
             created_at: now,
             updated_at: now,
@@ -514,10 +419,14 @@ impl Database {
             name: name.to_string(),
             created_at: now,
         };
-        self.cf_put(API_KEYS_CF, &hash, &info)?;
 
         user.api_keys.push(stored.clone());
-        self.update_user(&user)?;
+        user.updated_at = now;
+
+        let mut batch = WriteBatch::default();
+        self.cf_put_batch(&mut batch, API_KEYS_CF, &hash, &info)?;
+        self.cf_put_batch(&mut batch, USERS_CF, format!("user:{}", username), &user)?;
+        self.write_batch(batch)?;
 
         Ok((stored, raw_key))
     }
@@ -536,10 +445,12 @@ impl Database {
             .ok_or_else(|| DbError::NotFound("API key not found".to_string()))?;
         let hash = user.api_keys[idx].key.clone();
         user.api_keys.remove(idx);
+        user.updated_at = Utc::now();
 
-        self.cf_del(API_KEYS_CF, &hash)?;
-
-        self.update_user(&user)?;
+        let mut batch = WriteBatch::default();
+        self.cf_del_batch(&mut batch, API_KEYS_CF, &hash)?;
+        self.cf_put_batch(&mut batch, USERS_CF, format!("user:{}", username), &user)?;
+        self.write_batch(batch)?;
 
         Ok(true)
     }

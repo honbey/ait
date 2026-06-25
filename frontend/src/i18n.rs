@@ -6,6 +6,8 @@ use sycamore::prelude::*;
 use sycamore::web::console_error;
 use sycamore_futures::spawn_local_scoped;
 
+include!(concat!(env!("OUT_DIR"), "/i18n_keys.rs"));
+
 struct I18nInner {
     lang: Signal<String>,
     translations: Signal<HashMap<String, String>>,
@@ -44,13 +46,14 @@ impl I18n {
         }
     }
 
-    pub fn t(&self, key: &str) -> String {
+    pub fn t(&self, key: K) -> String {
+        let k = key.as_str();
         self.0
             .translations
-            .with(|map| map.get(key).cloned().unwrap_or_else(|| key.to_string()))
+            .with(|map| map.get(k).cloned().unwrap_or_else(|| k.to_string()))
     }
 
-    pub fn t_replace(&self, key: &str, placeholder: &str, value: &str) -> String {
+    pub fn t_replace(&self, key: K, placeholder: &str, value: &str) -> String {
         self.t(key)
             .replace(&format!("{{{{ {} }}}}", placeholder), value)
     }

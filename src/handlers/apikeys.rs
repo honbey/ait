@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::app::AppState;
-use crate::db::SessionUser;
+use crate::db::{AuditEvent, SessionUser};
 use crate::error::{AitError, internal_error, not_found, require_admin_or_self};
 
 #[derive(Deserialize)]
@@ -55,6 +55,15 @@ pub async fn create_api_key(
         .db
         .insert_api_key(&username, &input.name, expires_at)?;
 
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "create".into(),
+        resource: "api_key".into(),
+        resource_id: stored.id.clone(),
+        detail: None,
+    });
+
     Ok(Json(ApiKeyResponse {
         key: raw_key,
         name: stored.name,
@@ -100,6 +109,16 @@ pub async fn delete_api_key(
     require_admin_or_self(&session, &username)?;
 
     state.db.delete_api_key(&username, &key)?;
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "delete".into(),
+        resource: "api_key".into(),
+        resource_id: key,
+        detail: None,
+    });
+
     Ok((StatusCode::NO_CONTENT,))
 }
 
@@ -117,6 +136,16 @@ pub async fn toggle_api_key(
     require_admin_or_self(&session, &username)?;
 
     let updated = state.db.toggle_api_key(&username, &key_id, input.enabled)?;
+
+    state.log_manager.log_audit(AuditEvent {
+        timestamp: Utc::now(),
+        username: session.username.clone(),
+        action: "toggle".into(),
+        resource: "api_key".into(),
+        resource_id: key_id,
+        detail: None,
+    });
+
     Ok(Json(ApiKeyListItem {
         id: updated.id.clone(),
         key: updated.masked(),

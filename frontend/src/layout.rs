@@ -2,11 +2,15 @@ use sycamore::prelude::*;
 use sycamore::web::create_client_resource;
 use sycamore::web::events;
 use sycamore::web::tags::*;
+use sycamore_router::navigate;
 
-use crate::api::{fetch_api_keys, fetch_dashboard, fetch_models, fetch_providers};
-use crate::i18n::I18n;
+use crate::api::{
+    fetch_api_keys, fetch_daily_requests, fetch_daily_tokens, fetch_dashboard_stats, fetch_models,
+    fetch_providers,
+};
+use crate::i18n::{I18n, K};
 use crate::models::{ApiKeyListItem, DashboardData, Model, Provider};
-use crate::route::Route;
+use crate::route::AppRoute;
 
 use crate::components::sidebar::{Sidebar, SidebarProps};
 use crate::components::topbar::{Topbar, TopbarProps};
@@ -43,7 +47,8 @@ pub fn render_loading() -> View {
         .into()
 }
 
-pub fn render_error_view(i18n: &I18n, msg: String) -> View {
+pub fn render_error_view(msg: String) -> View {
+    let i18n = use_context::<I18n>();
     div()
         .class("min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center")
         .children(
@@ -52,7 +57,7 @@ pub fn render_error_view(i18n: &I18n, msg: String) -> View {
                     "bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 px-6 py-4 rounded-lg",
                 )
                 .children((
-                    p().class("font-semibold").children(i18n.t("load_failed")),
+                    p().class("font-semibold").children(i18n.t(K::LoadFailed)),
                     p().class("text-sm mt-1").children(msg),
                 )),
         )
@@ -70,9 +75,11 @@ enum RouteData {
     Error(String),
 }
 
-fn render_placeholder(i18n: &I18n, title_key: &str) -> View {
+#[expect(dead_code)]
+fn render_placeholder(title_key: K) -> View {
+    let i18n = use_context::<I18n>();
     let title = i18n.t(title_key);
-    let suffix = i18n.t("in_development");
+    let suffix = i18n.t(K::InDevelopment);
     div().children(
         div()
             .class("p-4 sm:p-8")
@@ -93,7 +100,7 @@ fn render_placeholder(i18n: &I18n, title_key: &str) -> View {
 #[derive(Props)]
 pub struct LayoutProps {
     pub dark: Signal<bool>,
-    pub route: Signal<Route>,
+    pub session_checked: Signal<bool>,
     pub authenticated: Signal<bool>,
     pub username: Signal<Option<String>>,
     pub role: Signal<Option<String>>,
@@ -102,17 +109,25 @@ pub struct LayoutProps {
 #[component]
 pub fn Layout(props: LayoutProps) -> View {
     let dark = props.dark;
-    let route = props.route;
+    let session_checked = props.session_checked;
     let authenticated = props.authenticated;
     let username = props.username;
     let role = props.role;
     let sidebar_open = create_signal(false);
-    let i18n = use_context::<I18n>();
+
+    let route = use_context::<ReadSignal<AppRoute>>();
 
     // Auth guard: redirect to Login if not authenticated
     create_effect(move || {
-        if route.get().is_console() && !authenticated.get() {
-            route.set(Route::Login);
+        if session_checked.get() && route.get().is_console() && !authenticated.get() {
+            navigate("/login");
+        }
+    });
+
+    // NotFound redirect
+    create_effect(move || {
+        if route.get() == AppRoute::NotFound {
+            navigate("/");
         }
     });
 
@@ -125,6 +140,7 @@ pub fn Layout(props: LayoutProps) -> View {
     let dep = create_memo(move || {
         (
             route.get(),
+            username.get_clone(),
             provider_refresh.get(),
             model_refresh.get(),
             api_key_refresh.get(),
@@ -137,15 +153,31 @@ pub fn Layout(props: LayoutProps) -> View {
         let uname = username;
         async move {
             let result = match route.get() {
-                Route::Dashboard => fetch_dashboard()
-                    .await
-                    .map(RouteData::Dashboard)
-                    .unwrap_or_else(|e| RouteData::Error(e.to_string())),
-                Route::Providers => fetch_providers()
+                AppRoute::Dashboard => {
+                    let (stats, req, tok) = futures_util::join!(
+                        fetch_dashboard_stats(),
+                        fetch_daily_requests(7),
+                        fetch_daily_tokens(7),
+                    );
+                    match (stats, req, tok) {
+                        (Ok(s), Ok(r), Ok(t)) => RouteData::Dashboard(DashboardData {
+                            provider_count: s.provider_count,
+                            model_count: s.model_count,
+                            api_request_count: s.api_request_count,
+                            token_consumption: s.token_consumption,
+                            daily_requests: r,
+                            daily_tokens: t,
+                        }),
+                        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+                            RouteData::Error(e.to_string())
+                        }
+                    }
+                }
+                AppRoute::Providers => fetch_providers()
                     .await
                     .map(RouteData::Providers)
                     .unwrap_or_else(|e| RouteData::Error(e.to_string())),
-                Route::Models => {
+                AppRoute::Models => {
                     let models = fetch_models().await;
                     let providers = fetch_providers().await;
                     match (models, providers) {
@@ -153,30 +185,28 @@ pub fn Layout(props: LayoutProps) -> View {
                         (Err(e), _) | (_, Err(e)) => RouteData::Error(e.to_string()),
                     }
                 }
-                Route::ApiKeys => match uname.get_clone() {
+                AppRoute::ApiKeys => match uname.get_clone() {
                     Some(u) => fetch_api_keys(&u)
                         .await
                         .map(RouteData::ApiKeys)
                         .unwrap_or_else(|e| RouteData::Error(e.to_string())),
                     None => RouteData::Placeholder,
                 },
-                Route::TextGeneration => fetch_models()
+                AppRoute::TextGeneration => fetch_models()
                     .await
                     .map(RouteData::TextGeneration)
                     .unwrap_or_else(|e| RouteData::Error(e.to_string())),
                 _ => RouteData::Placeholder,
             };
             match route.get() {
-                Route::Providers => pr.set(false),
-                Route::Models => mr.set(false),
-                Route::ApiKeys => ar.set(false),
+                AppRoute::Providers => pr.set(false),
+                AppRoute::Models => mr.set(false),
+                AppRoute::ApiKeys => ar.set(false),
                 _ => {}
             }
             result
         }
     }));
-
-    let i18n_view = i18n.clone();
 
     div()
         .id("app")
@@ -185,7 +215,7 @@ pub fn Layout(props: LayoutProps) -> View {
             div()
                 .class("min-h-screen bg-gray-50 dark:bg-gray-900")
                 .children((
-                    Topbar(TopbarProps { dark, route, authenticated, username }),
+                    Topbar(TopbarProps { dark, authenticated, username }),
                     // Mobile overlay backdrop
                     View::from_dynamic(move || {
                         if route.get().is_console() {
@@ -206,7 +236,7 @@ pub fn Layout(props: LayoutProps) -> View {
                     View::from_dynamic(move || {
                         if route.get().is_console() {
                             div().children((
-                                Sidebar(SidebarProps { open: sidebar_open, route }),
+                                Sidebar(SidebarProps { open: sidebar_open }),
                                 button()
                                     .class(move || {
                                         "md:hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-10 h-10 rounded-full bg-indigo-600 dark:bg-indigo-400 text-white shadow-lg flex items-center justify-center transition-all duration-200 opacity-30 hover:opacity-100"
@@ -236,63 +266,47 @@ pub fn Layout(props: LayoutProps) -> View {
                         })
                         .children(View::from_dynamic(move || {
                             match route.get() {
-                                Route::Index => {
+                                AppRoute::Index => {
                                     crate::views::index::render_index_view(
-                                        &i18n_view,
-                                        route,
                                         authenticated,
                                     )
                                 }
-                                Route::Login => {
+                                AppRoute::Login => {
                                     crate::views::login::render_login_view(
-                                        &i18n_view,
                                         authenticated,
-                                        route,
                                         username,
                                         role,
                                     )
                                 }
-                                Route::Register => {
-                                    crate::views::register::render_register_view(
-                                        &i18n_view,
-                                        route,
-                                    )
+                                AppRoute::Register => {
+                                    crate::views::register::render_register_view()
                                 }
-                                _ => match data.get_clone() {
-                                    Some(RouteData::Dashboard(d)) => {
-                                        crate::views::dashboard::render_dashboard_view(&i18n_view, d)
-                                    }
-                                    Some(RouteData::Providers(p)) => {
-                                        let is_admin = create_signal(role.get_clone().as_deref() == Some("admin"));
-                                        crate::views::providers::render_providers_view(p, is_admin, provider_refresh, provider_refreshing)
-                                    }
-                                    Some(RouteData::Models(m, p)) => {
-                                        let is_admin = create_signal(role.get_clone().as_deref() == Some("admin"));
-                                        crate::views::models::render_models_view(m, p, is_admin, model_refresh, model_refreshing)
-                                    }
-                                    Some(RouteData::ApiKeys(k)) => {
-                                        let uname = username.get_clone().unwrap_or_default();
-                                        crate::views::api_keys::render_api_keys_view(k, uname, api_key_refresh, api_key_refreshing)
-                                    }
-                                    Some(RouteData::TextGeneration(m)) => {
-                                        crate::views::text_generation::render_text_generation_view(m)
-                                    }
-                                    Some(RouteData::Placeholder) => match route.get() {
-                                        Route::ApiKeys => {
-                                            render_placeholder(&i18n_view, "api_key")
+                                AppRoute::NotFound => render_loading(),
+                                _ => {
+                                    let current_route = route.get();
+                                    match data.get_clone() {
+                                        Some(RouteData::Dashboard(d)) if current_route == AppRoute::Dashboard => {
+                                            crate::views::dashboard::render_dashboard_view(d)
                                         }
-                                        Route::TextGeneration => {
-                                            render_placeholder(&i18n_view, "text_generation")
+                                        Some(RouteData::Providers(p)) if current_route == AppRoute::Providers => {
+                                            let is_admin = create_signal(role.get_clone().as_deref() == Some("admin"));
+                                            crate::views::providers::render_providers_view(p, is_admin, provider_refresh, provider_refreshing)
                                         }
-                                        Route::Dashboard
-                                        | Route::Providers
-                                        | Route::Models => render_loading(),
+                                        Some(RouteData::Models(m, p)) if current_route == AppRoute::Models => {
+                                            let is_admin = create_signal(role.get_clone().as_deref() == Some("admin"));
+                                            crate::views::models::render_models_view(m, p, is_admin, model_refresh, model_refreshing)
+                                        }
+                                        Some(RouteData::ApiKeys(k)) if current_route == AppRoute::ApiKeys => {
+                                            let uname = username.get_clone().unwrap_or_default();
+                                            crate::views::api_keys::render_api_keys_view(k, uname, api_key_refresh, api_key_refreshing)
+                                        }
+                                        Some(RouteData::TextGeneration(m)) if current_route == AppRoute::TextGeneration => {
+                                            crate::views::text_generation::render_text_generation_view(m)
+                                        }
+                                        Some(RouteData::Placeholder) | None => render_loading(),
+                                        Some(RouteData::Error(e)) => render_error_view(e),
                                         _ => render_loading(),
-                                    },
-                                    Some(RouteData::Error(e)) => {
-                                        render_error_view(&i18n_view, e)
                                     }
-                                    None => render_loading(),
                                 },
                             }
                         })),

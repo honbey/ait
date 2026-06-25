@@ -1,15 +1,20 @@
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::Instant;
+
 use axum::{
     Extension, Json as AxumJson,
+    body::Body,
     extract::{Json, State},
     http::{HeaderMap, HeaderName, StatusCode},
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
-use futures_util::StreamExt;
-use tracing::{info, warn};
+use futures_util::{Stream, StreamExt};
+use tracing::{debug, warn};
 
 use crate::app::AppState;
-use crate::db::{Permission, SessionUser, UserRole};
+use crate::db::{LogManager, Permission, ProxyEvent, SessionUser, UserRole};
 use crate::error::AitError;
 use crate::providers::create_provider;
 
@@ -131,6 +136,122 @@ fn check_model_access(
     }
 }
 
+#[derive(Default)]
+struct UsageTokens {
+    prompt_tokens: Option<i64>,
+    completion_tokens: Option<i64>,
+    total_tokens: Option<i64>,
+    cached_tokens: Option<i64>,
+}
+
+fn parse_usage(body: &[u8]) -> UsageTokens {
+    let Ok(val) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return UsageTokens {
+            prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
+            cached_tokens: None,
+        };
+    };
+
+    let usage = val.get("usage");
+
+    let prompt_tokens = usage
+        .and_then(|u| u.get("prompt_tokens").and_then(|v| v.as_i64()))
+        .or_else(|| val.get("prompt_eval_count").and_then(|v| v.as_i64()));
+
+    let completion_tokens = usage
+        .and_then(|u| u.get("completion_tokens").and_then(|v| v.as_i64()))
+        .or_else(|| val.get("eval_count").and_then(|v| v.as_i64()));
+
+    let total_tokens = usage
+        .and_then(|u| u.get("total_tokens").and_then(|v| v.as_i64()))
+        .or_else(|| {
+            if let (Some(p), Some(c)) = (prompt_tokens, completion_tokens) {
+                Some(p + c)
+            } else {
+                None
+            }
+        });
+
+    let cached_tokens = usage
+        .and_then(|u| {
+            u.get("prompt_tokens_details")
+                .or_else(|| u.get("completion_tokens_details"))
+        })
+        .and_then(|d| d.get("cached_tokens").and_then(|v| v.as_i64()))
+        .or_else(|| usage.and_then(|u| u.get("cached_tokens").and_then(|v| v.as_i64())));
+
+    UsageTokens {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        cached_tokens,
+    }
+}
+
+fn parse_sse_usage(buffer: &[u8]) -> Option<UsageTokens> {
+    let text = std::str::from_utf8(buffer).ok()?;
+
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed == "[DONE]" {
+            continue;
+        }
+        let payload = trimmed.strip_prefix("data: ").unwrap_or(trimmed);
+        let tokens = parse_usage(payload.as_bytes());
+        if tokens.prompt_tokens.is_some()
+            || tokens.completion_tokens.is_some()
+            || tokens.total_tokens.is_some()
+        {
+            return Some(tokens);
+        }
+    }
+    None
+}
+
+struct UsageTrackingStream<S> {
+    inner: S,
+    last_data: Vec<u8>,
+    log_manager: LogManager,
+    event: ProxyEvent,
+    start: Instant,
+}
+
+impl<S> Stream for UsageTrackingStream<S>
+where
+    S: Stream<Item = Result<bytes::Bytes, std::io::Error>> + Unpin,
+{
+    type Item = Result<bytes::Bytes, std::io::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(bytes))) => {
+                this.last_data.extend_from_slice(&bytes);
+                if this.last_data.len() > 4096 {
+                    let excess = this.last_data.len() - 4096;
+                    let _ = this.last_data.drain(0..excess);
+                }
+                Poll::Ready(Some(Ok(bytes)))
+            }
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
+            Poll::Ready(None) => {
+                if let Some(usage) = parse_sse_usage(&this.last_data) {
+                    this.event.prompt_tokens = usage.prompt_tokens;
+                    this.event.completion_tokens = usage.completion_tokens;
+                    this.event.total_tokens = usage.total_tokens;
+                    this.event.cached_tokens = usage.cached_tokens;
+                }
+                this.event.latency_ms = this.start.elapsed().as_millis() as i64;
+                this.log_manager.log_proxy(this.event.clone());
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 // --- Core Proxy Logic ---
 
 pub async fn proxy_request(
@@ -139,12 +260,13 @@ pub async fn proxy_request(
     body: serde_json::Value,
     upstream_path: &str,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
+    let start = Instant::now();
+    let username = session.username.clone();
+
     // Extract model name
     let model_name = body.get("model").and_then(|m| m.as_str()).ok_or_else(|| {
         AitError::bad_request("Missing 'model' field in request body").into_response()
     })?;
-
-    info!("Routing request for model: {}", model_name);
 
     // Resolve model -> provider
     let (model, provider) = match state.db.resolve_model(model_name) {
@@ -161,8 +283,11 @@ pub async fn proxy_request(
         }
     };
 
+    let model_name = model.name.clone();
+    let provider_name = provider.name.clone();
+
     // Check access permissions
-    check_model_access(provider.id.as_str(), model_name, &session)?;
+    check_model_access(provider.id.as_str(), &model_name, &session)?;
 
     // Check if stream is requested
     let stream = body
@@ -184,21 +309,44 @@ pub async fn proxy_request(
         .await
         .map_err(|e| AitError::bad_request(e).into_response())?;
 
-    info!(
+    debug!(
         "Proxying to provider '{}' for model '{}' -> upstream '{}', base_url: {}",
-        provider.name,
-        model.name,
+        provider_name,
+        model_name,
         model.upstream_model,
         request.url()
     );
 
     if stream {
-        let resp = proxy_streamed(state, request, &provider, &model).await?;
-        Ok(resp.into_response())
-    } else {
-        let resp = proxy_non_streamed(state, request, &provider, &model).await?;
-        Ok(resp.into_response())
+        return proxy_streamed(state, request, provider_name, model_name, username, start)
+            .await
+            .map(|r| r.into_response());
     }
+
+    let (response, usage) =
+        match proxy_non_streamed(state.clone(), request, &provider, &model).await {
+            Ok((resp, usage)) => (Ok(resp.into_response()), usage),
+            Err(e) => (Err(e), UsageTokens::default()),
+        };
+
+    let latency = start.elapsed().as_millis() as i64;
+    let status_code = match &response {
+        Ok(r) => r.status().as_u16(),
+        Err(e) => e.0.as_u16(),
+    };
+    state.log_manager.log_proxy(ProxyEvent {
+        timestamp: Utc::now(),
+        username: Some(username),
+        model_name,
+        provider_name,
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
+        cached_tokens: usage.cached_tokens,
+        latency_ms: latency,
+        status: status_code.to_string(),
+    });
+    response
 }
 
 async fn proxy_non_streamed(
@@ -206,7 +354,7 @@ async fn proxy_non_streamed(
     request: reqwest::Request,
     provider: &crate::db::Provider,
     _model: &crate::db::Model,
-) -> Result<impl IntoResponse + use<>, (StatusCode, Json<AitError>)> {
+) -> Result<(impl IntoResponse, UsageTokens), (StatusCode, Json<AitError>)> {
     let response = state.http_client.execute(request).await.map_err(|e| {
         AitError::upstream_error(
             502,
@@ -216,6 +364,19 @@ async fn proxy_non_streamed(
     })?;
 
     let status = response.status();
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("content-type"),
+        "application/json".parse().unwrap(),
+    );
+    for (name, value) in response.headers() {
+        let lower = name.as_str().to_ascii_lowercase();
+        if lower.starts_with("x-") || lower == "retry-after" {
+            headers.insert(name.clone(), value.clone());
+        }
+    }
+
     let bytes = response
         .bytes()
         .await
@@ -229,56 +390,82 @@ async fn proxy_non_streamed(
         .into_response());
     }
 
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        HeaderName::from_static("content-type"),
-        "application/json".parse().unwrap(),
-    );
-    Ok((StatusCode::OK, headers, bytes.to_vec()))
+    let usage = parse_usage(&bytes);
+    Ok(((StatusCode::OK, headers, bytes.to_vec()), usage))
 }
 
 async fn proxy_streamed(
     state: AppState,
     request: reqwest::Request,
-    provider: &crate::db::Provider,
-    _model: &crate::db::Model,
-) -> Result<impl IntoResponse + use<>, (StatusCode, Json<AitError>)> {
+    provider_name: String,
+    model_name: String,
+    username: String,
+    start: Instant,
+) -> Result<Response, (StatusCode, Json<AitError>)> {
+    let log_manager = state.log_manager.clone();
+    let base_event = ProxyEvent {
+        timestamp: Utc::now(),
+        username: Some(username),
+        model_name,
+        provider_name,
+        prompt_tokens: None,
+        completion_tokens: None,
+        total_tokens: None,
+        cached_tokens: None,
+        latency_ms: 0,
+        status: "200".to_string(),
+    };
+
     let response = state.http_client.execute(request).await.map_err(|e| {
-        AitError::upstream_error(
-            502,
-            format!("Failed to connect to provider '{}': {}", provider.name, e),
-        )
-        .into_response()
+        let latency = start.elapsed().as_millis() as i64;
+        let mut event = base_event.clone();
+        event.latency_ms = latency;
+        event.status = "502".to_string();
+        log_manager.log_proxy(event);
+        AitError::upstream_error(502, format!("Failed to connect to provider: {}", e))
+            .into_response()
     })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        let latency = start.elapsed().as_millis() as i64;
+        let mut event = base_event;
+        event.latency_ms = latency;
+        event.status = status.as_u16().to_string();
+        log_manager.log_proxy(event);
         return Err(AitError::upstream_error(status.as_u16(), body).into_response());
     }
 
-    let mut stream_builder = axum::response::Response::builder()
+    let mut stream_builder = Response::builder()
         .header("content-type", "text/event-stream")
         .header("cache-control", "no-cache");
 
     for (name, value) in response.headers() {
-        if name.as_str().to_ascii_lowercase().starts_with("x-") {
+        let lower = name.as_str().to_ascii_lowercase();
+        if lower.starts_with("x-") || lower == "retry-after" {
             stream_builder = stream_builder.header(name.clone(), value.clone());
         }
     }
 
-    let stream = response.bytes_stream().map(|result| {
+    let upstream = response.bytes_stream().map(|result| {
         result.map_err(|e| {
             warn!("Stream error: {}", e);
             std::io::Error::other(e)
         })
     });
 
-    let body = axum::body::Body::from_stream(stream);
+    let wrapped = UsageTrackingStream {
+        inner: upstream,
+        last_data: Vec::with_capacity(4096),
+        log_manager,
+        event: base_event,
+        start,
+    };
 
+    let body = Body::from_stream(wrapped);
     let resp = stream_builder
         .body(body)
         .expect("static SSE headers are valid");
-
     Ok(resp)
 }
