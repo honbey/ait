@@ -140,13 +140,8 @@ pub async fn register(
         return Err(conflict("Username already exists"));
     }
 
-    create_user(
-        &state.db,
-        &input.username,
-        &input.password,
-        UserRole::User,
-    )
-    .map_err(internal_error)?;
+    create_user(&state.db, &input.username, &input.password, UserRole::User)
+        .map_err(internal_error)?;
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),

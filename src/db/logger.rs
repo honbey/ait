@@ -136,7 +136,13 @@ fn worker_loop(
             Ok(event) => buffer.push(event),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if !buffer.is_empty() {
-                    flush_buffer(&conn, &mut buffer, &mut flush_count, retention_every, retention_days);
+                    flush_buffer(
+                        &conn,
+                        &mut buffer,
+                        &mut flush_count,
+                        retention_every,
+                        retention_days,
+                    );
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -156,7 +162,13 @@ fn worker_loop(
         }
 
         if (buffer.len() as u64) >= flush_batch {
-            flush_buffer(&conn, &mut buffer, &mut flush_count, retention_every, retention_days);
+            flush_buffer(
+                &conn,
+                &mut buffer,
+                &mut flush_count,
+                retention_every,
+                retention_days,
+            );
         }
 
         if shutdown {

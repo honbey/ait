@@ -35,15 +35,24 @@ impl AppState {
 
         // Bootstrap initial admin user if none exists
         if db.count_admins().unwrap_or(0) == 0 {
-            let password = config.auth.bootstrap_password.as_deref().unwrap_or_else(|| {
-                tracing::error!(
-                    "No admin user found and [auth] bootstrap_password is not set. \
+            let password = config
+                .auth
+                .bootstrap_password
+                .as_deref()
+                .unwrap_or_else(|| {
+                    tracing::error!(
+                        "No admin user found and [auth] bootstrap_password is not set. \
                      Set it in the config or restart with an existing database."
-                );
-                std::process::exit(1);
-            });
-            let user = create_user(&db, &config.auth.bootstrap_username, password, UserRole::Admin)
-                .expect("Failed to bootstrap admin user");
+                    );
+                    std::process::exit(1);
+                });
+            let user = create_user(
+                &db,
+                &config.auth.bootstrap_username,
+                password,
+                UserRole::Admin,
+            )
+            .expect("Failed to bootstrap admin user");
             tracing::info!("Created initial admin user '{}'", user.username);
         }
 

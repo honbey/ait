@@ -1,5 +1,5 @@
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 
 #[derive(Clone)]
 pub struct Chart(JsValue);
@@ -8,8 +8,7 @@ impl Chart {
     pub fn new(dom: &web_sys::HtmlElement) -> Self {
         let echarts =
             js_sys::Reflect::get(&js_sys::global(), &"echarts".into()).expect("echarts not found");
-        let init =
-            js_sys::Reflect::get(&echarts, &"init".into()).expect("echarts.init not found");
+        let init = js_sys::Reflect::get(&echarts, &"init".into()).expect("echarts.init not found");
         let f: js_sys::Function = init.unchecked_into();
         let result = f
             .call1(&JsValue::UNDEFINED, dom)

@@ -11,21 +11,13 @@ use crate::models::DashboardData;
 pub fn render_dashboard_view(data: DashboardData) -> View {
     let i18n = use_context::<I18n>();
 
-    let req_x_data: Vec<String> = data
-        .daily_requests
-        .iter()
-        .map(|r| r.date.clone())
-        .collect();
+    let req_x_data: Vec<String> = data.daily_requests.iter().map(|r| r.date.clone()).collect();
     let req_series = vec![ChartSeries {
         name: "Requests".to_string(),
         data: data.daily_requests.iter().map(|r| r.count as f64).collect(),
     }];
 
-    let tok_x_data: Vec<String> = data
-        .daily_tokens
-        .iter()
-        .map(|r| r.date.clone())
-        .collect();
+    let tok_x_data: Vec<String> = data.daily_tokens.iter().map(|r| r.date.clone()).collect();
     let tok_series = vec![ChartSeries {
         name: "Tokens".to_string(),
         data: data.daily_tokens.iter().map(|r| r.tokens as f64).collect(),

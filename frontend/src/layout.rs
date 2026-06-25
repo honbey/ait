@@ -4,7 +4,10 @@ use sycamore::web::events;
 use sycamore::web::tags::*;
 use sycamore_router::navigate;
 
-use crate::api::{fetch_api_keys, fetch_dashboard_stats, fetch_daily_requests, fetch_daily_tokens, fetch_models, fetch_providers};
+use crate::api::{
+    fetch_api_keys, fetch_daily_requests, fetch_daily_tokens, fetch_dashboard_stats, fetch_models,
+    fetch_providers,
+};
 use crate::i18n::{I18n, K};
 use crate::models::{ApiKeyListItem, DashboardData, Model, Provider};
 use crate::route::AppRoute;
