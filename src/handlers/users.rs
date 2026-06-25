@@ -7,8 +7,30 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, Permission, SessionUser, User, UserRole};
+use crate::db::{AuditEvent, Database, Permission, SessionUser, User, UserRole};
 use crate::error::{AitError, conflict, forbidden, internal_error, not_found, require_admin};
+
+pub fn create_user(
+    db: &Database,
+    username: &str,
+    password: &str,
+    role: UserRole,
+) -> Result<User, String> {
+    let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
+        .map_err(|e| format!("Failed to hash password: {e}"))?;
+    let user = User {
+        username: username.to_string(),
+        password_hash,
+        role,
+        allowed: vec![],
+        api_keys: vec![],
+        created_at: Default::default(),
+        updated_at: Default::default(),
+    };
+    db.insert_user(user.clone())
+        .map_err(|e| format!("Failed to create user: {e}"))?;
+    Ok(user)
+}
 
 #[derive(Serialize)]
 pub struct UserInfoResponse {

@@ -30,9 +30,8 @@ pub struct RateLimitConfig {
 pub struct AuthConfig {
     pub enabled: bool,
     pub session_ttl_secs: u64,
-    pub bootstrap_admin: bool,
     pub bootstrap_username: String,
-    pub bootstrap_password: String,
+    pub bootstrap_password: Option<String>,
     pub allow_registration: bool,
     pub registration_code: String,
     pub max_api_keys_per_user: u64,
@@ -75,9 +74,7 @@ impl ConfigApp {
             .set_default("server.rate_limiter_cleanup_interval_secs", 600u64)?
             .set_default("auth.enabled", true)?
             .set_default("auth.session_ttl_secs", 86400u64)?
-            .set_default("auth.bootstrap_admin", false)?
             .set_default("auth.bootstrap_username", "admin")?
-            .set_default("auth.bootstrap_password", "admin123")?
             .set_default("auth.allow_registration", false)?
             .set_default("auth.registration_code", "")?
             .set_default("auth.max_api_keys_per_user", 10u64)?

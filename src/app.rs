@@ -1,6 +1,7 @@
 use crate::config::ConfigApp;
 use crate::db::logger::LogManager;
-use crate::db::{Database, User, UserRole};
+use crate::db::{Database, UserRole};
+use crate::handlers::users::create_user;
 use crate::rate_limiter::RateLimiter;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
@@ -32,29 +33,18 @@ impl AppState {
             .build()
             .expect("Failed to build HTTP client");
 
-        // Bootstrap admin user on first startup if configured
-        if config.auth.bootstrap_admin {
-            let users = db.list_users().unwrap_or_default();
-            if users.is_empty() {
-                let password_hash =
-                    bcrypt::hash(&config.auth.bootstrap_password, bcrypt::DEFAULT_COST)
-                        .expect("Failed to hash bootstrap password");
-                let user = User {
-                    username: config.auth.bootstrap_username.clone(),
-                    password_hash,
-                    role: UserRole::Admin,
-                    allowed: vec![],
-                    api_keys: vec![],
-                    created_at: Utc::now(),
-                    updated_at: Default::default(),
-                };
-                db.insert_user(user)
-                    .expect("Failed to bootstrap admin user");
-                tracing::info!(
-                    "Bootstrapped admin user '{}'",
-                    config.auth.bootstrap_username
+        // Bootstrap initial admin user if none exists
+        if db.count_admins().unwrap_or(0) == 0 {
+            let password = config.auth.bootstrap_password.as_deref().unwrap_or_else(|| {
+                tracing::error!(
+                    "No admin user found and [auth] bootstrap_password is not set. \
+                     Set it in the config or restart with an existing database."
                 );
-            }
+                std::process::exit(1);
+            });
+            let user = create_user(&db, &config.auth.bootstrap_username, password, UserRole::Admin)
+                .expect("Failed to bootstrap admin user");
+            tracing::info!("Created initial admin user '{}'", user.username);
         }
 
         // Periodic cleanup of expired sessions

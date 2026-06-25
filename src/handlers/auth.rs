@@ -10,8 +10,9 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, Permission, Session, User, UserRole};
+use crate::db::{AuditEvent, Permission, Session, UserRole};
 use crate::error::{AitError, conflict, forbidden, internal_error, unauthorized};
+use crate::handlers::users::create_user;
 use crate::middleware::extract_session_key;
 
 #[derive(Deserialize)]
@@ -139,23 +140,13 @@ pub async fn register(
         return Err(conflict("Username already exists"));
     }
 
-    let password_hash = bcrypt::hash(&input.password, bcrypt::DEFAULT_COST)
-        .map_err(|_| internal_error("Failed to hash password"))?;
-
-    let user = User {
-        username: input.username.clone(),
-        password_hash,
-        role: UserRole::User,
-        allowed: vec![],
-        api_keys: vec![],
-        created_at: Default::default(),
-        updated_at: Default::default(),
-    };
-
-    state
-        .db
-        .insert_user(user)
-        .map_err(|_| internal_error("Failed to create user"))?;
+    create_user(
+        &state.db,
+        &input.username,
+        &input.password,
+        UserRole::User,
+    )
+    .map_err(internal_error)?;
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),

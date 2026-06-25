@@ -40,7 +40,6 @@ session_cleanup_interval_secs = 3600
 [auth]
 enabled = true
 session_ttl_secs = 86400
-bootstrap_admin = true
 bootstrap_username = "admin"
 bootstrap_password = "admin123"
 allow_registration = false
