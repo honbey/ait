@@ -1,5 +1,56 @@
 # 更新日志
 
+## [v0.1.3] - 2026-06-25
+
+### 新增功能
+
+- **日志**
+  - 三张日志表：`access_log`（访问日志）、`proxy_log`（代理请求，含 Token 用量）、`audit_log`（操作审计）
+  - 后台线程批量写入，可配置 `flush_batch`（默认 100）和 `flush_interval_secs`（默认 10s）
+  - `retention_days` 自动清理过期日志同时 `CHECKPOINT` 确保 WAL 数据写入数据库
+  - Analytics 独立线程通过 channel 处理聚合查询，不阻塞 Tokio 运行时
+  - admin/login、admin/register 等接口埋入审计事件
+  - 使用 DuckDB 作为日志存储和日志后端，依赖: `duckdb = "1.10504.0"`（bundled + chrono）
+- **SSE 流式 Token 追踪**
+  - `UsageTrackingStream` 包装上游字节流，结束前解析最后一个 SSE 事件提取 `usage`
+  - `stream_options.include_usage` 自动注入 OpenAI/Ollama 请求体
+  - `parse_sse_usage` 支持 OpenAI SSE 和 Ollama NDJSON 格式
+  - 非流式响应同步解析 `usage` 字段
+- **ECharts 仪表盘图表**
+  - 前端 WASM 集成 ECharts 6.1，动态注入 `<script>` 延迟加载
+  - `LineChart` 组件带挂载保护 + 超时清理，防止信号竞争
+- **启动自动创建管理员** — 检测到无 admin 用户时自动创建，不再依赖 `bootstrap_admin` 开关
+- **登录/注册限流** — `login_rate_limit` 和 `register_rate_limit` 可配置（attempts/window/ban），`RateLimiter` 基于 `dashmap`
+- **提供商类型查询** — `GET /admin/provider-types` 返回支持的提供商类型列表
+- **上游代理优化** - 透传 `x-*` 自定义请求头和 `retry-after` 响应头
+- **Admin 保护** — 删除/降级用户时检查 `count_admins() <= 1`，拒绝移除最后的管理员
+
+### 重构优化
+
+- **配置项**
+  - 移除 `auth.bootstrap_admin`（始终自动创建）
+  - `auth.bootstrap_password` 改为 `Option<String>`，未设置且需创建时启动报错退出
+  - 新增 `server.session_cleanup_interval_secs`、`server.rate_limiter_cleanup_interval_secs`、`auth.login_rate_limit`、`auth.register_rate_limit`
+- **代码提取**
+  - `create_user()` 提取到 `handlers/users.rs`，统一 bcrypt 哈希 + 用户创建
+  - `Database` 模块拆分为 `db/` 子目录：`store.rs`、`models.rs`、`logger.rs`、`analytics.rs`
+  - Analytics `*_impl` 移除冗余条件分支，始终 `WHERE timestamp >= ?1`
+  - Ollama 移除路径映射和字段转换，直接使用 OpenAI 兼容路径
+- **数据库写入原子性** — `delete_user` 等操作改用 `WriteBatch` 保证多 CF 写入原子性
+- **前端重构**
+  - 提取 `auth_form.rs` 共享组件，登录/注册页面复用
+  - 提取 `storage.rs` 模块，统一 localStorage 操作
+  - Sidebar/Topbar/Modal/ProviderTable/ModelTable/ApiKeyTable/StatCard 全面组件化
+  - 文本生成独立为路由页面，替换原来的组件内嵌模式
+  - i18n 编译期安全：locale key 编译时校验，移除运行时fallback
+  - URL 路由改造：统一使用 `AppRoute` 枚举 + `navigate()`，移除 `window.location` hack
+  - 登录/登出使用响应式信号驱动，移除手动页面刷新
+
+### 修复
+
+- **前端导航竞态** — 仪表盘资源 `match` 加 `current_route` 守卫，防旧数据闪烁
+- **其他** - 见 commit 信息
+
 ## [v0.1.2] - 2026-06-21
 
 ### 新增功能
