@@ -10,9 +10,11 @@ use crate::db::SessionUser;
 use crate::db::models::{DailyRequests, DailyTokens};
 use crate::error::{AitError, require_admin};
 
+const MAX_DAYS: u64 = 365;
+
 #[derive(Deserialize)]
 pub struct DaysQuery {
-    pub days: Option<i64>,
+    pub days: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -29,8 +31,8 @@ pub async fn daily_requests(
     Query(q): Query<DaysQuery>,
 ) -> Result<Json<Vec<DailyRequests>>, (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
-    let days = q.days.unwrap_or(1);
-    Ok(Json(state.log_manager.daily_requests(days).await))
+    let days = q.days.unwrap_or(1).min(MAX_DAYS);
+    Ok(Json(state.log_manager.daily_requests(days as i64).await))
 }
 
 pub async fn daily_tokens(
@@ -39,8 +41,8 @@ pub async fn daily_tokens(
     Query(q): Query<DaysQuery>,
 ) -> Result<Json<Vec<DailyTokens>>, (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
-    let days = q.days.unwrap_or(1);
-    Ok(Json(state.log_manager.daily_tokens(days).await))
+    let days = q.days.unwrap_or(1).min(MAX_DAYS);
+    Ok(Json(state.log_manager.daily_tokens(days as i64).await))
 }
 
 pub async fn dashboard_stats(
