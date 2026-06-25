@@ -160,10 +160,8 @@ fn daily_requests_impl(conn: &Connection, days: i64) -> Vec<DailyRequests> {
                 })
             }) {
                 let mut out = Vec::new();
-                for row in rows {
-                    if let Ok(r) = row {
-                        out.push(r);
-                    }
+                for r in rows.flatten() {
+                    out.push(r);
                 }
                 out
             } else {
@@ -183,10 +181,8 @@ fn daily_requests_impl(conn: &Connection, days: i64) -> Vec<DailyRequests> {
                 })
             }) {
                 let mut out = Vec::new();
-                for row in rows {
-                    if let Ok(r) = row {
-                        out.push(r);
-                    }
+                for r in rows.flatten() {
+                    out.push(r);
                 }
                 out
             } else {
@@ -211,10 +207,8 @@ fn daily_tokens_impl(conn: &Connection, days: i64) -> Vec<DailyTokens> {
                 })
             }) {
                 let mut out = Vec::new();
-                for row in rows {
-                    if let Ok(r) = row {
-                        out.push(r);
-                    }
+                for r in rows.flatten() {
+                    out.push(r);
                 }
                 out
             } else {
@@ -234,10 +228,8 @@ fn daily_tokens_impl(conn: &Connection, days: i64) -> Vec<DailyTokens> {
                 })
             }) {
                 let mut out = Vec::new();
-                for row in rows {
-                    if let Ok(r) = row {
-                        out.push(r);
-                    }
+                for r in rows.flatten() {
+                    out.push(r);
                 }
                 out
             } else {

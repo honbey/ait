@@ -1,9 +1,13 @@
-use axum::{Extension, Json, extract::{Query, State}, http::StatusCode};
+use axum::{
+    Extension, Json,
+    extract::{Query, State},
+    http::StatusCode,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::models::{DailyRequests, DailyTokens};
 use crate::db::SessionUser;
+use crate::db::models::{DailyRequests, DailyTokens};
 use crate::error::{AitError, require_admin};
 
 #[derive(Deserialize)]

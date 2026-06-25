@@ -196,6 +196,7 @@ pub struct AccessEvent {
     pub client_ip: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct ProxyEvent {
     pub timestamp: DateTime<Utc>,
     pub username: Option<String>,

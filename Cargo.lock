@@ -49,6 +49,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bcrypt",
+ "bytes",
  "chrono",
  "config",
  "dashmap",
