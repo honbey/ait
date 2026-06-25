@@ -23,7 +23,7 @@ impl AppState {
         let db = match Database::new(&config.database.path, config.auth.max_api_keys_per_user) {
             Ok(d) => Arc::new(d),
             Err(e) => {
-                eprintln!("Failed to open database: {}", e);
+                tracing::error!("Failed to open database: {}", e);
                 std::process::exit(1);
             }
         };

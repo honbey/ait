@@ -39,7 +39,7 @@ async fn main() {
     let config = match config::ConfigApp::new(config_path.as_deref()) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Failed to load config: {}", e);
+            tracing::error!("Failed to load config: {}", e);
             std::process::exit(1);
         }
     };
@@ -76,7 +76,7 @@ fn parse_config_path() -> Option<String> {
         match arg.as_str() {
             "-c" | "--config" => {
                 return args.next().or_else(|| {
-                    eprintln!("error: -c/--config requires a path argument");
+                    tracing::error!("-c/--config requires a path argument");
                     std::process::exit(1);
                 });
             }
