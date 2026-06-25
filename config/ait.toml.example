@@ -31,6 +31,19 @@ bootstrap_password = "admin123"
 [database]
 path = "./data/ait.rocksdb"
 
+[log]
+path = "./data/ait-logs.duckdb"
+# 日志保留天数（默认 30 天），过期的日志会自动清理
+retention_days = 30
+# 日志刷盘间隔（秒）
+flush_interval_secs = 10
+# 批量刷盘阈值
+flush_batch = 100
+# 通道缓冲区大小，满时丢弃日志
+channel_cap = 10000
+# 每 flush_batch * retention_every 次写入后执行一次过期清理
+retention_every = 100
+
 [proxy]
 timeout_secs = 300
 stream = true

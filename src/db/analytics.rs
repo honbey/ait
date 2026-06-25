@@ -112,131 +112,69 @@ impl Analytics {
 }
 
 fn total_requests_impl(conn: &Connection, days: i64) -> u64 {
-    if days > 0 {
-        let cutoff = (Utc::now() - Duration::days(days)).naive_utc();
-        conn.query_row(
-            "SELECT COUNT(*) FROM proxy_log WHERE timestamp >= ?1",
-            params![cutoff],
-            |row| row.get::<_, u64>(0),
-        )
-        .unwrap_or(0)
-    } else {
-        conn.query_row("SELECT COUNT(*) FROM proxy_log", [], |row| {
-            row.get::<_, u64>(0)
-        })
-        .unwrap_or(0)
-    }
+    let cutoff = (Utc::now() - Duration::days(days)).naive_utc();
+    conn.query_row(
+        "SELECT COUNT(*) FROM proxy_log WHERE timestamp >= ?1",
+        params![cutoff],
+        |row| row.get::<_, u64>(0),
+    )
+    .unwrap_or(0)
 }
 
 fn total_tokens_impl(conn: &Connection, days: i64) -> u64 {
-    if days > 0 {
-        let cutoff = (Utc::now() - Duration::days(days)).naive_utc();
-        conn.query_row(
-            "SELECT COALESCE(SUM(total_tokens), 0) FROM proxy_log WHERE timestamp >= ?1",
-            params![cutoff],
-            |row| row.get::<_, u64>(0),
-        )
-        .unwrap_or(0)
-    } else {
-        conn.query_row(
-            "SELECT COALESCE(SUM(total_tokens), 0) FROM proxy_log",
-            [],
-            |row| row.get::<_, u64>(0),
-        )
-        .unwrap_or(0)
-    }
+    let cutoff = (Utc::now() - Duration::days(days)).naive_utc();
+    conn.query_row(
+        "SELECT COALESCE(SUM(total_tokens), 0) FROM proxy_log WHERE timestamp >= ?1",
+        params![cutoff],
+        |row| row.get::<_, u64>(0),
+    )
+    .unwrap_or(0)
 }
 
 fn daily_requests_impl(conn: &Connection, days: i64) -> Vec<DailyRequests> {
-    if days > 0 {
-        let cutoff = (Utc::now() - Duration::days(days)).naive_utc();
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT DATE(timestamp) as date, COUNT(*) as count FROM proxy_log WHERE timestamp >= ?1 GROUP BY date ORDER BY date",
-        ) {
-            if let Ok(rows) = stmt.query_map(params![cutoff], |row| {
-                Ok(DailyRequests {
-                    date: row.get::<_, chrono::NaiveDate>(0)?.to_string(),
-                    count: row.get::<_, i64>(1)? as u64,
-                })
-            }) {
-                let mut out = Vec::new();
-                for r in rows.flatten() {
-                    out.push(r);
-                }
-                out
-            } else {
-                Vec::new()
+    let cutoff = (Utc::now() - Duration::days(days)).naive_utc();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT DATE(timestamp) as date, COUNT(*) as count FROM proxy_log WHERE timestamp >= ?1 GROUP BY date ORDER BY date",
+    ) {
+        if let Ok(rows) = stmt.query_map(params![cutoff], |row| {
+            Ok(DailyRequests {
+                date: row.get::<_, chrono::NaiveDate>(0)?.to_string(),
+                count: row.get::<_, i64>(1)? as u64,
+            })
+        }) {
+            let mut out = Vec::new();
+            for r in rows.flatten() {
+                out.push(r);
             }
+            out
         } else {
             Vec::new()
         }
     } else {
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT DATE(timestamp) as date, COUNT(*) as count FROM proxy_log GROUP BY date ORDER BY date",
-        ) {
-            if let Ok(rows) = stmt.query_map([], |row| {
-                Ok(DailyRequests {
-                    date: row.get::<_, chrono::NaiveDate>(0)?.to_string(),
-                    count: row.get::<_, i64>(1)? as u64,
-                })
-            }) {
-                let mut out = Vec::new();
-                for r in rows.flatten() {
-                    out.push(r);
-                }
-                out
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        }
+        Vec::new()
     }
 }
 
 fn daily_tokens_impl(conn: &Connection, days: i64) -> Vec<DailyTokens> {
-    if days > 0 {
-        let cutoff = (Utc::now() - Duration::days(days)).naive_utc();
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT DATE(timestamp) as date, COALESCE(SUM(total_tokens), 0) as tokens FROM proxy_log WHERE timestamp >= ?1 GROUP BY date ORDER BY date",
-        ) {
-            if let Ok(rows) = stmt.query_map(params![cutoff], |row| {
-                Ok(DailyTokens {
-                    date: row.get::<_, chrono::NaiveDate>(0)?.to_string(),
-                    tokens: row.get::<_, i64>(1)? as u64,
-                })
-            }) {
-                let mut out = Vec::new();
-                for r in rows.flatten() {
-                    out.push(r);
-                }
-                out
-            } else {
-                Vec::new()
+    let cutoff = (Utc::now() - Duration::days(days)).naive_utc();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT DATE(timestamp) as date, COALESCE(SUM(total_tokens), 0) as tokens FROM proxy_log WHERE timestamp >= ?1 GROUP BY date ORDER BY date",
+    ) {
+        if let Ok(rows) = stmt.query_map(params![cutoff], |row| {
+            Ok(DailyTokens {
+                date: row.get::<_, chrono::NaiveDate>(0)?.to_string(),
+                tokens: row.get::<_, i64>(1)? as u64,
+            })
+        }) {
+            let mut out = Vec::new();
+            for r in rows.flatten() {
+                out.push(r);
             }
+            out
         } else {
             Vec::new()
         }
     } else {
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT DATE(timestamp) as date, COALESCE(SUM(total_tokens), 0) as tokens FROM proxy_log GROUP BY date ORDER BY date",
-        ) {
-            if let Ok(rows) = stmt.query_map([], |row| {
-                Ok(DailyTokens {
-                    date: row.get::<_, chrono::NaiveDate>(0)?.to_string(),
-                    tokens: row.get::<_, i64>(1)? as u64,
-                })
-            }) {
-                let mut out = Vec::new();
-                for r in rows.flatten() {
-                    out.push(r);
-                }
-                out
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        }
+        Vec::new()
     }
 }

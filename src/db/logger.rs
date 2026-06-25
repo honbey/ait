@@ -8,12 +8,6 @@ use tracing::{error, info, warn};
 use super::analytics::Analytics;
 use super::models::{AccessEvent, AuditEvent, DailyRequests, DailyTokens, LogEvent, ProxyEvent};
 
-const FLUSH_INTERVAL: Duration = Duration::from_secs(10);
-const FLUSH_BATCH: usize = 100;
-const CHANNEL_CAP: usize = 10_000;
-const RETENTION_DAYS: i64 = 30;
-const RETENTION_EVERY: usize = 100;
-
 #[derive(Clone)]
 pub struct LogManager {
     sender: mpsc::SyncSender<LogEvent>,
@@ -21,8 +15,8 @@ pub struct LogManager {
 }
 
 impl LogManager {
-    pub fn new(db_path: &str) -> Result<Self> {
-        let conn = Connection::open(db_path)?;
+    pub fn new(config: &crate::config::LogConfig) -> Result<Self> {
+        let conn = Connection::open(&config.path)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS access_log (
                 timestamp  TIMESTAMP NOT NULL,
@@ -55,12 +49,23 @@ impl LogManager {
             );",
         )?;
 
-        let (sender, receiver) = mpsc::sync_channel(CHANNEL_CAP);
+        let flush_interval = Duration::from_secs(config.flush_interval_secs);
+        let flush_batch = config.flush_batch;
+        let retention_every = config.retention_every;
+        let retention_days = config.retention_days;
+        let (sender, receiver) = mpsc::sync_channel(config.channel_cap as usize);
         let analytics = Analytics::new(conn.try_clone()?);
 
         thread::spawn(move || match conn.try_clone() {
             Ok(worker_conn) => {
-                if let Err(e) = worker_loop(receiver, worker_conn) {
+                if let Err(e) = worker_loop(
+                    receiver,
+                    worker_conn,
+                    flush_batch,
+                    flush_interval,
+                    retention_every,
+                    retention_days,
+                ) {
                     error!("[logs] worker exited with error: {e}");
                 }
             }
@@ -112,19 +117,26 @@ impl LogManager {
     }
 }
 
-fn worker_loop(receiver: mpsc::Receiver<LogEvent>, conn: Connection) -> Result<()> {
-    let mut buffer: Vec<LogEvent> = Vec::with_capacity(FLUSH_BATCH);
+fn worker_loop(
+    receiver: mpsc::Receiver<LogEvent>,
+    conn: Connection,
+    flush_batch: u64,
+    flush_interval: Duration,
+    retention_every: u64,
+    retention_days: u64,
+) -> Result<()> {
+    let mut buffer: Vec<LogEvent> = Vec::with_capacity(flush_batch as usize);
     let mut flush_count = 0u64;
 
     loop {
         let mut shutdown = false;
 
-        match receiver.recv_timeout(FLUSH_INTERVAL) {
+        match receiver.recv_timeout(flush_interval) {
             Ok(LogEvent::Shutdown) => shutdown = true,
             Ok(event) => buffer.push(event),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if !buffer.is_empty() {
-                    flush_buffer(&conn, &mut buffer, &mut flush_count);
+                    flush_buffer(&conn, &mut buffer, &mut flush_count, retention_every, retention_days);
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -143,8 +155,8 @@ fn worker_loop(receiver: mpsc::Receiver<LogEvent>, conn: Connection) -> Result<(
             }
         }
 
-        if buffer.len() >= FLUSH_BATCH {
-            flush_buffer(&conn, &mut buffer, &mut flush_count);
+        if (buffer.len() as u64) >= flush_batch {
+            flush_buffer(&conn, &mut buffer, &mut flush_count, retention_every, retention_days);
         }
 
         if shutdown {
@@ -157,12 +169,18 @@ fn worker_loop(receiver: mpsc::Receiver<LogEvent>, conn: Connection) -> Result<(
     }
 }
 
-fn flush_buffer(conn: &Connection, buffer: &mut Vec<LogEvent>, flush_count: &mut u64) {
+fn flush_buffer(
+    conn: &Connection,
+    buffer: &mut Vec<LogEvent>,
+    flush_count: &mut u64,
+    retention_every: u64,
+    retention_days: u64,
+) {
     if flush_events(conn, buffer) {
         *flush_count += 1;
-        if flush_count.is_multiple_of(RETENTION_EVERY as u64) {
+        if flush_count.is_multiple_of(retention_every) {
             let _ = conn.execute_batch("CHECKPOINT");
-            cleanup_expired(conn);
+            cleanup_expired(conn, retention_days);
         }
         buffer.clear();
     }
@@ -278,8 +296,8 @@ fn flush_audits(conn: &Connection, events: &[&AuditEvent]) -> Result<()> {
     Ok(())
 }
 
-fn cleanup_expired(conn: &Connection) {
-    let cutoff = (Utc::now() - chrono::Duration::days(RETENTION_DAYS)).naive_utc();
+fn cleanup_expired(conn: &Connection, retention_days: u64) {
+    let cutoff = (Utc::now() - chrono::Duration::days(retention_days as i64)).naive_utc();
     for table in &["access_log", "proxy_log", "audit_log"] {
         match conn.execute(
             &format!("DELETE FROM {table} WHERE timestamp < ?1"),

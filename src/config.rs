@@ -48,6 +48,11 @@ pub struct DatabaseConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct LogConfig {
     pub path: String,
+    pub retention_days: u64,
+    pub flush_interval_secs: u64,
+    pub flush_batch: u64,
+    pub channel_cap: u64,
+    pub retention_every: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -84,6 +89,11 @@ impl ConfigApp {
             .set_default("auth.register_rate_limit.ban_secs", 3600u64)?
             .set_default("database.path", "./data/ait.rocksdb")?
             .set_default("log.path", "./data/ait-logs.duckdb")?
+            .set_default("log.retention_days", 30u64)?
+            .set_default("log.flush_interval_secs", 10u64)?
+            .set_default("log.flush_batch", 100u64)?
+            .set_default("log.channel_cap", 10000u64)?
+            .set_default("log.retention_every", 100u64)?
             .set_default("proxy.timeout_secs", 300u64)?
             .set_default("proxy.stream", true)?
             .add_source(File::new(config_file, FileFormat::Toml).required(false))
@@ -110,6 +120,11 @@ mod tests {
         assert_eq!(config.auth.max_api_keys_per_user, 10);
         assert_eq!(config.database.path, "./data/ait.rocksdb");
         assert_eq!(config.log.path, "./data/ait-logs.duckdb");
+        assert_eq!(config.log.retention_days, 30);
+        assert_eq!(config.log.flush_interval_secs, 10);
+        assert_eq!(config.log.flush_batch, 100);
+        assert_eq!(config.log.channel_cap, 10000);
+        assert_eq!(config.log.retention_every, 100);
         assert_eq!(config.auth.login_rate_limit.max_attempts, 5);
         assert_eq!(config.auth.login_rate_limit.window_secs, 300);
         assert_eq!(config.auth.login_rate_limit.ban_secs, 900);

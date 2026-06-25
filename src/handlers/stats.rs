@@ -29,7 +29,7 @@ pub async fn daily_requests(
     Query(q): Query<DaysQuery>,
 ) -> Result<Json<Vec<DailyRequests>>, (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
-    let days = q.days.unwrap_or(7);
+    let days = q.days.unwrap_or(1);
     Ok(Json(state.log_manager.daily_requests(days).await))
 }
 
@@ -39,7 +39,7 @@ pub async fn daily_tokens(
     Query(q): Query<DaysQuery>,
 ) -> Result<Json<Vec<DailyTokens>>, (StatusCode, Json<AitError>)> {
     require_admin(&session)?;
-    let days = q.days.unwrap_or(7);
+    let days = q.days.unwrap_or(1);
     Ok(Json(state.log_manager.daily_tokens(days).await))
 }
 
