@@ -10,7 +10,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, Permission, Session, UserRole};
+use crate::db::{AuditEvent, Session, hash_key};
 use crate::error::{AitError, conflict, forbidden, internal_error, unauthorized};
 use crate::handlers::users::create_user;
 use crate::middleware::extract_session_key;
@@ -25,7 +25,6 @@ pub struct LoginRequest {
 pub struct LoginResponse {
     pub ok: bool,
     pub session_key: String,
-    pub role: UserRole,
 }
 
 #[derive(Deserialize)]
@@ -39,8 +38,6 @@ pub struct RegisterRequest {
 pub struct SessionResponse {
     pub authenticated: bool,
     pub username: Option<String>,
-    pub role: Option<UserRole>,
-    pub allowed: Option<Vec<Permission>>,
 }
 
 /// Build a `Set-Cookie` header value for the session key.
@@ -55,28 +52,42 @@ pub async fn login(
     State(state): State<AppState>,
     Json(input): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<AitError>)> {
-    let user = match state.db.get_user(&input.username) {
-        Ok(Some(u)) => u,
-        Ok(None) => {
-            let user_count = state.db.list_users().map(|v| v.len()).unwrap_or(0);
-            if user_count == 0 {
-                return Err(unauthorized(
-                    "No users configured. Please check server configuration.",
-                ));
-            }
-            // Constant-time comparison: always bcrypt verify to prevent timing side-channel
-            let _ = bcrypt::verify(&input.password, dummy_hash());
-            return Err(unauthorized("Invalid credentials"));
-        }
-        Err(_) => return Err(internal_error("Database error")),
-    };
-
-    let valid = bcrypt::verify(&input.password, &user.password_hash)
-        .map_err(|_| internal_error("Password verification error"))?;
-
-    if !valid {
-        return Err(unauthorized("Invalid credentials"));
+    #[derive(Debug)]
+    enum Lookup {
+        NoUsers,
+        InvalidCreds,
+        Db,
     }
+
+    let db = state.db.clone();
+    let username = input.username.clone();
+    let password = input.password.clone();
+    let _ = match crate::run_blocking(move || match db.get_user(&username) {
+        Ok(Some(u)) => {
+            let valid = bcrypt::verify(&password, &u.password_hash).unwrap_or(false);
+            Ok((u, valid))
+        }
+        Ok(None) => {
+            let _ = bcrypt::verify(&password, dummy_hash());
+            if !db.has_any_users().unwrap_or(false) {
+                return Err(Lookup::NoUsers);
+            }
+            Err(Lookup::InvalidCreds)
+        }
+        Err(_) => Err(Lookup::Db),
+    })
+    .await
+    {
+        Ok((u, true)) => u,
+        Ok((_u, false)) => return Err(unauthorized("Invalid credentials")),
+        Err(Lookup::NoUsers) => {
+            return Err(unauthorized(
+                "No users configured. Please check server configuration.",
+            ));
+        }
+        Err(Lookup::InvalidCreds) => return Err(unauthorized("Invalid credentials")),
+        Err(Lookup::Db) => return Err(internal_error("Database error")),
+    };
 
     let session_key = generate_session_key();
     let ttl = state.config.auth.session_ttl_secs;
@@ -87,9 +98,9 @@ pub async fn login(
         expires_at: Utc::now() + chrono::Duration::seconds(ttl as i64),
     };
 
-    state
-        .db
-        .insert_session(session)
+    let db = state.db.clone();
+    crate::run_blocking(move || db.insert_session(session))
+        .await
         .map_err(|_| internal_error("Failed to create session"))?;
 
     let mut headers = HeaderMap::new();
@@ -112,7 +123,6 @@ pub async fn login(
         Json(LoginResponse {
             ok: true,
             session_key,
-            role: user.role,
         }),
     ))
 }
@@ -131,16 +141,26 @@ pub async fn register(
         return Err(forbidden("Invalid registration code"));
     }
 
-    if state
-        .db
-        .get_user(&input.username)
-        .map_err(|_| internal_error("Database error"))?
-        .is_some()
-    {
+    let db = state.db.clone();
+    let username = input.username.clone();
+    let password = input.password.clone();
+    let exists = crate::run_blocking(move || {
+        let user = db.get_user(&username).ok().flatten();
+        if user.is_some() {
+            let _ = bcrypt::verify(&password, dummy_hash());
+        }
+        user.is_some()
+    })
+    .await;
+    if exists {
         return Err(conflict("Username already exists"));
     }
 
-    create_user(&state.db, &input.username, &input.password, UserRole::User)
+    let db = state.db.clone();
+    let username = input.username.clone();
+    let password = input.password.clone();
+    crate::run_blocking(move || create_user(&db, &username, &password))
+        .await
         .map_err(internal_error)?;
 
     state.log_manager.log_audit(AuditEvent {
@@ -159,8 +179,14 @@ pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<AitError>)> {
-    if let Some(session_key) = extract_session_key(&headers) {
-        state.db.delete_session(session_key).ok();
+    if let Some(raw_key) = extract_session_key(&headers) {
+        let hash = hash_key(raw_key);
+        state.session_cache.remove(&hash);
+        let db = state.db.clone();
+        let session_key = raw_key.to_string();
+        crate::run_blocking(move || db.delete_session(&session_key))
+            .await
+            .ok();
     }
 
     let mut resp_headers = HeaderMap::new();
@@ -182,35 +208,30 @@ pub async fn session_check(
             return Json(SessionResponse {
                 authenticated: false,
                 username: None,
-                role: None,
-                allowed: None,
             });
         }
     };
 
-    match state.db.get_session(session_key) {
-        Ok(Some(session)) if !session.is_expired() => {
-            let user = state.db.get_user(&session.username).ok().flatten();
-            match user {
-                Some(u) => Json(SessionResponse {
-                    authenticated: true,
-                    username: Some(session.username),
-                    role: Some(u.role),
-                    allowed: Some(u.allowed),
-                }),
-                None => Json(SessionResponse {
-                    authenticated: false,
-                    username: None,
-                    role: None,
-                    allowed: None,
-                }),
-            }
-        }
+    let session_key = session_key.to_string();
+    // Fast single RocksDB get_cf (~10–50 µs); spawn_blocking overhead
+    // (~5–20 µs) would exceed the work itself, so called directly.
+    let result = (|| {
+        let session = match state.db.get_session(&session_key) {
+            Ok(Some(s)) if !s.is_expired() => s,
+            _ => return Err(()),
+        };
+        let user = state.db.get_user(&session.username).ok().flatten();
+        Ok((session, user))
+    })();
+
+    match result {
+        Ok((session, Some(_u))) => Json(SessionResponse {
+            authenticated: true,
+            username: Some(session.username),
+        }),
         _ => Json(SessionResponse {
             authenticated: false,
             username: None,
-            role: None,
-            allowed: None,
         }),
     }
 }

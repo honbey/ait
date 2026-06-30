@@ -7,22 +7,15 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, Database, Permission, SessionUser, User, UserRole};
-use crate::error::{AitError, conflict, forbidden, internal_error, not_found, require_admin};
+use crate::db::{AuditEvent, Database, SessionUser, User};
+use crate::error::{AitError, conflict, forbidden, internal_error, not_found};
 
-pub fn create_user(
-    db: &Database,
-    username: &str,
-    password: &str,
-    role: UserRole,
-) -> Result<User, String> {
+pub fn create_user(db: &Database, username: &str, password: &str) -> Result<User, String> {
     let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
         .map_err(|e| format!("Failed to hash password: {e}"))?;
     let user = User {
         username: username.to_string(),
         password_hash,
-        role,
-        allowed: vec![],
         api_keys: vec![],
         created_at: Default::default(),
         updated_at: Default::default(),
@@ -35,8 +28,6 @@ pub fn create_user(
 #[derive(Serialize)]
 pub struct UserInfoResponse {
     pub username: String,
-    pub role: UserRole,
-    pub allowed: Vec<Permission>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -45,18 +36,10 @@ impl From<User> for UserInfoResponse {
     fn from(u: User) -> Self {
         UserInfoResponse {
             username: u.username,
-            role: u.role,
-            allowed: u.allowed,
             created_at: u.created_at.timestamp(),
             updated_at: u.updated_at.timestamp(),
         }
     }
-}
-
-#[derive(Deserialize)]
-pub struct UpdateUserRequest {
-    pub role: Option<UserRole>,
-    pub allowed: Option<Vec<Permission>>,
 }
 
 #[derive(Deserialize)]
@@ -67,52 +50,13 @@ pub struct ChangePasswordRequest {
 
 pub async fn list_users(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
+    Extension(_session): Extension<SessionUser>,
 ) -> Result<Json<Vec<UserInfoResponse>>, (StatusCode, Json<AitError>)> {
-    require_admin(&session)?;
-    let users = state.db.list_users()?;
+    let db = state.db.clone();
+    let users = crate::run_blocking(move || db.list_users())
+        .await
+        .map_err(internal_error)?;
     Ok(Json(users.into_iter().map(Into::into).collect()))
-}
-
-pub async fn update_user(
-    State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
-    Path(username): Path<String>,
-    Json(input): Json<UpdateUserRequest>,
-) -> Result<Json<UserInfoResponse>, (StatusCode, Json<AitError>)> {
-    require_admin(&session)?;
-    let mut user = state
-        .db
-        .get_user(&username)
-        .map_err(internal_error)?
-        .ok_or_else(|| not_found(format!("User '{}' not found", username)))?;
-
-    if let Some(role) = input.role {
-        // Prevent demoting the last admin
-        if role != UserRole::Admin
-            && user.role == UserRole::Admin
-            && state.db.count_admins().map_err(internal_error)? <= 1
-        {
-            return Err(conflict("Cannot demote the last admin"));
-        }
-        user.role = role;
-    }
-    if let Some(allowed) = input.allowed {
-        user.allowed = allowed;
-    }
-
-    let updated = state.db.update_user(&user)?;
-
-    state.log_manager.log_audit(AuditEvent {
-        timestamp: Utc::now(),
-        username: session.username.clone(),
-        action: "update".into(),
-        resource: "user".into(),
-        resource_id: username,
-        detail: None,
-    });
-
-    Ok(Json(updated.into()))
 }
 
 pub async fn delete_user(
@@ -120,25 +64,28 @@ pub async fn delete_user(
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
-    require_admin(&session)?;
-
     // Cannot delete yourself
     if session.username == username {
         return Err(conflict("Cannot delete yourself"));
     }
 
-    let user = state
-        .db
-        .get_user(&username)
-        .map_err(internal_error)?
-        .ok_or_else(|| not_found(format!("User '{}' not found", username)))?;
+    let db = state.db.clone();
+    let username_clone = username.clone();
+    crate::run_blocking(move || -> Result<(), crate::db::DbError> {
+        let _ = db.get_user(&username_clone).ok().flatten().ok_or_else(|| {
+            crate::db::DbError::NotFound(format!("User '{}' not found", username_clone))
+        })?;
+        db.delete_user(&username_clone)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| match e {
+        crate::db::DbError::NotFound(msg) => not_found(msg),
+        crate::db::DbError::Storage(msg) => internal_error(msg),
+        _ => internal_error(e.to_string()),
+    })?;
 
-    // Prevent deleting the last admin
-    if user.role == UserRole::Admin && state.db.count_admins().map_err(internal_error)? <= 1 {
-        return Err(conflict("Cannot delete the last admin"));
-    }
-
-    state.db.delete_user(&username)?;
+    state.session_cache.clear();
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
@@ -158,31 +105,47 @@ pub async fn change_password(
     Path(username): Path<String>,
     Json(input): Json<ChangePasswordRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
-    // Can only change own password, unless Admin
-    if session.role != UserRole::Admin && session.username != username {
+    // Can only change your own password
+    if session.username != username {
         return Err(forbidden("You can only change your own password"));
     }
 
-    let mut user = state
-        .db
-        .get_user(&username)
-        .map_err(internal_error)?
-        .ok_or_else(|| not_found(format!("User '{}' not found", username)))?;
-
-    // Verify current password when changing own password (all roles)
-    if session.username == username {
-        let valid = bcrypt::verify(&input.current_password, &user.password_hash)
-            .map_err(|_| internal_error("Password verification error"))?;
-        if !valid {
-            return Err(forbidden("Current password is incorrect"));
-        }
+    #[derive(Debug)]
+    enum ChangeError {
+        NotFound(String),
+        WrongPassword,
+        Internal(String),
     }
 
-    let new_hash = bcrypt::hash(&input.new_password, bcrypt::DEFAULT_COST)
-        .map_err(|_| internal_error("Failed to hash password"))?;
-    user.password_hash = new_hash;
+    let db = state.db.clone();
+    let username_clone = username.clone();
+    let current_password = input.current_password.clone();
+    let new_password = input.new_password.clone();
+    crate::run_blocking(move || -> Result<User, ChangeError> {
+        let mut user = db
+            .get_user(&username_clone)
+            .map_err(|e| ChangeError::Internal(e.to_string()))?
+            .ok_or_else(|| ChangeError::NotFound(format!("User '{}' not found", username_clone)))?;
 
-    state.db.update_user(&user)?;
+        let valid = bcrypt::verify(&current_password, &user.password_hash)
+            .map_err(|e| ChangeError::Internal(e.to_string()))?;
+        if !valid {
+            return Err(ChangeError::WrongPassword);
+        }
+
+        let new_hash = bcrypt::hash(&new_password, bcrypt::DEFAULT_COST)
+            .map_err(|e| ChangeError::Internal(e.to_string()))?;
+        user.password_hash = new_hash;
+        user.updated_at = Utc::now();
+        db.update_user(&user)
+            .map_err(|e| ChangeError::Internal(e.to_string()))
+    })
+    .await
+    .map_err(|e| match e {
+        ChangeError::NotFound(msg) => not_found(msg),
+        ChangeError::WrongPassword => forbidden("Current password is incorrect"),
+        ChangeError::Internal(msg) => internal_error(msg),
+    })?;
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),

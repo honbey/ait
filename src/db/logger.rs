@@ -1,17 +1,18 @@
 use chrono::Utc;
 use duckdb::{Connection, Result, params};
-use std::sync::mpsc;
-use std::thread;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tracing::{error, info, warn};
 
 use super::analytics::Analytics;
-use super::models::{AccessEvent, AuditEvent, DailyRequests, DailyTokens, LogEvent, ProxyEvent};
+use super::models::{AccessEvent, AuditEvent, BucketEntry, LogEvent, ProxyEvent};
 
 #[derive(Clone)]
 pub struct LogManager {
     sender: mpsc::SyncSender<LogEvent>,
     analytics: Analytics,
+    worker_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl LogManager {
@@ -30,6 +31,7 @@ impl LogManager {
             CREATE TABLE IF NOT EXISTS proxy_log (
                 timestamp         TIMESTAMP NOT NULL,
                 username          VARCHAR,
+                api_key_name      VARCHAR,
                 model_name        VARCHAR NOT NULL,
                 provider_name     VARCHAR NOT NULL,
                 prompt_tokens     BIGINT,
@@ -46,7 +48,10 @@ impl LogManager {
                 resource    VARCHAR NOT NULL,
                 resource_id VARCHAR NOT NULL,
                 detail      VARCHAR
-            );",
+            );
+            CREATE INDEX IF NOT EXISTS idx_access_log_timestamp ON access_log(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_proxy_log_timestamp ON proxy_log(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);",
         )?;
 
         let flush_interval = Duration::from_secs(config.flush_interval_secs);
@@ -56,7 +61,7 @@ impl LogManager {
         let (sender, receiver) = mpsc::sync_channel(config.channel_cap as usize);
         let analytics = Analytics::new(conn.try_clone()?);
 
-        thread::spawn(move || match conn.try_clone() {
+        let handle = thread::spawn(move || match conn.try_clone() {
             Ok(worker_conn) => {
                 if let Err(e) = worker_loop(
                     receiver,
@@ -72,7 +77,11 @@ impl LogManager {
             Err(e) => error!("[logs] failed to clone worker connection: {e}"),
         });
 
-        Ok(Self { sender, analytics })
+        Ok(Self {
+            sender,
+            analytics,
+            worker_handle: Arc::new(Mutex::new(Some(handle))),
+        })
     }
 
     pub fn log_access(&self, event: AccessEvent) {
@@ -101,17 +110,31 @@ impl LogManager {
         self.analytics.total_tokens(days).await
     }
 
-    pub async fn daily_requests(&self, days: i64) -> Vec<DailyRequests> {
-        self.analytics.daily_requests(days).await
+    pub async fn requests(&self, start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
+        self.analytics.requests(start_ts, end_ts).await
     }
 
-    pub async fn daily_tokens(&self, days: i64) -> Vec<DailyTokens> {
-        self.analytics.daily_tokens(days).await
+    pub async fn tokens(&self, start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
+        self.analytics.tokens(start_ts, end_ts).await
     }
 
     pub fn shutdown(&self) {
-        while self.sender.try_send(LogEvent::Shutdown).is_err() {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+        for _ in 0..20 {
+            match self.sender.try_send(LogEvent::Shutdown) {
+                Ok(()) => break,
+                Err(mpsc::TrySendError::Full(_)) => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    warn!("Log channel disconnected, skipping graceful shutdown");
+                    break;
+                }
+            }
+        }
+        if let Ok(mut guard) = self.worker_handle.lock()
+            && let Some(handle) = guard.take()
+        {
+            let _ = handle.join();
         }
         self.analytics.shutdown();
     }
@@ -194,8 +217,10 @@ fn flush_buffer(
             let _ = conn.execute_batch("CHECKPOINT");
             cleanup_expired(conn, retention_days);
         }
-        buffer.clear();
+    } else {
+        warn!("[logs] flush failed, dropping {} events", buffer.len());
     }
+    buffer.clear();
 }
 
 fn flush_events(conn: &Connection, events: &[LogEvent]) -> bool {
@@ -266,14 +291,15 @@ fn flush_proxies(conn: &Connection, events: &[&ProxyEvent]) -> Result<()> {
         return Ok(());
     }
     let mut stmt = conn.prepare_cached(
-        "INSERT INTO proxy_log (timestamp, username, model_name, provider_name,
+        "INSERT INTO proxy_log (timestamp, username, api_key_name, model_name, provider_name,
          prompt_tokens, completion_tokens, total_tokens, cached_tokens, latency_ms, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     )?;
     for e in events {
         stmt.execute(params![
             e.timestamp.naive_utc(),
             e.username,
+            e.api_key_name,
             e.model_name,
             e.provider_name,
             e.prompt_tokens,

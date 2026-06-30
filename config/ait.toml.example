@@ -6,7 +6,11 @@ health_detail = false
 # 过期 session 自动清理间隔（秒）
 session_cleanup_interval_secs = 3600
 # 频率限制器过期条目清理间隔（秒）
-# rate_limiter_cleanup_interval_secs = 600
+rate_limiter_cleanup_interval_secs = 600
+# Ctrl-C 后等待 in-flight 请求完成的最大时间（秒），超时后强制退出
+graceful_timeout_secs = 10
+# 允许设置 X-Forwarded-For 的可信代理 IP，空数组则不信任任何 XFF
+trusted_proxies = ["127.0.0.1", "::1"]
 
 [auth]
 # 仅控制 /v1/* 代理接口的认证开关，Admin 接口始终需要认证
@@ -22,6 +26,8 @@ allow_registration = false
 registration_code = ""
 # 每个用户最大 API key 数量
 max_api_keys_per_user = 10
+# 频率限制器 DashMap 最大 IP 条目数，防内存耗尽
+rate_limiter_max_entries = 100000
 # 登录频率限制 (最多5次/300秒，超限封禁900秒)
 login_rate_limit = { max_attempts = 5, window_secs = 300, ban_secs = 900 }
 # 注册频率限制 (最多3次/3600秒，超限封禁3600秒)

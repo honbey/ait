@@ -1,23 +1,55 @@
+use std::rc::Rc;
+
 use sycamore::prelude::*;
 use sycamore::web::events;
 use sycamore::web::tags::*;
 use sycamore_futures::spawn_local_scoped;
 
 use crate::api::{create_provider, delete_provider, fetch_provider_types, update_provider};
-use crate::components::data_table::{
-    debounce_refresh, render_add_button, render_table_header, table_container, table_shell,
-    th_center, th_left,
-};
 use crate::components::delete_confirm::render_delete_confirm;
 use crate::components::modal::{
-    action_cell, form_checkbox, form_error, form_field, form_field_with_hint, form_input,
-    form_submit_footer, icon_button, modal_dialog, modal_title, mono_cell, name_cell,
-    render_detail_modal, secondary_cell, select_input, status_badge, text_cell, timestamp_cell,
-    zebra_bg,
+    FormStatus, action_cell, blue_add_button, form_checkbox, form_error, form_field,
+    form_field_with_hint, form_input, form_submit_footer, icon_button, modal_dialog, modal_title,
+    mono_cell, name_cell, render_detail_modal, secondary_cell, select_input, status_badge,
+    text_cell, timestamp_cell,
 };
+use crate::components::table::{
+    Column, CrudModal, common_table, debounce_refresh, th_center, th_left,
+};
+use crate::components::toast::ToastManager;
 use crate::i18n::{I18n, K};
 use crate::models::Provider;
 use crate::storage::get_storage;
+
+struct ProviderForm {
+    name: Signal<String>,
+    provider_type: Signal<String>,
+    base_url: Signal<String>,
+    api_key: Signal<String>,
+    enabled: Signal<bool>,
+}
+
+impl ProviderForm {
+    fn new() -> Self {
+        Self {
+            name: create_signal(String::new()),
+            provider_type: create_signal("openai_compat".to_string()),
+            base_url: create_signal(String::new()),
+            api_key: create_signal(String::new()),
+            enabled: create_signal(true),
+        }
+    }
+
+    fn from_provider(p: &Provider) -> Self {
+        Self {
+            name: create_signal(p.name.clone()),
+            provider_type: create_signal(p.provider_type.clone()),
+            base_url: create_signal(p.base_url.clone()),
+            api_key: create_signal(String::new()),
+            enabled: create_signal(p.enabled),
+        }
+    }
+}
 
 fn provider_display_name(provider_type: &str, provider_types: &[(String, String)]) -> String {
     provider_types
@@ -29,7 +61,7 @@ fn provider_display_name(provider_type: &str, provider_types: &[(String, String)
 
 fn render_provider_detail(
     prov: Provider,
-    show_detail: Signal<Option<usize>>,
+    modal: Signal<CrudModal<Provider>>,
     provider_types: &[(String, String)],
 ) -> View {
     let i18n = use_context::<I18n>();
@@ -63,24 +95,30 @@ fn render_provider_detail(
                 crate::models::format_timestamp(prov.updated_at),
             ),
         ],
-        move |_| show_detail.set(None),
+        move |_| modal.set(CrudModal::Closed),
     )
 }
 
 fn render_add_modal(
     provider_refresh: Signal<usize>,
-    show_add_modal: Signal<bool>,
+    modal: Signal<CrudModal<Provider>>,
     provider_types: Vec<(String, String)>,
 ) -> View {
     let i18n = use_context::<I18n>();
-    let form_name = create_signal(String::new());
-    let form_type = create_signal("openai_compat".to_string());
-    let form_base_url = create_signal(String::new());
-    let form_api_key = create_signal(String::new());
-    let form_enabled = create_signal(true);
-    let form_err = create_signal(String::new());
-    let form_loading = create_signal(false);
+    let ProviderForm {
+        name: form_name,
+        provider_type: form_type,
+        base_url: form_base_url,
+        api_key: form_api_key,
+        enabled: form_enabled,
+    } = ProviderForm::new();
+    let FormStatus {
+        err: form_err,
+        loading: form_loading,
+    } = FormStatus::new();
 
+    let close = move |_| modal.set(CrudModal::Closed);
+    let i18n_err = i18n.clone();
     let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
         if form_loading.get() {
@@ -89,7 +127,7 @@ fn render_add_modal(
         let n = form_name.get_clone();
         let u = form_base_url.get_clone();
         if n.is_empty() || u.is_empty() {
-            form_err.set("Name and Base URL are required".into());
+            form_err.set(i18n_err.t(K::NameAndBaseUrlRequired));
             return;
         }
         form_loading.set(true);
@@ -104,7 +142,7 @@ fn render_add_modal(
             match create_provider(&n, &ptype, &u, api_key, enabled).await {
                 Ok(_) => {
                     form_loading.set(false);
-                    show_add_modal.set(false);
+                    modal.set(CrudModal::Closed);
                     provider_refresh.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -122,7 +160,7 @@ fn render_add_modal(
             .children((
                 modal_title(
                     i18n.t_replace(K::Add, "entity", &i18n.t(K::Providers)),
-                    move |_| show_add_modal.set(false),
+                    close,
                 ),
                 form_field(
                     "add-provider-name".into(),
@@ -154,33 +192,33 @@ fn render_add_modal(
                 ),
                 form_checkbox("add-enabled".into(), i18n.t(K::StatusEnabled), form_enabled),
                 form_error(form_err),
-                form_submit_footer(
-                    i18n.t(K::Cancel),
-                    move |_| show_add_modal.set(false),
-                    form_loading,
-                    i18n.t(K::Save),
-                ),
+                form_submit_footer(i18n.t(K::Cancel), close, form_loading, i18n.t(K::Save)),
             )),
-        move |_| show_add_modal.set(false),
+        close,
     )
 }
 
 fn render_edit_modal(
     provider_refresh: Signal<usize>,
-    show_edit_modal: Signal<Option<Provider>>,
+    modal: Signal<CrudModal<Provider>>,
     prov: Provider,
     provider_types: Vec<(String, String)>,
 ) -> View {
     let i18n = use_context::<I18n>();
-    let form_name = create_signal(prov.name.clone());
-    let form_type = create_signal(prov.provider_type.clone());
-    let form_base_url = create_signal(prov.base_url.clone());
-    let form_api_key = create_signal(String::new());
-    let form_enabled = create_signal(prov.enabled);
+    let ProviderForm {
+        name: form_name,
+        provider_type: form_type,
+        base_url: form_base_url,
+        api_key: form_api_key,
+        enabled: form_enabled,
+    } = ProviderForm::from_provider(&prov);
+    let FormStatus {
+        err: form_err,
+        loading: form_loading,
+    } = FormStatus::new();
     let form_clear_key = create_signal(false);
-    let form_err = create_signal(String::new());
-    let form_loading = create_signal(false);
 
+    let close = move |_| modal.set(CrudModal::Closed);
     let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
         if form_loading.get() {
@@ -211,7 +249,7 @@ fn render_edit_modal(
             match update_provider(&pid, &n, &ptype, &u, api_key, enabled).await {
                 Ok(_) => {
                     form_loading.set(false);
-                    show_edit_modal.set(None);
+                    modal.set(CrudModal::Closed);
                     provider_refresh.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -229,7 +267,7 @@ fn render_edit_modal(
             .children((
                 modal_title(
                     i18n.t_replace(K::Edit, "entity", &i18n.t(K::Providers)),
-                    move |_| show_edit_modal.set(None),
+                    close,
                 ),
                 form_field(
                     "edit-provider-name".into(),
@@ -271,70 +309,15 @@ fn render_edit_modal(
                     form_enabled,
                 ),
                 form_error(form_err),
-                form_submit_footer(
-                    i18n.t(K::Cancel),
-                    move |_| show_edit_modal.set(None),
-                    form_loading,
-                    i18n.t(K::Save),
-                ),
+                form_submit_footer(i18n.t(K::Cancel), close, form_loading, i18n.t(K::Save)),
             )),
-        move |_| show_edit_modal.set(None),
+        close,
     )
-}
-
-fn make_provider_rows(
-    providers: Vec<Provider>,
-    show_detail: Signal<Option<usize>>,
-    is_admin: Signal<bool>,
-    show_edit_modal: Signal<Option<Provider>>,
-    show_delete_confirm: Signal<Option<Provider>>,
-    provider_types: &[(String, String)],
-) -> Vec<View> {
-    let i18n = use_context::<I18n>();
-    let enabled_text = i18n.t(K::StatusEnabled);
-    let disabled_text = i18n.t(K::StatusDisabled);
-    providers
-        .into_iter()
-        .enumerate()
-        .map(|(idx, prov)| {
-            let prov_modal = prov.clone();
-            let show = show_detail;
-            tr().class(zebra_bg(idx))
-                .children((
-                    name_cell(prov.name),
-                    secondary_cell(provider_display_name(&prov.provider_type, provider_types)),
-                    mono_cell(prov.base_url),
-                    text_cell(status_badge(prov.enabled, &enabled_text, &disabled_text)),
-                    timestamp_cell(prov.updated_at),
-                    action_cell(icon_button("fas fa-eye", move |_| show.set(Some(idx)))),
-                    action_cell(
-                        View::from_dynamic::<View>({
-                            let show_edit = show_edit_modal;
-                            let show_del = show_delete_confirm;
-                            move || {
-                                if is_admin.get() {
-                                    let p_edit = prov_modal.clone();
-                                    let p_del = prov_modal.clone();
-                                    div().class("flex items-center justify-center gap-3").children((
-                                        icon_button("fas fa-pen", move |_| show_edit.set(Some(p_edit.clone()))),
-                                        icon_button("fas fa-trash", move |_| show_del.set(Some(p_del.clone()))),
-                                    )).into()
-                                } else {
-                                    i().class("fas fa-ban text-gray-300 dark:text-gray-600 cursor-not-allowed").into()
-                                }
-                            }
-                        }),
-                    ),
-                ))
-                .into()
-        })
-        .collect()
 }
 
 #[derive(Props)]
 pub struct ProviderTableProps {
     pub providers: Vec<Provider>,
-    pub is_admin: Signal<bool>,
     pub provider_refresh: Signal<usize>,
     pub provider_refreshing: Signal<bool>,
 }
@@ -342,12 +325,10 @@ pub struct ProviderTableProps {
 #[component]
 pub fn ProviderTable(props: ProviderTableProps) -> View {
     let i18n = use_context::<I18n>();
-    let show_detail = create_signal::<Option<usize>>(None);
-    let show_edit_modal = create_signal::<Option<Provider>>(None);
-    let show_delete_confirm = create_signal::<Option<Provider>>(None);
-    let show_add_modal = create_signal(false);
+    let toast = use_context::<ToastManager>();
+    let modal = create_signal::<CrudModal<Provider>>(CrudModal::Closed);
+    let deleting = create_signal(false);
     let providers = props.providers;
-    let is_admin = props.is_admin;
     let provider_refresh = props.provider_refresh;
     let provider_refreshing = props.provider_refreshing;
 
@@ -375,8 +356,10 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
         let st = storage;
         spawn_local_scoped(async move {
             if let Ok(types) = fetch_provider_types().await {
-                let pairs: Vec<(String, String)> =
-                    types.into_iter().map(|t| (t.id, t.name)).collect();
+                let pairs: Vec<(String, String)> = types
+                    .into_iter()
+                    .map(|t| (t.provider_type, t.display_name))
+                    .collect();
                 if let Ok(json) = serde_json::to_string(&pairs) {
                     st.set_item(PT_KEY, &json);
                     st.set_item(PT_TS_KEY, &js_sys::Date::now().to_string());
@@ -386,116 +369,123 @@ pub fn ProviderTable(props: ProviderTableProps) -> View {
         });
     }
 
-    let rows = make_provider_rows(
-        providers.clone(),
-        show_detail,
-        is_admin,
-        show_edit_modal,
-        show_delete_confirm,
-        &provider_types.get_clone(),
-    );
-    let count = providers.len();
+    let enabled_text = i18n.t(K::StatusEnabled);
+    let disabled_text = i18n.t(K::StatusDisabled);
 
-    let header = render_table_header(
-        i18n.t(K::ProviderTitle),
-        count,
-        provider_refreshing,
-        debounce_refresh(provider_refresh, provider_refreshing),
-        render_add_button(is_admin, {
-            let i18n = i18n.clone();
-            move || {
-                button()
-                    .class("px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors flex items-center gap-2 text-sm font-medium cursor-pointer")
-                    .on(events::click, {
-                        move |_| show_add_modal.set(true)
-                    })
-                    .children((
-                        i().class("fas fa-plus"),
-                        span().children(i18n.t_replace(K::Add, "entity", &i18n.t(K::Providers))),
-                    ))
-                    .into()
-            }
-        }),
-    );
-
-    let table = table_shell(
-        vec![
-            th_left(i18n.t(K::Name)),
-            th_left(i18n.t(K::Providers)),
-            th_left(i18n.t(K::ProviderBaseUrl)),
-            th_left(i18n.t(K::TableStatus)),
-            th_left(i18n.t(K::UpdatedAt)),
-            th_center(i18n.t(K::Detail)),
-            th_center(i18n.t(K::Actions)),
-        ],
-        rows,
-    );
-
-    let detail_modal = View::from_dynamic({
-        let providers = providers.clone();
-        move || match show_detail.get() {
-            Some(idx) => providers.get(idx).map_or(View::new(), |prov| {
-                render_provider_detail(prov.clone(), show_detail, &provider_types.get_clone())
+    let columns = vec![
+        Column {
+            header: th_left(i18n.t(K::Name)),
+            cell: Rc::new(|p: Provider| name_cell(p.name)),
+        },
+        Column {
+            header: th_left(i18n.t(K::Providers)),
+            cell: Rc::new({
+                let pt = provider_types;
+                move |p: Provider| {
+                    secondary_cell(provider_display_name(&p.provider_type, &pt.get_clone()))
+                }
             }),
-            None => View::new(),
-        }
-    });
+        },
+        Column {
+            header: th_left(i18n.t(K::ProviderBaseUrl)),
+            cell: Rc::new(|p: Provider| mono_cell(p.base_url)),
+        },
+        Column {
+            header: th_left(i18n.t(K::TableStatus)),
+            cell: {
+                let et = enabled_text.clone();
+                let dt = disabled_text.clone();
+                Rc::new(move |p: Provider| text_cell(status_badge(p.enabled, &et, &dt)))
+            },
+        },
+        Column {
+            header: th_left(i18n.t(K::UpdatedAt)),
+            cell: Rc::new(|p: Provider| timestamp_cell(p.updated_at)),
+        },
+        Column {
+            header: th_center(i18n.t(K::Detail)),
+            cell: Rc::new(move |p: Provider| {
+                action_cell(icon_button("fas fa-eye", move |_| {
+                    modal.set(CrudModal::Detail(p.clone()))
+                }))
+            }),
+        },
+        Column {
+            header: th_center(i18n.t(K::Actions)),
+            cell: Rc::new(move |p: Provider| {
+                let p1 = p.clone();
+                let p2 = p.clone();
+                action_cell(
+                    div()
+                        .class("flex items-center justify-center gap-3")
+                        .children((
+                            icon_button("fas fa-pen", move |_| {
+                                modal.set(CrudModal::Edit(p1.clone()))
+                            }),
+                            icon_button("fas fa-trash", move |_| {
+                                modal.set(CrudModal::Delete(p2.clone()))
+                            }),
+                        )),
+                )
+            }),
+        },
+    ];
 
-    let add_modal = View::from_dynamic(move || {
-        if show_add_modal.get() {
-            render_add_modal(provider_refresh, show_add_modal, provider_types.get_clone())
-        } else {
+    let add_button = blue_add_button(
+        i18n.t_replace(K::Add, "entity", &i18n.t(K::Providers)),
+        move |_| modal.set(CrudModal::Add),
+    );
+
+    let i18n_modals = i18n.clone();
+    let modals = View::from_dynamic(move || match modal.get_clone() {
+        CrudModal::Detail(prov) => render_provider_detail(prov, modal, &provider_types.get_clone()),
+        CrudModal::Add => render_add_modal(provider_refresh, modal, provider_types.get_clone()),
+        CrudModal::Edit(prov) => {
+            render_edit_modal(provider_refresh, modal, prov, provider_types.get_clone())
+        }
+        CrudModal::Delete(prov) => render_delete_confirm(
+            i18n_modals.t_replace(K::DeleteConfirmMessage, "name", &prov.name),
+            deleting,
+            {
+                let toast = toast.clone();
+                let i18n = i18n_modals.clone();
+                move |_| {
+                    if deleting.get() {
+                        return;
+                    }
+                    deleting.set(true);
+                    let pid = prov.id.clone();
+                    let toast = toast.clone();
+                    let i18n = i18n.clone();
+                    spawn_local_scoped(async move {
+                        match delete_provider(&pid).await {
+                            Ok(_) => {
+                                toast.success(i18n.t(K::ProviderDeleted));
+                                provider_refresh.update(|v| *v += 1);
+                            }
+                            Err(e) => {
+                                deleting.set(false);
+                                toast.error(e.to_string());
+                            }
+                        }
+                    });
+                }
+            },
+            move |_| modal.set(CrudModal::Closed),
+        ),
+        CrudModal::Closed => {
+            deleting.set(false);
             View::new()
         }
     });
 
-    let edit_modal = View::from_dynamic(move || match show_edit_modal.get_clone() {
-        Some(prov) => render_edit_modal(
-            provider_refresh,
-            show_edit_modal,
-            prov,
-            provider_types.get_clone(),
-        ),
-        None => View::new(),
-    });
-
-    let delete_modal = View::from_dynamic({
-        let i18n = i18n.clone();
-        move || match show_delete_confirm.get_clone() {
-            Some(prov) => {
-                let deleting = create_signal(false);
-                let prov_id = prov.id.clone();
-                render_delete_confirm(
-                    i18n.t_replace(K::DeleteConfirmMessage, "name", &prov.name),
-                    deleting,
-                    move |_| {
-                        if deleting.get() {
-                            return;
-                        }
-                        deleting.set(true);
-                        let pid = prov_id.clone();
-                        spawn_local_scoped(async move {
-                            match delete_provider(&pid).await {
-                                Ok(_) => {
-                                    provider_refresh.update(|v| *v += 1);
-                                }
-                                Err(e) => {
-                                    deleting.set(false);
-                                    sycamore::web::console_log!("Failed: {}", e);
-                                }
-                            }
-                        });
-                    },
-                    move |_| show_delete_confirm.set(None),
-                )
-            }
-            None => View::new(),
-        }
-    });
-
-    table_container(
-        header,
-        table,
-        vec![detail_modal, add_modal, edit_modal, delete_modal],
+    common_table(
+        i18n.t(K::ProviderTitle),
+        providers,
+        provider_refreshing,
+        debounce_refresh(provider_refresh, provider_refreshing),
+        columns,
+        add_button,
+        vec![modals],
     )
 }

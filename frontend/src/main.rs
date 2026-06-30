@@ -15,6 +15,8 @@ mod storage;
 mod components;
 mod views;
 
+use crate::components::toast::ToastManager;
+use crate::i18n::K;
 use crate::storage::{LANG_KEY, THEME_KEY, get_storage};
 
 // ─── App Component ─────────────────────────────────────────────
@@ -24,34 +26,54 @@ fn App() -> View {
     let storage = get_storage();
     let initial_dark = matches!(storage.get_item(THEME_KEY), Some(v) if v == "dark");
     let dark = create_signal(initial_dark);
-    let authenticated = create_signal(false);
-    let session_checked = create_signal(false);
+    let authenticated = create_signal(None::<bool>);
 
     let initial_lang = storage
         .get_item(LANG_KEY)
         .unwrap_or_else(|| "zh".to_string());
     let i18n = i18n::I18n::new(&initial_lang);
+    let toast_manager = ToastManager::new();
 
     let username = create_signal(None::<String>);
-    let role = create_signal(None::<String>);
+
+    // Register session-expired handler: on 401 from non-auth API calls
+    let i18n_expired = i18n.clone();
+    let toast_expired = toast_manager.clone();
+    crate::api::set_session_expired_handler(Box::new(move || {
+        authenticated.set(Some(false));
+        toast_expired.error(i18n_expired.t(K::SessionExpired));
+    }));
 
     // On mount, check if we have a valid session cookie
     spawn_local_scoped(async move {
-        if let Ok(Some((uname, r))) = crate::api::check_session().await {
-            username.set(Some(uname));
-            role.set(Some(r));
-            authenticated.set(true);
+        match crate::api::check_session().await {
+            Ok(Some(uname)) => {
+                username.set(Some(uname));
+                authenticated.set(Some(true));
+            }
+            Ok(None) => authenticated.set(Some(false)),
+            Err(_) => {} // network error — keep skeleton (authenticated stays None)
         }
-        session_checked.set(true);
     });
 
     let i18n_clone = i18n.clone();
     create_effect(move || {
         storage.set_item(LANG_KEY, &i18n_clone.lang());
         storage.set_item(THEME_KEY, if dark.get() { "dark" } else { "light" });
+        let code = if i18n_clone.lang() == "zh" {
+            "zh-CN"
+        } else {
+            "en"
+        };
+        if let Some(doc) = web_sys::window().and_then(|w| w.document())
+            && let Some(el) = doc.document_element()
+        {
+            let _ = el.set_attribute("lang", code);
+        }
     });
 
     provide_context(i18n);
+    provide_context(toast_manager);
 
     Router(RouterProps::new(
         HistoryIntegration::new(),
@@ -59,10 +81,8 @@ fn App() -> View {
             provide_context(route);
             layout::Layout(layout::LayoutProps {
                 dark,
-                session_checked,
                 authenticated,
                 username,
-                role,
             })
         },
     ))

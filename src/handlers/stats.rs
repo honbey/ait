@@ -1,21 +1,10 @@
-use axum::{
-    Extension, Json,
-    extract::{Query, State},
-    http::StatusCode,
-};
-use serde::{Deserialize, Serialize};
+use crate::error::internal_error;
+use axum::{Extension, Json, extract::State, http::StatusCode};
+use serde::Serialize;
 
 use crate::app::AppState;
 use crate::db::SessionUser;
-use crate::db::models::{DailyRequests, DailyTokens};
-use crate::error::{AitError, require_admin};
-
-const MAX_DAYS: u64 = 365;
-
-#[derive(Deserialize)]
-pub struct DaysQuery {
-    pub days: Option<u64>,
-}
+use crate::error::AitError;
 
 #[derive(Serialize)]
 pub struct DashboardStats {
@@ -25,40 +14,25 @@ pub struct DashboardStats {
     pub token_consumption: u64,
 }
 
-pub async fn daily_requests(
-    State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
-    Query(q): Query<DaysQuery>,
-) -> Result<Json<Vec<DailyRequests>>, (StatusCode, Json<AitError>)> {
-    require_admin(&session)?;
-    let days = q.days.unwrap_or(1).min(MAX_DAYS);
-    Ok(Json(state.log_manager.daily_requests(days as i64).await))
-}
-
-pub async fn daily_tokens(
-    State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
-    Query(q): Query<DaysQuery>,
-) -> Result<Json<Vec<DailyTokens>>, (StatusCode, Json<AitError>)> {
-    require_admin(&session)?;
-    let days = q.days.unwrap_or(1).min(MAX_DAYS);
-    Ok(Json(state.log_manager.daily_tokens(days as i64).await))
-}
-
 pub async fn dashboard_stats(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
+    Extension(_session): Extension<SessionUser>,
 ) -> Result<Json<DashboardStats>, (StatusCode, Json<AitError>)> {
-    require_admin(&session)?;
-
-    let providers = state.db.list_providers()?;
-    let models = state.db.list_models()?;
+    let db = state.db.clone();
+    let (provider_count, model_count) =
+        crate::run_blocking(move || -> Result<(usize, usize), crate::db::DbError> {
+            let p = db.count_providers()?;
+            let m = db.count_models()?;
+            Ok((p, m))
+        })
+        .await
+        .map_err(internal_error)?;
     let api_request_count = state.log_manager.total_requests(7).await;
     let token_consumption = state.log_manager.total_tokens(7).await;
 
     Ok(Json(DashboardStats {
-        provider_count: providers.len(),
-        model_count: models.len(),
+        provider_count,
+        model_count,
         api_request_count,
         token_consumption,
     }))

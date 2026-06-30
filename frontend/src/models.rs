@@ -4,7 +4,8 @@ use serde::Deserialize;
 pub struct LoginResponse {
     #[allow(dead_code)]
     pub ok: bool,
-    pub role: String,
+    #[allow(dead_code)]
+    pub session_key: String,
 }
 
 pub fn format_timestamp(ts: f64) -> String {
@@ -13,16 +14,15 @@ pub fn format_timestamp(ts: f64) -> String {
     let y = date.get_full_year();
     let m = date.get_month() + 1;
     let d = date.get_date();
-    let h = date.get_hours();
-    let min = date.get_minutes();
-    let s = date.get_seconds();
-    format!("{}-{:02}-{:02} {:02}:{:02}:{:02}", y, m, d, h, min, s)
+    format!("{}-{:02}-{:02}", y, m, d)
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderTypeInfo {
-    pub id: String,
-    pub name: String,
+    #[serde(rename = "type")]
+    pub provider_type: String,
+    #[serde(rename = "display_name")]
+    pub display_name: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -79,15 +79,9 @@ pub struct DashboardStats {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct DailyRequests {
-    pub date: String,
+pub struct BucketEntry {
+    pub timestamp: f64,
     pub count: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct DailyTokens {
-    pub date: String,
-    pub tokens: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +90,6 @@ pub struct DashboardData {
     pub model_count: u64,
     pub api_request_count: u64,
     pub token_consumption: u64,
-    pub daily_requests: Vec<DailyRequests>,
-    pub daily_tokens: Vec<DailyTokens>,
+    pub request_buckets: Vec<BucketEntry>,
+    pub token_buckets: Vec<BucketEntry>,
 }

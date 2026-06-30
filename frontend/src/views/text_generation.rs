@@ -4,8 +4,8 @@ use sycamore::web::events;
 use sycamore::web::tags::*;
 use sycamore_futures::spawn_local_scoped;
 
-use crate::api::generate_completion;
-use crate::components::modal::{form_field, select_input};
+use crate::api::generate_completion_stream;
+use crate::components::modal::{CLASS_INPUT, CLASS_PAGE_SHELL, form_field, select_input};
 use crate::i18n::{I18n, K};
 use crate::models::Model;
 
@@ -58,9 +58,28 @@ pub fn render_text_generation_view(models: Vec<Model>) -> View {
                 let temp = temperature.get_clone().parse::<f32>().ok();
                 let mt = max_tokens.get_clone().parse::<u32>().ok();
                 let tp = top_p.get_clone().parse::<f32>().ok();
-                match generate_completion(&key, &model, &prompt_text, mt, temp, tp).await {
-                    Ok(text) => response.set(Some(text)),
-                    Err(e) => error.set(i18n.t_replace(K::TextGenError, "msg", &e.to_string())),
+                match generate_completion_stream(&key, &model, &prompt_text, mt, temp, tp).await {
+                    Ok(stream) => {
+                        use futures_util::StreamExt;
+                        response.set(Some(String::new()));
+                        futures_util::pin_mut!(stream);
+                        while let Some(item) = stream.next().await {
+                            match item {
+                                Ok(text) => {
+                                    response.update(|r| {
+                                        if let Some(t) = r {
+                                            t.push_str(&text);
+                                        }
+                                    });
+                                }
+                                Err(e) => {
+                                    error.set(i18n.t_replace(K::TextGenError, "msg", &e));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => error.set(i18n.t_replace(K::TextGenError, "msg", &e)),
                 }
                 loading.set(false);
             });
@@ -68,7 +87,7 @@ pub fn render_text_generation_view(models: Vec<Model>) -> View {
     };
 
     div()
-        .class("p-4 sm:p-8")
+        .class(CLASS_PAGE_SHELL)
         .children(
             div()
                 .class("bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 max-w-6xl mx-auto")
@@ -87,7 +106,7 @@ pub fn render_text_generation_view(models: Vec<Model>) -> View {
                                             .attr("id", "text-gen-api-key")
                                             .attr("type", "text")
                                             .attr("placeholder", "sk-...")
-                                            .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-mono")
+                                            .class(format!("{} font-mono", CLASS_INPUT))
                                             .bind(bind::value, api_key)
                                             .into(),
                                     ),
@@ -102,7 +121,7 @@ pub fn render_text_generation_view(models: Vec<Model>) -> View {
                                         textarea()
                                             .attr("id", "text-gen-prompt")
                                             .attr("placeholder", i18n.t(K::TextGenPromptPlaceholder))
-                                            .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-y")
+                                            .class(format!("{} resize-y", CLASS_INPUT))
                                             .attr("rows", "8")
                                             .bind(bind::value, prompt)
                                             .into(),

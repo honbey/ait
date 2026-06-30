@@ -14,16 +14,19 @@
 #   chore     miscellaneous
 #   revert    revert a previous commit
 #
-# Scopes:
-#   Backend: db, middleware, handlers, apikeys, users, auth,
-#            admin, proxy, main, config, models, providers
-#   Frontend: fe-api, fe-components, fe-topbar, fe-views,
-#             fe-i18n, fe-models, fe-layout
+# Scopes (optional, omit for cross-cutting changes):
+#   Backend:  db, middleware, handlers (apikeys/users/auth/admin)
+#   Frontend: fe, fe-layout, fe-api, fe-components, fe-topbar,
+#             fe-views, fe-i18n, fe-models, fe-toast
+#   Both:     deps (dependency bumps or ci)
 #
 # Subject: imperative mood, lowercase, no period
 # Body:   explain what and why (not how), wrap at 72 chars
 # Footer: BREAKING CHANGE or Closes #issue
 #
 # Examples:
-#   feat(db): add expires_at field to ApiKey
-#   fix(middleware): check api key expiry before auth
+#   perf: add DashMap api_key_cache with TTL 300s
+#   refactor: replace process::exit with type-safe AppInitError
+#   fix(db): avoid infinite loop in LogManager::shutdown
+#   refactor(fe): consolidate form signals into typed structs
+#   chore(fe-layout): remove dead code

@@ -5,15 +5,20 @@ use sycamore_router::navigate;
 use crate::components::auth_form::{
     auth_error_display, auth_input_field, auth_link_footer, auth_page_shell, auth_submit_button,
 };
+use crate::components::modal::FormStatus;
+use crate::components::toast::ToastManager;
 use crate::i18n::{I18n, K};
 
 pub fn render_register_view() -> View {
     let i18n = use_context::<I18n>();
+    let toast = use_context::<ToastManager>();
     let username = create_signal(String::new());
     let password = create_signal(String::new());
     let registration_code = create_signal(String::new());
-    let error = create_signal(String::new());
-    let loading = create_signal(false);
+    let FormStatus {
+        err: error,
+        loading,
+    } = FormStatus::new();
 
     let i18n_submit = i18n.clone();
     let on_submit = move |ev: web_sys::SubmitEvent| {
@@ -33,9 +38,11 @@ pub fn render_register_view() -> View {
         let p = password.get_clone();
         let c = registration_code.get_clone();
         let i18n_async = i18n_submit.clone();
+        let toast = toast.clone();
         spawn_local_scoped(async move {
             match crate::api::register_api(&u, &p, &c).await {
                 Ok(()) => {
+                    toast.success(i18n_async.t(K::RegistrationSuccessful));
                     navigate("/login");
                 }
                 Err(e) => {

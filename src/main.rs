@@ -1,4 +1,5 @@
 mod app;
+mod blocking;
 mod config;
 mod db;
 mod error;
@@ -7,11 +8,14 @@ mod middleware;
 mod providers;
 mod rate_limiter;
 
-use axum::{
-    Extension,
-    routing::{Router, delete, get, post, put},
-};
+pub(crate) use blocking::run_blocking;
+
+#[cfg(test)]
+mod test_utils;
+
+use axum::routing::{Router, delete, get, post, put};
 use std::net::SocketAddr;
+use std::time::Duration;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::info;
@@ -21,11 +25,12 @@ use handlers::admin::{
     get_provider_api_key, list_models, list_provider_types, list_providers, update_model,
     update_provider,
 };
+use handlers::analytics::{requests, tokens};
 use handlers::apikeys::{create_api_key, delete_api_key, list_api_keys, toggle_api_key};
 use handlers::auth::{login, logout, register, session_check};
 use handlers::proxy::{chat_completions, completions, embeddings, health, list_models_proxy};
-use handlers::stats::{daily_requests, daily_tokens, dashboard_stats};
-use handlers::users::{change_password, delete_user, list_users, update_user};
+use handlers::stats::dashboard_stats;
+use handlers::users::{change_password, delete_user, list_users};
 use middleware::{
     access_log_middleware, admin_auth_middleware, auth_middleware, login_rate_limit_middleware,
     register_rate_limit_middleware,
@@ -44,10 +49,18 @@ async fn main() {
         }
     };
 
-    let state = app::AppState::new(config.clone());
+    let state = match app::AppState::new(config.clone()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("Init failed: {}", e);
+            std::process::exit(1);
+        }
+    };
     let log_manager = state.log_manager.clone();
+    let shutdown_token = state.shutdown_token.clone();
+    let graceful_timeout = Duration::from_secs(config.server.graceful_timeout_secs);
 
-    let app = build_app(state, &config);
+    let app = build_app(state);
 
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
         .parse()
@@ -55,16 +68,53 @@ async fn main() {
 
     info!("ait starting on http://{}", addr);
 
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!("Failed to bind to {}: {}", addr, e);
+            std::process::exit(1);
+        });
+
+    let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(async {
-        tokio::signal::ctrl_c().await.ok();
+    .with_graceful_shutdown({
+        let token = shutdown_token.clone();
+        async move {
+            token.cancelled().await;
+        }
     })
-    .await
-    .unwrap();
+    .into_future();
+
+    tokio::pin!(server);
+
+    let shutdown_watcher = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl-C handler");
+        tracing::info!("Shutdown requested, waiting for in-flight requests...");
+        shutdown_token.cancel();
+
+        tokio::select! {
+            _ = tokio::time::sleep(graceful_timeout) => {
+                tracing::warn!("Graceful shutdown timeout, forcing exit");
+            }
+            _ = tokio::signal::ctrl_c() => {
+                tracing::warn!("Forced shutdown via Ctrl+C");
+            }
+        }
+    };
+
+    tokio::select! {
+        result = &mut server => {
+            result.unwrap_or_else(|e| {
+                tracing::error!("Server error: {}", e);
+                std::process::exit(1);
+            });
+        }
+        _ = shutdown_watcher => {}
+    }
 
     log_manager.shutdown();
 }
@@ -95,22 +145,19 @@ fn init_logging() {
         .init();
 }
 
-fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
+fn build_app(state: app::AppState) -> Router {
     // Auth routes (no admin middleware — they handle their own auth logic)
-    let login_route = Router::new().route("/admin/login", post(login)).layer(
+    let login_route = Router::new().route("/auth/login", post(login)).layer(
         axum::middleware::from_fn_with_state(state.clone(), login_rate_limit_middleware),
     );
-    let register_route = Router::new()
-        .route("/admin/register", post(register))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            register_rate_limit_middleware,
-        ));
+    let register_route = Router::new().route("/auth/register", post(register)).layer(
+        axum::middleware::from_fn_with_state(state.clone(), register_rate_limit_middleware),
+    );
     let auth_route = Router::new()
         .merge(login_route)
         .merge(register_route)
-        .route("/admin/logout", post(logout))
-        .route("/admin/session", get(session_check))
+        .route("/auth/logout", post(logout))
+        .route("/auth/session", get(session_check))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             access_log_middleware,
@@ -119,38 +166,32 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
     // Admin API routes (admin auth required)
     let admin_api = Router::new()
         // Provider management
-        .route("/admin/providers", post(create_provider))
-        .route("/admin/providers", get(list_providers))
-        .route("/admin/providers/{id}", get(get_provider))
-        .route("/admin/providers/{id}", put(update_provider))
-        .route("/admin/providers/{id}", delete(delete_provider))
-        .route("/admin/providers/{id}/api-key", get(get_provider_api_key))
-        .route("/admin/provider-types", get(list_provider_types))
+        .route("/providers", post(create_provider))
+        .route("/providers", get(list_providers))
+        .route("/providers/{id}", get(get_provider))
+        .route("/providers/{id}", put(update_provider))
+        .route("/providers/{id}", delete(delete_provider))
+        .route("/providers/{id}/api-key", get(get_provider_api_key))
+        .route("/provider-types", get(list_provider_types))
         // Model management
-        .route("/admin/models", post(create_model))
-        .route("/admin/models", get(list_models))
-        .route("/admin/models/{name}", put(update_model))
-        .route("/admin/models/{name}", delete(delete_model))
+        .route("/models", post(create_model))
+        .route("/models", get(list_models))
+        .route("/models/{name}", put(update_model))
+        .route("/models/{name}", delete(delete_model))
         // User management
-        .route("/admin/users", get(list_users))
-        .route("/admin/users/{username}", put(update_user))
-        .route("/admin/users/{username}", delete(delete_user))
-        .route("/admin/users/{username}/password", put(change_password))
+        .route("/users", get(list_users))
+        .route("/users/{username}", delete(delete_user))
+        .route("/users/{username}/password", put(change_password))
         // API key management
-        .route("/admin/users/{username}/api-keys", get(list_api_keys))
-        .route("/admin/users/{username}/api-keys", post(create_api_key))
-        .route(
-            "/admin/users/{username}/api-keys/{key}",
-            put(toggle_api_key),
-        )
-        .route(
-            "/admin/users/{username}/api-keys/{key}",
-            delete(delete_api_key),
-        )
+        .route("/users/{username}/api-keys", get(list_api_keys))
+        .route("/users/{username}/api-keys", post(create_api_key))
+        .route("/users/{username}/api-keys/{key}", put(toggle_api_key))
+        .route("/users/{username}/api-keys/{key}", delete(delete_api_key))
         // Dashboard statistics
-        .route("/admin/stats", get(dashboard_stats))
-        .route("/admin/stats/requests", get(daily_requests))
-        .route("/admin/stats/tokens", get(daily_tokens))
+        .route("/stats", get(dashboard_stats))
+        // Hourly-bucketed analytics
+        .route("/data/requests", get(requests))
+        .route("/data/tokens", get(tokens))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             access_log_middleware,
@@ -161,7 +202,7 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
         ));
 
     // Health check (no auth required)
-    let health_route = Router::new().route("/v1/health", get(health));
+    let health_route = Router::new().route("/health", get(health));
 
     // OpenAI-compatible proxy routes (auth required)
     let proxy_api = Router::new()
@@ -188,11 +229,10 @@ fn build_app(state: app::AppState, config: &config::ConfigApp) -> Router {
         .nest_service("/static", frontend_root)
         .fallback_service(frontend_spa)
         .merge(auth_route)
-        .merge(admin_api)
-        .merge(health_route)
         .merge(proxy_api)
+        .merge(health_route)
+        .nest("/api", Router::new().merge(admin_api))
         .with_state(state)
-        .layer(Extension(config.clone()))
         .layer(
             TraceLayer::new_for_http()
                 .on_response(DefaultOnResponse::new().level(tracing::Level::DEBUG)),

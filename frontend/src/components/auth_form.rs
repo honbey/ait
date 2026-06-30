@@ -3,6 +3,8 @@ use sycamore::web::bind;
 use sycamore::web::events;
 use sycamore::web::tags::*;
 
+use crate::components::modal::{CLASS_INPUT, CLASS_LABEL};
+
 pub fn auth_page_shell(
     on_submit: impl Fn(web_sys::SubmitEvent) + 'static,
     title: String,
@@ -33,17 +35,18 @@ pub fn auth_input_field(
     is_last: bool,
 ) -> View {
     let margin = if is_last { "mb-6" } else { "mb-4" };
-    div().class(margin).children((
-        label()
-            .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
-            .children(label_text),
-        input()
-            .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
-            .attr("type", input_type)
-            .attr("placeholder", placeholder)
-            .bind(bind::value, value)
-            .on(events::input, move |_| error.set(String::new())),
-    )).into()
+    div()
+        .class(margin)
+        .children((
+            label().class(CLASS_LABEL).children(label_text),
+            input()
+                .class(CLASS_INPUT)
+                .attr("type", input_type)
+                .attr("placeholder", placeholder)
+                .bind(bind::value, value)
+                .on(events::input, move |_| error.set(String::new())),
+        ))
+        .into()
 }
 
 pub fn auth_error_display(error: Signal<String>) -> View {

@@ -25,9 +25,9 @@ impl I18n {
             translations: create_signal(default.clone()),
             cache: RefCell::new(HashMap::from([(initial_lang.to_string(), default)])),
         };
-        let this = Self(Rc::new(inner));
-        this.fetch_and_cache(initial_lang);
-        this
+        Self(Rc::new(inner))
+        // No fetch for initial language — embedded translations are loaded directly.
+        // set_lang handles non-initial languages with embedded fallback + lazy fetch.
     }
 
     pub fn lang(&self) -> String {
@@ -42,6 +42,14 @@ impl I18n {
         if let Some(cached) = self.0.cache.borrow().get(lang).cloned() {
             self.0.translations.set(cached);
         } else {
+            // Use embedded translations as immediate fallback while fetch happens
+            let embedded = Self::embedded_translations(lang);
+            self.0
+                .cache
+                .borrow_mut()
+                .insert(lang.to_string(), embedded.clone());
+            self.0.translations.set(embedded);
+            // Async fetch can overwrite with updated translations at runtime
             self.fetch_and_cache(lang);
         }
     }
@@ -64,8 +72,9 @@ impl I18n {
         spawn_local_scoped(async move {
             match Self::fetch_translations(&lang).await {
                 Ok(map) => {
-                    this.0.cache.borrow_mut().insert(lang.clone(), map.clone());
-                    if this.0.lang.get_clone() == lang {
+                    let is_current = this.0.lang.get_clone() == lang;
+                    this.0.cache.borrow_mut().insert(lang, map.clone());
+                    if is_current {
                         this.0.translations.set(map);
                     }
                 }

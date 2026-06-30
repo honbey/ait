@@ -5,18 +5,20 @@ use sycamore_router::navigate;
 use crate::components::auth_form::{
     auth_error_display, auth_input_field, auth_link_footer, auth_page_shell, auth_submit_button,
 };
+use crate::components::modal::FormStatus;
 use crate::i18n::{I18n, K};
 
 pub fn render_login_view(
-    authenticated: Signal<bool>,
+    authenticated: Signal<Option<bool>>,
     username: Signal<Option<String>>,
-    role: Signal<Option<String>>,
 ) -> View {
     let i18n = use_context::<I18n>();
     let form_user = create_signal(String::new());
     let form_pass = create_signal(String::new());
-    let error = create_signal(String::new());
-    let loading = create_signal(false);
+    let FormStatus {
+        err: error,
+        loading,
+    } = FormStatus::new();
 
     let i18n_submit = i18n.clone();
     let on_submit = move |ev: web_sys::SubmitEvent| {
@@ -37,10 +39,9 @@ pub fn render_login_view(
         let i18n_async = i18n_submit.clone();
         spawn_local_scoped(async move {
             match crate::api::login_api(&user, &pass).await {
-                Ok(role_str) => {
+                Ok(()) => {
                     username.set(Some(user));
-                    role.set(Some(role_str));
-                    authenticated.set(true);
+                    authenticated.set(Some(true));
                     navigate("/console/dashboard");
                 }
                 Err(e) => {

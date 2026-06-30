@@ -1,9 +1,11 @@
 use sycamore::prelude::*;
+use sycamore::web::events;
 use sycamore::web::tags::*;
+use sycamore_router::navigate;
 
 use crate::i18n::{I18n, K};
 
-pub fn render_index_view(authenticated: Signal<bool>) -> View {
+pub fn render_index_view(authenticated: Signal<Option<bool>>) -> View {
     let i18n = use_context::<I18n>();
     div()
         .class("min-h-[calc(100vh-3.5rem)] flex items-center justify-center bg-gray-50 dark:bg-gray-900")
@@ -20,10 +22,14 @@ pub fn render_index_view(authenticated: Signal<bool>) -> View {
                     {
                         let i18n = i18n.clone();
                         View::from_dynamic(move || -> View {
-                            if authenticated.get() {
+                            if authenticated.get() == Some(true) {
                                 div().class("mt-8 flex items-center justify-center gap-4").children(
                                     a()
                                         .attr("href", "/console/dashboard")
+                                        .on(events::click, move |e: web_sys::MouseEvent| {
+                                            e.prevent_default();
+                                            navigate("/console/dashboard");
+                                        })
                                         .class("px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg cursor-pointer transition-colors inline-block")
                                         .children(i18n.t(K::Console)),
                                 )
@@ -32,10 +38,18 @@ pub fn render_index_view(authenticated: Signal<bool>) -> View {
                                 div().class("mt-8 flex items-center justify-center gap-4").children((
                                     a()
                                         .attr("href", "/login")
+                                        .on(events::click, move |e: web_sys::MouseEvent| {
+                                            e.prevent_default();
+                                            navigate("/login");
+                                        })
                                         .class("px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg cursor-pointer transition-colors inline-block")
                                         .children(i18n.t(K::Login)),
                                     a()
                                         .attr("href", "/register")
+                                        .on(events::click, move |e: web_sys::MouseEvent| {
+                                            e.prevent_default();
+                                            navigate("/register");
+                                        })
                                         .class("px-6 py-3 border border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 font-semibold rounded-lg cursor-pointer transition-colors inline-block")
                                         .children(i18n.t(K::Register)),
                                 ))

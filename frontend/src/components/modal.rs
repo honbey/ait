@@ -3,6 +3,29 @@ use sycamore::web::bind;
 use sycamore::web::events;
 use sycamore::web::tags::*;
 
+pub struct FormStatus {
+    pub err: Signal<String>,
+    pub loading: Signal<bool>,
+}
+
+impl FormStatus {
+    pub fn new() -> Self {
+        Self {
+            err: create_signal(String::new()),
+            loading: create_signal(false),
+        }
+    }
+}
+
+pub const CLASS_LABEL: &str = "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1";
+pub const CLASS_INPUT: &str = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 \
+    rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 \
+    focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none";
+pub const CLASS_PAGE_SHELL: &str = "p-4 sm:p-8";
+pub const CLASS_CARD: &str = "bg-white dark:bg-gray-800 rounded-xl shadow-sm";
+pub const CLASS_ICON_BTN: &str = "cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 \
+     transition-colors";
+
 pub fn modal_dialog(
     children: impl Into<View>,
     on_close: impl Fn(web_sys::MouseEvent) + 'static,
@@ -29,7 +52,7 @@ pub fn modal_title(title: String, on_close: impl Fn(web_sys::MouseEvent) + 'stat
                 .children(title),
             button()
                 .attr("type", "button")
-                .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+                .class(CLASS_ICON_BTN)
                 .on(events::click, on_close)
                 .children(i().class("fas fa-times")),
         ))
@@ -51,7 +74,7 @@ pub fn form_field(id: String, label_text: String, input: View) -> View {
         .children((
             label()
                 .attr("for", id)
-                .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
+                .class(CLASS_LABEL)
                 .children(label_text),
             input,
         ))
@@ -61,15 +84,12 @@ pub fn form_field(id: String, label_text: String, input: View) -> View {
 pub fn form_field_with_hint(id: String, label_text: String, hint: String, input: View) -> View {
     div()
         .children((
-            label()
-                .attr("for", id)
-                .class("block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1")
-                .children((
-                    span().children(label_text),
-                    span()
-                        .class("text-xs text-gray-400 dark:text-gray-500 ml-1")
-                        .children(hint),
-                )),
+            label().attr("for", id).class(CLASS_LABEL).children((
+                span().children(label_text),
+                span()
+                    .class("text-xs text-gray-400 dark:text-gray-500 ml-1")
+                    .children(hint),
+            )),
             input,
         ))
         .into()
@@ -78,7 +98,7 @@ pub fn form_field_with_hint(id: String, label_text: String, hint: String, input:
 pub fn form_input(id: String, placeholder: String, value: Signal<String>) -> View {
     input()
         .attr("id", id)
-        .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
+        .class(CLASS_INPUT)
         .attr("type", "text")
         .attr("placeholder", placeholder)
         .bind(bind::value, value)
@@ -128,7 +148,6 @@ fn loading_button<F: Fn(web_sys::MouseEvent) + 'static>(
     btn_type: &str,
     on_click: Option<F>,
 ) -> View {
-    let lbl = label;
     let bt = btn_type.to_string();
     let color_class = format!(
         "{color} text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 px-4 py-2"
@@ -146,11 +165,11 @@ fn loading_button<F: Fn(web_sys::MouseEvent) + 'static>(
                 .class("flex items-center gap-2")
                 .children((
                     i().class("fas fa-spinner animate-spin"),
-                    span().children(lbl.clone()),
+                    span().children(label.clone()),
                 ))
                 .into()
         } else {
-            span().children(lbl.clone()).into()
+            span().children(label.clone()).into()
         }
     }))
     .into()
@@ -232,9 +251,20 @@ pub fn zebra_bg(idx: usize) -> &'static str {
 
 pub fn icon_button(icon: &str, on_click: impl Fn(web_sys::MouseEvent) + 'static) -> View {
     button()
-        .class("cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors")
+        .class(CLASS_ICON_BTN)
         .on(events::click, on_click)
         .children(i().class(format!("{} text-xs", icon)))
+        .into()
+}
+
+pub fn blue_add_button(label: String, on_click: impl Fn(web_sys::MouseEvent) + 'static) -> View {
+    button()
+        .on(events::click, on_click)
+        .class("px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors flex items-center gap-2 text-sm font-medium cursor-pointer")
+        .children((
+            i().class("fas fa-plus"),
+            span().children(label),
+        ))
         .into()
 }
 
@@ -292,9 +322,8 @@ pub fn select_input(id: String, value: Signal<String>, options: Vec<(String, Str
             option()
                 .attr("value", val.clone())
                 .bool_attr("selected", {
-                    let v = value;
                     let val = val.clone();
-                    move || v.get_clone() == val
+                    move || value.get_clone() == val
                 })
                 .children(label)
                 .into()
@@ -302,7 +331,7 @@ pub fn select_input(id: String, value: Signal<String>, options: Vec<(String, Str
         .collect();
     select()
         .attr("id", id)
-        .class("w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none")
+        .class(CLASS_INPUT)
         .bind(bind::value, value)
         .children(option_views)
         .into()

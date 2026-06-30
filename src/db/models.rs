@@ -12,21 +12,6 @@ pub fn mask_api_key(key: &str) -> String {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum UserRole {
-    #[default]
-    User,
-    Admin,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Permission {
-    pub provider_id: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub model_names: Vec<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
     pub id: String,
@@ -42,55 +27,33 @@ pub struct Provider {
     pub updated_at: DateTime<chrono::Utc>,
 }
 
-impl Provider {
-    pub fn masked_api_key(&self) -> Option<String> {
-        self.api_key.as_ref().map(|key| mask_api_key(key))
-    }
-}
-
-#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(
+    Default,
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    strum::AsRefStr,
+    strum::EnumMessage,
+    strum::EnumIter,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum ProviderType {
     #[default]
     #[serde(rename = "openai_compat")]
+    #[strum(serialize = "openai_compat", message = "OpenAI Compatible")]
     OpenAICompat,
     #[serde(rename = "deepseek")]
+    #[strum(serialize = "deepseek", message = "DeepSeek")]
     DeepSeek,
+    #[strum(message = "Zhipu")]
     Zhipu,
+    #[strum(message = "Ollama")]
     Ollama,
+    #[strum(message = "llama.cpp")]
     Llamacpp,
-}
-
-impl ProviderType {
-    pub fn serde_name(&self) -> &'static str {
-        match self {
-            Self::OpenAICompat => "openai_compat",
-            Self::DeepSeek => "deepseek",
-            Self::Zhipu => "zhipu",
-            Self::Ollama => "ollama",
-            Self::Llamacpp => "llamacpp",
-        }
-    }
-
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::OpenAICompat => "OpenAI Compatible",
-            Self::DeepSeek => "DeepSeek",
-            Self::Zhipu => "Zhipu",
-            Self::Ollama => "Ollama",
-            Self::Llamacpp => "llama.cpp",
-        }
-    }
-
-    pub fn all() -> &'static [Self] {
-        &[
-            Self::OpenAICompat,
-            Self::DeepSeek,
-            Self::Zhipu,
-            Self::Ollama,
-            Self::Llamacpp,
-        ]
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +99,13 @@ pub struct ApiKeyInfo {
     pub id: String,
     pub username: String,
     pub name: String,
+    pub enabled: bool,
+    #[serde(
+        default,
+        with = "ts_seconds_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub expires_at: Option<DateTime<chrono::Utc>>,
     #[serde(with = "ts_seconds")]
     pub created_at: DateTime<chrono::Utc>,
 }
@@ -144,8 +114,6 @@ pub struct ApiKeyInfo {
 pub struct User {
     pub username: String,
     pub password_hash: String,
-    pub role: UserRole,
-    pub allowed: Vec<Permission>,
     pub api_keys: Vec<ApiKey>,
     #[serde(with = "ts_seconds")]
     pub created_at: DateTime<chrono::Utc>,
@@ -153,21 +121,10 @@ pub struct User {
     pub updated_at: DateTime<chrono::Utc>,
 }
 
-impl User {
-    pub fn to_session_user(&self) -> SessionUser {
-        SessionUser {
-            username: self.username.clone(),
-            role: self.role.clone(),
-            allowed: self.allowed.clone(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionUser {
     pub username: String,
-    pub role: UserRole,
-    pub allowed: Vec<Permission>,
+    pub api_key_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,6 +157,7 @@ pub struct AccessEvent {
 pub struct ProxyEvent {
     pub timestamp: DateTime<Utc>,
     pub username: Option<String>,
+    pub api_key_name: Option<String>,
     pub model_name: String,
     pub provider_name: String,
     pub prompt_tokens: Option<i64>,
@@ -220,15 +178,9 @@ pub struct AuditEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DailyRequests {
-    pub date: String,
+pub struct BucketEntry {
+    pub timestamp: f64,
     pub count: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DailyTokens {
-    pub date: String,
-    pub tokens: u64,
 }
 
 pub enum LogEvent {

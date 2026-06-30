@@ -1,3 +1,4 @@
+use serde::Serialize;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
@@ -64,5 +65,7 @@ pub fn build_line_option(x_data: &[String], series_list: &[ChartSeries]) -> JsVa
         "series": series_json,
     });
 
-    js_sys::JSON::parse(&serde_json::to_string(&option).unwrap()).unwrap()
+    option
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .unwrap()
 }

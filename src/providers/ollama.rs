@@ -1,4 +1,5 @@
-use super::{ProviderCore, UpstreamProvider};
+// Developed against Ollama 0.30.10
+use super::{ProviderCore, UpstreamProvider, inject_default_shadow};
 use reqwest::Client;
 
 pub struct OllamaProvider {
@@ -11,8 +12,36 @@ impl OllamaProvider {
     }
 }
 
+fn rename_reasoning_key(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::Object(map) => {
+            if let Some(val) = map.remove("reasoning") {
+                map.insert("reasoning_content".to_string(), val);
+            }
+            for (_key, val) in map.iter_mut() {
+                rename_reasoning_key(val);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for val in arr.iter_mut() {
+                rename_reasoning_key(val);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[async_trait::async_trait]
 impl UpstreamProvider for OllamaProvider {
+    fn transform_response(&self, body: &[u8], model_name: &str) -> Vec<u8> {
+        let Ok(mut val) = serde_json::from_slice::<serde_json::Value>(body) else {
+            return body.to_vec();
+        };
+        inject_default_shadow(&mut val, model_name);
+        rename_reasoning_key(&mut val);
+        serde_json::to_vec(&val).unwrap_or_else(|_| body.to_vec())
+    }
+
     async fn build_request(
         &self,
         _client: &Client,
@@ -21,28 +50,7 @@ impl UpstreamProvider for OllamaProvider {
         upstream_model: &str,
         upstream_path: &str,
     ) -> Result<reqwest::Request, String> {
-        let mut body = body.clone();
-
-        if body.get("model").and_then(|m| m.as_str()).is_some() {
-            body["model"] = serde_json::json!(upstream_model);
-        }
-
-        if stream {
-            body["stream"] = serde_json::Value::Bool(true);
-            body["stream_options"] = serde_json::json!({"include_usage": true});
-        }
-
-        let body_bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
-
-        let builder = self
-            .core
-            .client()
-            .post(self.core.upstream_url(upstream_path))
-            .header("Content-Type", "application/json")
-            .body(body_bytes);
-
-        let builder = self.core.apply_auth_header(builder);
-        let request = builder.build().map_err(|e| e.to_string())?;
-        Ok(request)
+        self.core
+            .finalize_request(body.clone(), stream, upstream_model, upstream_path)
     }
 }

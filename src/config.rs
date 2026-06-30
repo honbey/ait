@@ -1,5 +1,6 @@
 use config::{Config, ConfigError, Environment, File, FileFormat};
 use serde::Deserialize;
+use std::net::IpAddr;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ConfigApp {
@@ -17,6 +18,8 @@ pub struct ServerConfig {
     pub health_detail: bool,
     pub session_cleanup_interval_secs: u64,
     pub rate_limiter_cleanup_interval_secs: u64,
+    pub graceful_timeout_secs: u64,
+    pub trusted_proxies: Vec<IpAddr>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -35,6 +38,7 @@ pub struct AuthConfig {
     pub allow_registration: bool,
     pub registration_code: String,
     pub max_api_keys_per_user: u64,
+    pub rate_limiter_max_entries: u64,
     pub login_rate_limit: RateLimitConfig,
     pub register_rate_limit: RateLimitConfig,
 }
@@ -72,12 +76,15 @@ impl ConfigApp {
             .set_default("server.health_detail", false)?
             .set_default("server.session_cleanup_interval_secs", 3600u64)?
             .set_default("server.rate_limiter_cleanup_interval_secs", 600u64)?
+            .set_default("server.graceful_timeout_secs", 10u64)?
+            .set_default("server.trusted_proxies", vec!["127.0.0.1", "::1"])?
             .set_default("auth.enabled", true)?
             .set_default("auth.session_ttl_secs", 86400u64)?
             .set_default("auth.bootstrap_username", "admin")?
             .set_default("auth.allow_registration", false)?
             .set_default("auth.registration_code", "")?
             .set_default("auth.max_api_keys_per_user", 10u64)?
+            .set_default("auth.rate_limiter_max_entries", 100000u64)?
             .set_default("auth.login_rate_limit.max_attempts", 5u64)?
             .set_default("auth.login_rate_limit.window_secs", 300u64)?
             .set_default("auth.login_rate_limit.ban_secs", 900u64)?
@@ -106,9 +113,17 @@ impl ConfigApp {
 mod tests {
     use super::*;
 
+    fn write_toml(content: &str) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test_config.toml");
+        std::fs::write(&path, content).unwrap();
+        let stem = dir.path().join("test_config");
+        (dir, stem.to_str().unwrap().to_string())
+    }
+
     #[test]
     fn test_default_config() {
-        let config = ConfigApp::new(None).unwrap();
+        let config = ConfigApp::new(Some("config/ait.toml.example")).unwrap();
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 8000);
         assert_eq!(config.server.session_cleanup_interval_secs, 3600);
@@ -128,5 +143,43 @@ mod tests {
         assert_eq!(config.auth.register_rate_limit.max_attempts, 3);
         assert_eq!(config.auth.register_rate_limit.window_secs, 3600);
         assert_eq!(config.auth.register_rate_limit.ban_secs, 3600);
+    }
+
+    #[test]
+    fn config_toml_override() {
+        let (_dir, path) = write_toml(
+            r#"
+[server]
+port = 9090
+health_detail = true
+
+[auth]
+bootstrap_username = "custom_admin"
+max_api_keys_per_user = 20
+"#,
+        );
+        let config = ConfigApp::new(Some(&path)).unwrap();
+
+        // overridden
+        assert_eq!(config.server.port, 9090);
+        assert!(config.server.health_detail);
+        assert_eq!(config.auth.bootstrap_username, "custom_admin");
+        assert_eq!(config.auth.max_api_keys_per_user, 20);
+
+        // still defaults
+        assert_eq!(config.server.host, "127.0.0.1");
+        assert_eq!(config.server.session_cleanup_interval_secs, 3600);
+        assert_eq!(config.database.path, "./data/ait.rocksdb");
+        assert_eq!(config.proxy.timeout_secs, 300);
+        assert!(config.proxy.stream);
+    }
+
+    #[test]
+    fn config_missing_file() {
+        let config = ConfigApp::new(Some("/nonexistent/path/that/does/not/exist")).unwrap();
+        assert_eq!(config.server.port, 8000);
+        assert_eq!(config.server.host, "127.0.0.1");
+        assert_eq!(config.auth.max_api_keys_per_user, 10);
+        assert_eq!(config.log.retention_days, 30);
     }
 }
