@@ -1,5 +1,59 @@
 # 更新日志
 
+## [v0.1.4] - 2026-06-30
+
+### 新增功能
+
+- **llama.cpp 思考模式** — 支持 `reasoning_effort` → `chat_template_kwargs` 转换
+- **Ollama 思考兼容** — 响应中 `reasoning` → `reasoning_content` 转换
+- **`AppInitError` 类型安全退出** — 配置校验失败时替代 `process::exit`
+- **前端页面标题/语言动态化** — `<title>` 随路由切换（如 "Ait - 概览"），`<html lang>` 同步界面语言变化
+- **前端 401 自动跳转** — 会话过期时前端自动重定向到登录页并弹出提示
+- **前端渲染**
+  - **骨架屏** — 控制台页面加载中显示占位骨架屏，替代全屏 SVG spinner，减少布局抖动
+  - **路由过渡动画** — 页面切换时内容区 0.2s 淡入 + 轻微上滑
+  - **概览图表日期补全** — 折线图自动填充无数据日期，避免 x 轴跳空
+  - **全局 Toast 通知** — 独立 Toast 组件，支持 i18n，使用 Keyed 列表以便 DOM diff 优化
+  - **操作按钮繁忙状态** — 提交、保存等按钮操作中显示旋转图标，防止重复提交表单
+
+### 优化
+
+- **安全性**
+  - 登录/注册恒定时间比较，消除时序侧信道攻击面
+  - API Key 缓存（TTL 300s），减少 RocksDB 查询
+  - 速率限制器使用配置值替代硬编码
+  - DashMap 条目上限，防止内存耗尽
+  - `X-Forwarded-For` 限制为可信代理 IP
+- **性能**
+  - 使用 `spawn_blocking` 异步阻塞策略处理耗时操作（写、批量读），单次 `get_cf` (~10–50µs) 不使用，避免不必要的线程切换
+  - Auth header 预格式化 + `X-Forwarded-For` 可信代理列表预解析
+  - SSE `Vec<u8>` → `BytesMut`，消除双拷贝
+  - `serde_json::to_string` → `to_vec`（跳过 UTF-8 校验）
+  - 只计数查询 `count_providers` / `count_models` / `has_any_users` 替代全量反序列化
+  - 前端 `View::from_dynamic` 从 27 处减至 14 处
+  - 前端图表 `serde_json` → `serde-wasm-bindgen` 省去 String 中转
+  - 前端表单信号归并、Tailwind class 常量提取、`Rc<Vec>` 避免深拷贝
+- **路由重构**
+  - Admin 接口从 `/admin/` 迁移至 `/api/` 前缀下
+  - Proxy 模块拆分为 `mod` / `guard` / `sse` / `exec` 子模块
+  - 前端 `<a>` 全量替换为 SPA 客户端导航
+- **代码维护**
+  - 移除 `UserRole` / `Permission` 层级体系（所有用户等价），简化权限模型
+  - Provider type 枚举改用 `strum` 派生宏，移除手写 helper
+  - `AitError` 构造函数去重 + `into_response()` 内联
+  - 依赖裁剪：tokio 从 `full` 到 7 个必需 feature，移除未使用的 `reqwest/json`
+  - 前端 `data_table.rs` 合并入 `table.rs`
+
+### 修复
+
+- **LogManager 关闭死循环** — DuckDB `CHECKPOINT` 失败时陷入无限循环
+- **SSE 断开日志丢失** — 客户端断开后代理日志未写入
+- **delete_user 索引遗漏** — 删除用户未同步清理 `SESSION_EXPIRY_CF` 条目
+- **深色模式颜色不匹配** — API Key 过期时间在深色模式下颜色异常
+- **未登录网络错误闪烁** — 网络异常时骨架屏闪烁到登录页
+- **导航竞态** — 路由切换后旧数据短暂闪现
+- **前端内存泄漏** — Clipboard / Timeout / Closure 未正确释放
+
 ## [v0.1.3] - 2026-06-25
 
 ### 新增功能
@@ -16,7 +70,7 @@
   - `stream_options.include_usage` 自动注入 OpenAI/Ollama 请求体
   - `parse_sse_usage` 支持 OpenAI SSE 和 Ollama NDJSON 格式
   - 非流式响应同步解析 `usage` 字段
-- **ECharts 仪表盘图表**
+- **前端 ECharts 图表**
   - 前端 WASM 集成 ECharts 6.1，动态注入 `<script>` 延迟加载
   - `LineChart` 组件带挂载保护 + 超时清理，防止信号竞争
 - **启动自动创建管理员** — 检测到无 admin 用户时自动创建，不再依赖 `bootstrap_admin` 开关
@@ -48,7 +102,7 @@
 
 ### 修复
 
-- **前端导航竞态** — 仪表盘资源 `match` 加 `current_route` 守卫，防旧数据闪烁
+- **前端导航竞态** — 概览页面资源 `match` 加 `current_route` 守卫，防旧数据闪烁
 - **其他** - 见 commit 信息
 
 ## [v0.1.2] - 2026-06-21
@@ -57,7 +111,7 @@
 
 - **API Key 管理** — 前端完整 CRUD 页面（创建、启用/禁用、删除），支持创建时设定过期时间或永不过期，快速复制到剪贴板
 - **文本生成页面** — 新页面通过 `/v1/completions` 代理接口提交生成请求，支持 Temperature/MaxTokens/TopP 参数调节（range 滑块）
-- **仪表盘统计接口** — `GET /admin/stats/dashboard` 返回提供商/模型数量及预留的 API 调用次数/Token 消耗字段
+- **概览统计接口** — `GET /admin/stats/dashboard` 返回提供商/模型数量及预留的 API 调用次数/Token 消耗字段
 - **用户注册** — `POST /auth/register` 允许新用户注册，受 `allow_registration` 和 `registration_code` 配置控制
 - **配置项更新**
   - 移除旧版 `auth.token` 和 `auth.admin_token`
@@ -88,7 +142,7 @@
 ### 新增功能
 
 - **Web 管理界面** — 基于 Sycamore 0.9 的 WASM CSR 前端
-  - 6 个路由页面：首页、登录、仪表盘、提供商、模型、文本生成
+  - 6 个路由页面：首页、登录、概览盘、提供商、模型、文本生成
   - 响应式侧边栏 + 移动端浮动按钮
   - i18n 中英文切换
   - 深色模式切换（localStorage 持久化）

@@ -13,6 +13,8 @@
   - **Admin 管理** — 添加/更新/删除提供商和模型
   - **API Key 管理** — 创建/启用/禁用/删除 API Key
   - **用户注册** — 受控注册（可选注册码）
+  - **骨架屏加载** — 页面切换时显示占位骨架屏，减少布局抖动
+  - **全局 Toast** — 会话过期、操作结果等全局通知
 - **日志审计** — 访问日志、代理请求日志（含 Token 用量）、操作审计日志，支持自动清理和每日统计
 
 ## 快速开始
@@ -48,6 +50,9 @@ host = "127.0.0.1"
 port = 8000
 health_detail = false
 session_cleanup_interval_secs = 3600
+rate_limiter_cleanup_interval_secs = 600
+graceful_timeout_secs = 10
+trusted_proxies = ["127.0.0.1", "::1"]
 
 [auth]
 enabled = true
@@ -57,6 +62,9 @@ bootstrap_password = "must_replace_with_your_password"
 allow_registration = false
 registration_code = ""
 max_api_keys_per_user = 10
+rate_limiter_max_entries = 100000
+login_rate_limit = { max_attempts = 5, window_secs = 300, ban_secs = 900 }
+register_rate_limit = { max_attempts = 3, window_secs = 3600, ban_secs = 3600 }
 
 [database]
 path = "./data/ait.rocksdb"
