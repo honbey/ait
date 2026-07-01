@@ -56,15 +56,19 @@ Dock
 Thumbs.db
 ehthumbs.db
 
-# Config (actual config with secrets, keep .example instead)
+# Config / Database / frontend
 config/ait.toml
 data/
+frontend/dist
+frontend/assets
+.vscode/settings.json
+
+# AI AGENT
+.opencode
+.agents.local.md
 *.clinerules
 
 # Custom
-.vscode/settings.json
 *.tmp
-a.*
 *.http
-frontend/dist
-frontend/assets
+a.*

@@ -4,17 +4,17 @@
 
 ### 新增功能
 
-- **llama.cpp 思考模式** — 支持 `reasoning_effort` → `chat_template_kwargs` 转换
-- **Ollama 思考兼容** — 响应中 `reasoning` → `reasoning_content` 转换
-- **`AppInitError` 类型安全退出** — 配置校验失败时替代 `process::exit`
-- **前端页面标题/语言动态化** — `<title>` 随路由切换（如 "Ait - 概览"），`<html lang>` 同步界面语言变化
-- **前端 401 自动跳转** — 会话过期时前端自动重定向到登录页并弹出提示
+- **llama.cpp 思考模式** - 支持 `reasoning_effort` -> `chat_template_kwargs` 转换
+- **Ollama 思考兼容** - 响应中 `reasoning` -> `reasoning_content` 转换
+- **`AppInitError` 类型安全退出** - 配置校验失败时替代 `process::exit`
+- **前端页面标题/语言动态化** - `<title>` 随路由切换（如 "Ait - 概览"），`<html lang>` 同步界面语言变化
+- **前端 401 自动跳转** - 会话过期时前端自动重定向到登录页并弹出提示
 - **前端渲染**
-  - **骨架屏** — 控制台页面加载中显示占位骨架屏，替代全屏 SVG spinner，减少布局抖动
-  - **路由过渡动画** — 页面切换时内容区 0.2s 淡入 + 轻微上滑
-  - **概览图表日期补全** — 折线图自动填充无数据日期，避免 x 轴跳空
-  - **全局 Toast 通知** — 独立 Toast 组件，支持 i18n，使用 Keyed 列表以便 DOM diff 优化
-  - **操作按钮繁忙状态** — 提交、保存等按钮操作中显示旋转图标，防止重复提交表单
+  - **骨架屏** - 控制台页面加载中显示占位骨架屏，替代全屏 SVG spinner，减少布局抖动
+  - **路由过渡动画** - 页面切换时内容区 0.2s 淡入 + 轻微上滑
+  - **概览图表日期补全** - 折线图自动填充无数据日期，避免 x 轴跳空
+  - **全局 Toast 通知** - 独立 Toast 组件，支持 i18n，使用 Keyed 列表以便 DOM diff 优化
+  - **操作按钮繁忙状态** - 提交、保存等按钮操作中显示旋转图标，防止重复提交表单
 
 ### 优化
 
@@ -27,11 +27,11 @@
 - **性能**
   - 使用 `spawn_blocking` 异步阻塞策略处理耗时操作（写、批量读），单次 `get_cf` (~10–50µs) 不使用，避免不必要的线程切换
   - Auth header 预格式化 + `X-Forwarded-For` 可信代理列表预解析
-  - SSE `Vec<u8>` → `BytesMut`，消除双拷贝
-  - `serde_json::to_string` → `to_vec`（跳过 UTF-8 校验）
+  - SSE `Vec<u8>` -> `BytesMut`，消除双拷贝
+  - `serde_json::to_string` -> `to_vec`（跳过 UTF-8 校验）
   - 只计数查询 `count_providers` / `count_models` / `has_any_users` 替代全量反序列化
   - 前端 `View::from_dynamic` 从 27 处减至 14 处
-  - 前端图表 `serde_json` → `serde-wasm-bindgen` 省去 String 中转
+  - 前端图表 `serde_json` -> `serde-wasm-bindgen` 省去 String 中转
   - 前端表单信号归并、Tailwind class 常量提取、`Rc<Vec>` 避免深拷贝
 - **路由重构**
   - Admin 接口从 `/admin/` 迁移至 `/api/` 前缀下
@@ -46,13 +46,13 @@
 
 ### 修复
 
-- **LogManager 关闭死循环** — DuckDB `CHECKPOINT` 失败时陷入无限循环
-- **SSE 断开日志丢失** — 客户端断开后代理日志未写入
-- **delete_user 索引遗漏** — 删除用户未同步清理 `SESSION_EXPIRY_CF` 条目
-- **深色模式颜色不匹配** — API Key 过期时间在深色模式下颜色异常
-- **未登录网络错误闪烁** — 网络异常时骨架屏闪烁到登录页
-- **导航竞态** — 路由切换后旧数据短暂闪现
-- **前端内存泄漏** — Clipboard / Timeout / Closure 未正确释放
+- **LogManager 关闭死循环** - DuckDB `CHECKPOINT` 失败时陷入无限循环
+- **SSE 断开日志丢失** - 客户端断开后代理日志未写入
+- **delete_user 索引遗漏** - 删除用户未同步清理 `SESSION_EXPIRY_CF` 条目
+- **深色模式颜色不匹配** - API Key 过期时间在深色模式下颜色异常
+- **未登录网络错误闪烁** - 网络异常时骨架屏闪烁到登录页
+- **导航竞态** - 路由切换后旧数据短暂闪现
+- **前端内存泄漏** - Clipboard / Timeout / Closure 未正确释放
 
 ## [v0.1.3] - 2026-06-25
 
@@ -63,7 +63,7 @@
   - 后台线程批量写入，可配置 `flush_batch`（默认 100）和 `flush_interval_secs`（默认 10s）
   - `retention_days` 自动清理过期日志同时 `CHECKPOINT` 确保 WAL 数据写入数据库
   - Analytics 独立线程通过 channel 处理聚合查询，不阻塞 Tokio 运行时
-  - admin/login、admin/register 等接口埋入审计事件
+  - `admin/login`、`admin/register` 等敏感接口埋入审计事件
   - 使用 DuckDB 作为日志存储和日志后端，依赖: `duckdb = "1.10504.0"`（bundled + chrono）
 - **SSE 流式 Token 追踪**
   - `UsageTrackingStream` 包装上游字节流，结束前解析最后一个 SSE 事件提取 `usage`
@@ -73,11 +73,11 @@
 - **前端 ECharts 图表**
   - 前端 WASM 集成 ECharts 6.1，动态注入 `<script>` 延迟加载
   - `LineChart` 组件带挂载保护 + 超时清理，防止信号竞争
-- **启动自动创建管理员** — 检测到无 admin 用户时自动创建，不再依赖 `bootstrap_admin` 开关
-- **登录/注册限流** — `login_rate_limit` 和 `register_rate_limit` 可配置（attempts/window/ban），`RateLimiter` 基于 `dashmap`
-- **提供商类型查询** — `GET /admin/provider-types` 返回支持的提供商类型列表
+- **启动自动创建管理员** - 检测到无 admin 用户时自动创建，不再依赖 `bootstrap_admin` 开关
+- **登录/注册限流** - `login_rate_limit` 和 `register_rate_limit` 可配置（attempts/window/ban），`RateLimiter` 基于 `dashmap`
+- **提供商类型查询** - `GET /admin/provider-types` 返回支持的提供商类型列表
 - **上游代理优化** - 透传 `x-*` 自定义请求头和 `retry-after` 响应头
-- **Admin 保护** — 删除/降级用户时检查 `count_admins() <= 1`，拒绝移除最后的管理员
+- **Admin 保护** - 删除/降级用户时检查 `count_admins() <= 1`，拒绝移除最后的管理员
 
 ### 重构优化
 
@@ -90,7 +90,7 @@
   - `Database` 模块拆分为 `db/` 子目录：`store.rs`、`models.rs`、`logger.rs`、`analytics.rs`
   - Analytics `*_impl` 移除冗余条件分支，始终 `WHERE timestamp >= ?1`
   - Ollama 移除路径映射和字段转换，直接使用 OpenAI 兼容路径
-- **数据库写入原子性** — `delete_user` 等操作改用 `WriteBatch` 保证多 CF 写入原子性
+- **数据库写入原子性** - `delete_user` 等操作改用 `WriteBatch` 保证多 CF 写入原子性
 - **前端重构**
   - 提取 `auth_form.rs` 共享组件，登录/注册页面复用
   - 提取 `storage.rs` 模块，统一 localStorage 操作
@@ -102,17 +102,17 @@
 
 ### 修复
 
-- **前端导航竞态** — 概览页面资源 `match` 加 `current_route` 守卫，防旧数据闪烁
+- **前端导航竞态** - 概览页面资源 `match` 加 `current_route` 守卫，防旧数据闪烁
 - **其他** - 见 commit 信息
 
 ## [v0.1.2] - 2026-06-21
 
 ### 新增功能
 
-- **API Key 管理** — 前端完整 CRUD 页面（创建、启用/禁用、删除），支持创建时设定过期时间或永不过期，快速复制到剪贴板
-- **文本生成页面** — 新页面通过 `/v1/completions` 代理接口提交生成请求，支持 Temperature/MaxTokens/TopP 参数调节（range 滑块）
-- **概览统计接口** — `GET /admin/stats/dashboard` 返回提供商/模型数量及预留的 API 调用次数/Token 消耗字段
-- **用户注册** — `POST /auth/register` 允许新用户注册，受 `allow_registration` 和 `registration_code` 配置控制
+- **API Key 管理** - 前端完整 CRUD 页面（创建、启用/禁用、删除），支持创建时设定过期时间或永不过期，快速复制到剪贴板
+- **文本生成页面** - 新页面通过 `/v1/completions` 代理接口提交生成请求，支持 Temperature/MaxTokens/TopP 参数调节（range 滑块）
+- **概览统计接口** - `GET /admin/stats/dashboard` 返回提供商/模型数量及预留的 API 调用次数/Token 消耗字段
+- **用户注册** - `POST /auth/register` 允许新用户注册，受 `allow_registration` 和 `registration_code` 配置控制
 - **配置项更新**
   - 移除旧版 `auth.token` 和 `auth.admin_token`
   - 新增 `server.session_cleanup_interval_secs`、`auth.session_ttl_secs`、`auth.allow_registration`、`auth.registration_code`、`auth.max_api_keys_per_user`
@@ -134,15 +134,15 @@
 
 ### 修复
 
-- **登录后信号刷新** — 登录成功后立即更新 `username`/`role` 响应式信号，避免 UI 不同步
-- **登出闭包递归** — 修复登出时因闭包递归调用导致的 panic
+- **登录后信号刷新** - 登录成功后立即更新 `username`/`role` 响应式信号，避免 UI 不同步
+- **登出闭包递归** - 修复登出时因闭包递归调用导致的 panic
 
 ## [v0.1.1] - 2026-06-17
 
 ### 新增功能
 
-- **Web 管理界面** — 基于 Sycamore 0.9 的 WASM CSR 前端
-  - 6 个路由页面：首页、登录、概览盘、提供商、模型、文本生成
+- **Web 管理界面** - 基于 Sycamore 0.9 的 WASM CSR 前端
+  - 6 个路由页面：首页、登录、概览、提供商、模型、文本生成
   - 响应式侧边栏 + 移动端浮动按钮
   - i18n 中英文切换
   - 深色模式切换（localStorage 持久化）
@@ -159,22 +159,22 @@
 ### 新增功能
 
 - **代理 API（OpenAI 兼容）**
-  - `POST /v1/chat/completions` — 聊天补全（支持流式和非流式）
-  - `POST /v1/completions` — 文本补全
-  - `POST /v1/embeddings` — 嵌入
-  - `GET /v1/models` — 模型列表
-  - `GET /v1/health` — 健康检查，设有详细模式
+  - `POST /v1/chat/completions` - 聊天补全（支持流式和非流式）
+  - `POST /v1/completions` - 文本补全
+  - `POST /v1/embeddings` - 嵌入
+  - `GET /v1/models` - 模型列表
+  - `GET /v1/health` - 健康检查，设有详细模式
 
 - **管理 API**
-  - `POST /admin/providers` — 创建提供商
-  - `GET /admin/providers` — 列出提供商（API Key 脱敏）
-  - `GET /admin/providers/{id}` — 获取提供商（API Key 脱敏）
-  - `GET /admin/providers/{id}/api-key` — 获取完整 API Key
-  - `PUT /admin/providers/{id}` — 更新提供商
-  - `DELETE /admin/providers/{id}` — 删除提供商（级联删除模型）
-  - `POST /admin/models` — 创建模型
-  - `GET /admin/models` — 列出模型
-  - `DELETE /admin/models/{name}` — 删除模型
+  - `POST /admin/providers` - 创建提供商
+  - `GET /admin/providers` - 列出提供商（API Key 脱敏）
+  - `GET /admin/providers/{id}` - 获取提供商（API Key 脱敏）
+  - `GET /admin/providers/{id}/api-key` - 获取完整 API Key
+  - `PUT /admin/providers/{id}` - 更新提供商
+  - `DELETE /admin/providers/{id}` - 删除提供商（级联删除模型）
+  - `POST /admin/models` - 创建模型
+  - `GET /admin/models` - 列出模型
+  - `DELETE /admin/models/{name}` - 删除模型
 
 - **多提供商支持**
   - OpenAI 兼容接口（含 DeepSeek、Zhipu、LlamaCpp）
