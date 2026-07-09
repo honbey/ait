@@ -1,18 +1,20 @@
 # Ait Frontend
 
-基于 Sycamore 0.9 的 WASM CSR 前端，目前是编译为 WebAssembly 后嵌入 Ait 后端。
+基于 Leptos 0.8 CSR 的 WASM 前端，编译为 WebAssembly 后嵌入 Ait 后端。
 
 ## 技术栈
 
 | 层 | 选型 |
 |---|---|
-| 框架 | [Sycamore 0.9](https://sycamore.dev/)（响应式信号驱动）|
-| 路由 | [sycamore-router 0.9](https://docs.rs/sycamore-router/0.9) |
-| 样式 | [Tailwind CSS 4](https://tailwindcss.com/) |
+| 框架 | [Leptos 0.8](https://leptos.dev/)（CSR 模式）|
+| 路由 | [leptos_router 0.8](https://docs.rs/leptos_router/0.8) |
+| 样式 | [Tailwind CSS 4](https://tailwindcss.com/)（Trunk 构建钩子）|
 | 图表 | [ECharts 6.1](https://echarts.apache.org/)（动态注入）|
 | 构建 | [Trunk 0.21.14](https://trunkrs.dev/) |
 | HTTP | [gloo-net 0.7](https://docs.rs/gloo-net/0.7) |
-| 国际化 | compile-time i18n（`locales/lang.json`）|
+| 存储 | [gloo-storage 0.4](https://docs.rs/gloo-storage)（Local → Session → Memory 回退链）|
+| 格式化 | [leptosfmt](https://github.com/bram2103/leptosfmt)（`cargo fmt` 不会格式化 view! 宏）|
+| 国际化 | compile-time i18n（`locales/lang.json` → `build.rs` 生成 `K` 枚举）|
 
 ## 功能
 
@@ -28,8 +30,7 @@
 |------|------|------|
 | `/` | 首页 | - |
 | `/login` | 登录 | 用户名密码登录 |
-| `/register` | 注册 | 受控注册（需邀请码）|
-| `/console/dashboard` | 概览 | 提供商 / 模型总数、API 请求数 / Token 消耗图表|
+| `/console/overview` | 概览 | 提供商 / 模型总数、API 请求数 / Token 消耗图表|
 | `/console/providers` | 提供商管理 | - |
 | `/console/models` | 模型管理 | - |
 | `/console/api-keys` | API Key 管理 | - |
@@ -40,6 +41,9 @@
 ```bash
 # 开发模式（自动重编译）
 cd frontend && trunk watch
+
+# 格式化 Leptos view! 宏（cargo fmt 不会处理）
+leptosfmt src/
 
 # 生产构建
 trunk build --release --cargo-profile release-wasm

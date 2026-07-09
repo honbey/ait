@@ -1,35 +1,56 @@
-use serde::de::DeserializeOwned;
+use std::cell::Cell;
+use std::cell::OnceCell;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 use gloo_net::Error as NetError;
 use gloo_net::http::Request;
+use leptos::prelude::*;
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
-use crate::models::{
-    ApiKeyListItem, BucketEntry, CreateApiKeyResponse, DashboardStats, LoginResponse, Model,
-    Provider, ProviderTypeInfo,
-};
-
-use std::cell::{Cell, RefCell};
+use crate::auth::AuthContext;
+use crate::components::toast::ToastManager;
+use crate::i18n::{I18n, K};
+use reactive_stores::{Patch, Store};
 
 thread_local! {
     static SUPPRESS_401: Cell<bool> = const { Cell::new(false) };
-    static ON_SESSION_EXPIRED: RefCell<Option<Box<dyn Fn() + 'static>>> = const { RefCell::new(None) };
+    static BASE_URL: OnceCell<String> = const { OnceCell::new() };
 }
 
-pub fn set_session_expired_handler(callback: Box<dyn Fn() + 'static>) {
-    ON_SESSION_EXPIRED.with(|cell| {
-        *cell.borrow_mut() = Some(callback);
-    });
+struct CachedResponse {
+    json: String,
+    cached_at: f64,
 }
 
-fn session_expired() {
-    if SUPPRESS_401.get() {
-        return;
-    }
-    ON_SESSION_EXPIRED.with(|cell| {
-        if let Some(cb) = cell.borrow().as_ref() {
-            (cb)();
-        }
-    });
+thread_local! {
+    static FETCH_CACHE: RefCell<HashMap<String, CachedResponse>> = RefCell::new(HashMap::new());
+}
+
+const CACHE_TTL_MS: f64 = 120_000.0;
+const MAX_CACHE_ENTRIES: usize = 5;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProviderTypeInfo {
+    #[serde(rename = "type")]
+    pub provider_type: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Store, Patch)]
+pub struct Provider {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub provider_type: String,
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub enabled: bool,
+    #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
+    pub updated_at: i64,
 }
 
 struct Suppress401Guard;
@@ -47,20 +68,31 @@ impl Drop for Suppress401Guard {
     }
 }
 
-fn get_base_url() -> String {
-    sycamore::web::window()
-        .location()
-        .origin()
-        .unwrap_or_default()
+fn handle_401(status: u16) {
+    if status != 401 || SUPPRESS_401.get() {
+        return;
+    }
+    if let Some(auth) = use_context::<AuthContext>() {
+        auth.authenticated.set(Some(false));
+        if let (Some(toast), Some(i18n)) = (use_context::<ToastManager>(), use_context::<I18n>()) {
+            toast.error(i18n.t_untracked(K::SessionExpired));
+        }
+    }
 }
 
-// --- Core request helpers ---
+pub fn get_base_url() -> String {
+    BASE_URL.with(|cell| {
+        cell.get_or_init(|| {
+            web_sys::window()
+                .and_then(|w| w.location().origin().ok())
+                .unwrap_or_default()
+        })
+        .clone()
+    })
+}
 
 async fn response_to_error(resp: gloo_net::http::Response) -> NetError {
     let status = resp.status();
-    if status == 401 {
-        session_expired();
-    }
     let msg = resp
         .text()
         .await
@@ -71,27 +103,13 @@ async fn response_to_error(resp: gloo_net::http::Response) -> NetError {
     NetError::GlooError(msg)
 }
 
-async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
-    let url = format!("{}/{}", get_base_url(), path);
-    let resp = Request::get(&url).send().await?;
-    if resp.ok() {
-        resp.json().await
-    } else {
-        Err(response_to_error(resp).await)
-    }
-}
-
 async fn api_post<T: DeserializeOwned>(
     path: &str,
     body: &serde_json::Value,
-    headers: &[(&str, &str)],
 ) -> Result<T, NetError> {
     let url = format!("{}/{}", get_base_url(), path);
-    let mut req = Request::post(&url).header("Content-Type", "application/json");
-    for (k, v) in headers {
-        req = req.header(k, v);
-    }
-    let resp = req
+    let resp = Request::post(&url)
+        .header("Content-Type", "application/json")
         .body(body.to_string())
         .map_err(|e| NetError::GlooError(e.to_string()))?
         .send()
@@ -99,7 +117,10 @@ async fn api_post<T: DeserializeOwned>(
     if resp.ok() {
         resp.json().await
     } else {
-        Err(response_to_error(resp).await)
+        let status = resp.status();
+        let err = response_to_error(resp).await;
+        handle_401(status);
+        Err(err)
     }
 }
 
@@ -114,7 +135,10 @@ async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> R
     if resp.ok() {
         resp.json().await
     } else {
-        Err(response_to_error(resp).await)
+        let status = resp.status();
+        let err = response_to_error(resp).await;
+        handle_401(status);
+        Err(err)
     }
 }
 
@@ -124,17 +148,199 @@ async fn api_delete(path: &str) -> Result<(), NetError> {
     if resp.ok() {
         Ok(())
     } else {
-        Err(response_to_error(resp).await)
+        let status = resp.status();
+        let err = response_to_error(resp).await;
+        handle_401(status);
+        Err(err)
     }
 }
 
-fn api_key_value(api_key: Option<&str>) -> serde_json::Value {
-    api_key
-        .map(|k| serde_json::Value::String(k.to_string()))
-        .unwrap_or(serde_json::Value::Null)
+async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
+    let url = format!("{}/{}", get_base_url(), path);
+    let resp = Request::get(&url).send().await?;
+    if resp.ok() {
+        resp.json().await
+    } else {
+        let status = resp.status();
+        let err = response_to_error(resp).await;
+        handle_401(status);
+        Err(err)
+    }
 }
 
-// --- Model CRUD ---
+async fn api_get_cached<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
+    let key = path.to_string();
+
+    if let Some(cached) = FETCH_CACHE.with(|c| {
+        let map = c.borrow();
+        map.get(&key).and_then(|entry| {
+            if js_sys::Date::now() - entry.cached_at < CACHE_TTL_MS {
+                Some(entry.json.clone())
+            } else {
+                None
+            }
+        })
+    }) {
+        return serde_json::from_str(&cached).map_err(|e| NetError::GlooError(e.to_string()));
+    }
+
+    let url = format!("{}/{}", get_base_url(), path);
+    let resp = Request::get(&url).send().await?;
+    if !resp.ok() {
+        let status = resp.status();
+        let err = response_to_error(resp).await;
+        handle_401(status);
+        return Err(err);
+    }
+    let text = resp.text().await?;
+    let result: T = serde_json::from_str(&text).map_err(|e| NetError::GlooError(e.to_string()))?;
+
+    FETCH_CACHE.with(|c| {
+        let mut map = c.borrow_mut();
+        map.insert(
+            key,
+            CachedResponse {
+                json: text,
+                cached_at: js_sys::Date::now(),
+            },
+        );
+        if map.len() > MAX_CACHE_ENTRIES
+            && let Some(oldest_key) = map
+                .iter()
+                .min_by(|(_, a), (_, b)| a.cached_at.total_cmp(&b.cached_at))
+                .map(|(k, _)| k.clone())
+        {
+            map.remove(&oldest_key);
+        }
+    });
+
+    Ok(result)
+}
+
+pub async fn login_api(username: &str, password: &str) -> Result<(), NetError> {
+    let _guard = Suppress401Guard::new();
+    api_post::<serde_json::Value>(
+        "auth/login",
+        &serde_json::json!({ "username": username, "password": password }),
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn logout_api() -> Result<(), NetError> {
+    let _guard = Suppress401Guard::new();
+    api_post::<serde_json::Value>("auth/logout", &serde_json::json!({})).await?;
+    Ok(())
+}
+
+pub async fn check_session() -> Result<Option<String>, NetError> {
+    let _guard = Suppress401Guard::new();
+    let json: serde_json::Value = api_get("auth/session").await?;
+    let authenticated = json
+        .get("authenticated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !authenticated {
+        return Ok(None);
+    }
+    let username = json
+        .get("username")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    Ok(username)
+}
+
+pub async fn fetch_providers() -> Result<Vec<Provider>, NetError> {
+    api_get("api/providers").await
+}
+
+pub async fn fetch_provider_types() -> Result<Vec<ProviderTypeInfo>, NetError> {
+    api_get("api/provider-types").await
+}
+
+pub async fn create_provider(
+    name: &str,
+    provider_type: &str,
+    base_url: &str,
+    api_key: Option<&str>,
+    enabled: bool,
+) -> Result<Provider, NetError> {
+    api_post(
+        "api/providers",
+        &serde_json::json!({
+            "name": name,
+            "type": provider_type,
+            "base_url": base_url,
+            "api_key": api_key,
+            "enabled": enabled,
+        }),
+    )
+    .await
+}
+
+pub async fn update_provider(
+    id: &str,
+    name: &str,
+    provider_type: &str,
+    base_url: &str,
+    api_key: Option<&str>,
+    enabled: bool,
+) -> Result<Provider, NetError> {
+    api_put(
+        &format!("api/providers/{}", id),
+        &serde_json::json!({
+            "name": name,
+            "type": provider_type,
+            "base_url": base_url,
+            "api_key": api_key,
+            "enabled": enabled,
+        }),
+    )
+    .await
+}
+
+pub async fn delete_provider(id: &str) -> Result<(), NetError> {
+    api_delete(&format!("api/providers/{}", id)).await
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OverviewStats {
+    pub provider_count: u64,
+    pub model_count: u64,
+    pub api_request_count: u64,
+    pub token_consumption: u64,
+    pub rpm: f64,
+    pub tpm: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelDistEntry {
+    pub model: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenDistEntry {
+    pub category: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Store, Patch)]
+pub struct Model {
+    pub id: String,
+    pub name: String,
+    pub provider_id: String,
+    pub upstream_model: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
+pub async fn fetch_models() -> Result<Vec<Model>, NetError> {
+    api_get("api/models").await
+}
 
 pub async fn create_model(
     name: &str,
@@ -150,7 +356,6 @@ pub async fn create_model(
             "upstream_model": upstream_model,
             "enabled": enabled,
         }),
-        &[],
     )
     .await
 }
@@ -176,9 +381,29 @@ pub async fn delete_model(name: &str) -> Result<(), NetError> {
     api_delete(&format!("api/models/{}", name)).await
 }
 
-// --- API Key CRUD ---
+#[derive(Debug, Clone, Deserialize)]
+pub struct BucketEntry {
+    pub timestamp: i64,
+    pub count: u64,
+}
 
-pub async fn fetch_api_keys(username: &str) -> Result<Vec<ApiKeyListItem>, NetError> {
+// --- API Key Management ---
+
+#[derive(Debug, Clone, Default, Deserialize, Store, Patch)]
+pub struct ApiKey {
+    pub id: String,
+    pub key: String,
+    pub name: String,
+    #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+    pub enabled: bool,
+    #[serde(default)]
+    pub expires_at: Option<i64>,
+}
+
+pub async fn fetch_api_keys(username: &str) -> Result<Vec<ApiKey>, NetError> {
     api_get(&format!("api/users/{}/api-keys", username)).await
 }
 
@@ -186,109 +411,71 @@ pub async fn create_api_key(
     username: &str,
     name: &str,
     expires_at: Option<i64>,
-) -> Result<CreateApiKeyResponse, NetError> {
+) -> Result<ApiKey, NetError> {
     api_post(
         &format!("api/users/{}/api-keys", username),
         &serde_json::json!({ "name": name, "expires_at": expires_at }),
-        &[],
     )
     .await
 }
 
-pub async fn toggle_api_key(
+pub async fn update_api_key(
     username: &str,
     key_id: &str,
-    enabled: bool,
-) -> Result<ApiKeyListItem, NetError> {
+    name: Option<&str>,
+    expires_at: Option<i64>,
+    enabled: Option<bool>,
+) -> Result<ApiKey, NetError> {
+    let mut body = serde_json::json!({});
+    if let Some(n) = name {
+        body["name"] = serde_json::json!(n);
+    }
+    if let Some(n) = expires_at {
+        body["expires_at"] = serde_json::json!(n);
+    }
+    if let Some(e) = enabled {
+        body["enabled"] = serde_json::json!(e);
+    }
     api_put(
         &format!("api/users/{}/api-keys/{}", username, key_id),
-        &serde_json::json!({ "enabled": enabled }),
+        &body,
     )
     .await
 }
 
-pub async fn delete_api_key(username: &str, key: &str) -> Result<(), NetError> {
-    api_delete(&format!("api/users/{}/api-keys/{}", username, key)).await
+pub async fn delete_api_key(username: &str, key_id: &str) -> Result<(), NetError> {
+    api_delete(&format!("api/users/{}/api-keys/{}", username, key_id)).await
 }
 
-// --- Auth ---
-
-pub async fn register_api(
-    username: &str,
-    password: &str,
-    registration_code: &str,
-) -> Result<(), NetError> {
-    let _guard = Suppress401Guard::new();
-    api_post::<serde_json::Value>(
-        "auth/register",
-        &serde_json::json!({
-            "username": username,
-            "password": password,
-            "registration_code": registration_code,
-        }),
-        &[],
-    )
-    .await?;
-    Ok(())
+pub async fn fetch_overview_stats(start_ts: i64, end_ts: i64) -> Result<OverviewStats, NetError> {
+    api_get_cached(&format!(
+        "api/stats?start_ts={}&end_ts={}",
+        start_ts, end_ts
+    ))
+    .await
 }
 
-pub async fn login_api(username: &str, password: &str) -> Result<(), NetError> {
-    let _guard = Suppress401Guard::new();
-    api_post::<LoginResponse>(
-        "auth/login",
-        &serde_json::json!({ "username": username, "password": password }),
-        &[],
-    )
-    .await?;
-    Ok(())
+pub async fn fetch_model_dist(start_ts: i64, end_ts: i64) -> Result<Vec<ModelDistEntry>, NetError> {
+    api_get_cached(&format!(
+        "api/data/model-dist?start_ts={}&end_ts={}",
+        start_ts, end_ts
+    ))
+    .await
 }
 
-pub async fn check_session() -> Result<Option<String>, NetError> {
-    let _guard = Suppress401Guard::new();
-    let json: serde_json::Value = api_get("auth/session").await?;
-    let authenticated = json
-        .get("authenticated")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if !authenticated {
-        return Ok(None);
-    }
-    let username = json
-        .get("username")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    Ok(username)
-}
-
-pub async fn logout_api() -> Result<(), NetError> {
-    let _guard = Suppress401Guard::new();
-    api_post::<serde_json::Value>("auth/logout", &serde_json::json!({}), &[]).await?;
-    Ok(())
-}
-
-// --- Data fetchers ---
-
-pub async fn fetch_providers() -> Result<Vec<Provider>, NetError> {
-    api_get("api/providers").await
-}
-
-pub async fn fetch_provider_types() -> Result<Vec<ProviderTypeInfo>, NetError> {
-    api_get("api/provider-types").await
-}
-
-pub async fn fetch_models() -> Result<Vec<Model>, NetError> {
-    api_get("api/models").await
-}
-
-pub async fn fetch_dashboard_stats() -> Result<DashboardStats, NetError> {
-    api_get("api/stats").await
+pub async fn fetch_token_dist(start_ts: i64, end_ts: i64) -> Result<Vec<TokenDistEntry>, NetError> {
+    api_get_cached(&format!(
+        "api/data/token-dist?start_ts={}&end_ts={}",
+        start_ts, end_ts
+    ))
+    .await
 }
 
 pub async fn fetch_request_buckets(
     start_ts: i64,
     end_ts: i64,
 ) -> Result<Vec<BucketEntry>, NetError> {
-    api_get(&format!(
+    api_get_cached(&format!(
         "api/data/requests?start_ts={}&end_ts={}",
         start_ts, end_ts
     ))
@@ -296,254 +483,79 @@ pub async fn fetch_request_buckets(
 }
 
 pub async fn fetch_token_buckets(start_ts: i64, end_ts: i64) -> Result<Vec<BucketEntry>, NetError> {
-    api_get(&format!(
+    api_get_cached(&format!(
         "api/data/tokens?start_ts={}&end_ts={}",
         start_ts, end_ts
     ))
     .await
 }
 
-// --- Provider CRUD ---
-
-pub async fn create_provider(
-    name: &str,
-    provider_type: &str,
-    base_url: &str,
-    api_key: Option<String>,
-    enabled: bool,
-) -> Result<Provider, NetError> {
-    api_post(
-        "api/providers",
-        &serde_json::json!({
-            "name": name,
-            "type": provider_type,
-            "base_url": base_url,
-            "api_key": api_key_value(api_key.as_deref()),
-            "enabled": enabled,
-        }),
-        &[],
-    )
-    .await
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+pub struct ProxyLogEntryResponse {
+    pub timestamp: i64,
+    pub username: Option<String>,
+    pub api_key_name: Option<String>,
+    pub model_name: String,
+    pub provider_name: String,
+    pub prompt_tokens: Option<i64>,
+    pub completion_tokens: Option<i64>,
+    pub total_tokens: Option<i64>,
+    pub cached_tokens: Option<i64>,
+    pub latency_ms: i64,
+    pub status: String,
+    pub endpoint: String,
+    pub is_streaming: bool,
+    pub time_to_first_token_ms: Option<i64>,
+    pub upstream_model: String,
+    pub provider_type: String,
+    pub response_body_size: Option<i64>,
+    pub error_message: Option<String>,
+    pub client_ip: Option<String>,
 }
 
-pub async fn update_provider(
-    id: &str,
-    name: &str,
-    provider_type: &str,
-    base_url: &str,
-    api_key: Option<String>,
-    enabled: bool,
-) -> Result<Provider, NetError> {
-    api_put(
-        &format!("api/providers/{}", id),
-        &serde_json::json!({
-            "name": name,
-            "type": provider_type,
-            "base_url": base_url,
-            "api_key": api_key_value(api_key.as_deref()),
-            "enabled": enabled,
-        }),
-    )
-    .await
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct PaginatedResponse<T> {
+    pub items: Vec<T>,
+    pub total: u64,
+    pub page: u64,
+    pub per_page: u64,
 }
 
-pub async fn delete_provider(id: &str) -> Result<(), NetError> {
-    api_delete(&format!("api/providers/{}", id)).await
+fn push_qs(parts: &mut Vec<String>, key: &str, value: Option<impl std::fmt::Display>) {
+    if let Some(v) = value {
+        parts.push(format!("{}={}", key, v));
+    }
 }
 
-// --- Text Generation ---
-
-use futures_util::stream::{Stream, try_unfold};
-use js_sys::Uint8Array;
-use wasm_bindgen::{JsCast, JsValue};
-use wasm_bindgen_futures::JsFuture;
-
-pub async fn generate_completion_stream(
-    token: &str,
-    model: &str,
-    prompt: &str,
-    max_tokens: Option<u32>,
-    temperature: Option<f32>,
-    top_p: Option<f32>,
-) -> Result<impl Stream<Item = Result<String, String>>, String> {
-    let url = format!("{}/v1/completions", get_base_url());
-    let mut body = serde_json::json!({
-        "model": model,
-        "prompt": prompt,
-        "stream": true,
-    });
-    if let Some(mt) = max_tokens {
-        body["max_tokens"] = serde_json::json!(mt);
-    }
-    if let Some(t) = temperature {
-        body["temperature"] = serde_json::json!(t);
-    }
-    if let Some(p) = top_p {
-        body["top_p"] = serde_json::json!(p);
-    }
-    let auth = format!("Bearer {}", token);
-
-    let opts = web_sys::RequestInit::new();
-    opts.set_method("POST");
-    opts.set_body(&JsValue::from_str(&body.to_string()));
-    let request = web_sys::Request::new_with_str_and_init(&url, &opts)
-        .map_err(|e| format!("Failed to create request: {:?}", e))?;
-    request
-        .headers()
-        .set("Content-Type", "application/json")
-        .map_err(|_| "Failed to set Content-Type header".to_string())?;
-    request
-        .headers()
-        .set("Authorization", &auth)
-        .map_err(|_| "Failed to set Authorization header".to_string())?;
-
-    let window = web_sys::window().ok_or("No window")?;
-    let resp_value = JsFuture::from(window.fetch_with_request(&request))
-        .await
-        .map_err(|e| format!("Fetch failed: {:?}", e))?;
-    let resp: web_sys::Response = resp_value
-        .dyn_into()
-        .map_err(|_| "Fetch did not return a Response".to_string())?;
-
-    if !resp.ok() {
-        let status = resp.status();
-        let err_text = match resp.text() {
-            Ok(p) => JsFuture::from(p)
-                .await
-                .ok()
-                .and_then(|v| v.as_string())
-                .unwrap_or_default(),
-            Err(_) => String::new(),
-        };
-        let msg = serde_json::from_str::<serde_json::Value>(&err_text)
-            .ok()
-            .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
-            .unwrap_or_else(|| format!("HTTP {}", status));
-        return Err(msg);
-    }
-
-    let raw_stream = resp.body().ok_or("Response has no body".to_string())?;
-    let reader: web_sys::ReadableStreamDefaultReader = raw_stream
-        .get_reader()
-        .dyn_into()
-        .map_err(|_| "Failed to create reader".to_string())?;
-
-    Ok(sse_stream_from_reader(reader))
-}
-
-fn sse_stream_from_reader(
-    reader: web_sys::ReadableStreamDefaultReader,
-) -> impl Stream<Item = Result<String, String>> {
-    try_unfold((reader, Vec::<u8>::new()), |(reader, mut buf)| async move {
-        loop {
-            if let Some(result) = poll_sse(&mut buf) {
-                match result {
-                    SsePoll::Token(t) => return Ok::<_, String>(Some((t, (reader, buf)))),
-                    SsePoll::End => return Ok(None),
-                    SsePoll::Skip => continue,
-                }
-            }
-
-            let promise = reader.read();
-            let result = JsFuture::from(promise)
-                .await
-                .map_err(|e| format!("Stream read error: {:?}", e))?;
-
-            let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
-                .ok()
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            if done {
-                if !buf.is_empty() {
-                    let remaining = String::from_utf8_lossy(&buf).to_string();
-                    buf.clear();
-                    return Ok::<_, String>(Some((remaining, (reader, buf))));
-                }
-                return Ok(None);
-            }
-
-            if let Ok(value) = js_sys::Reflect::get(&result, &JsValue::from_str("value")) {
-                let array = Uint8Array::new(&value);
-                buf.extend_from_slice(&array.to_vec());
-            }
-        }
-    })
-}
-
-enum SsePoll {
-    Token(String),
-    End,
-    Skip,
-}
-
-fn poll_sse(buf: &mut Vec<u8>) -> Option<SsePoll> {
-    let boundary = buf
-        .windows(2)
-        .position(|w| w == b"\n\n")
-        .or_else(|| buf.windows(4).position(|w| w == b"\r\n\r\n"))?;
-
-    let event_bytes: Vec<u8> = buf.drain(..boundary).collect();
-    let n = if buf.len() >= 4
-        && buf[0] == b'\r'
-        && buf[1] == b'\n'
-        && buf[2] == b'\r'
-        && buf[3] == b'\n'
-    {
-        4
-    } else if buf.len() >= 2 && buf[0] == b'\n' && buf[1] == b'\n' {
-        2
-    } else {
-        0
-    };
-    buf.drain(..n);
-
-    let event_str = String::from_utf8_lossy(&event_bytes);
-    for line in event_str.lines() {
-        let payload = match line.strip_prefix("data: ") {
-            Some(p) => p.trim(),
-            None => continue,
-        };
-        if payload == "[DONE]" {
-            return Some(SsePoll::End);
-        }
-        if let Some(token) = parse_token(payload) {
-            return Some(SsePoll::Token(token));
-        }
-    }
-    Some(SsePoll::Skip)
-}
-
-fn parse_token(payload: &str) -> Option<String> {
-    let json: serde_json::Value = serde_json::from_str(payload).ok()?;
-
-    if let Some(content) = json
-        .get("choices")
-        .and_then(|c| c.as_array())
-        .and_then(|c| c.first())
-        .and_then(|c| c.get("delta"))
-        .and_then(|d| d.get("content"))
-        .and_then(|c| c.as_str())
-        && !content.is_empty()
-    {
-        return Some(content.to_string());
-    }
-
-    if let Some(text) = json
-        .get("choices")
-        .and_then(|c| c.as_array())
-        .and_then(|c| c.first())
-        .and_then(|c| c.get("text"))
-        .and_then(|t| t.as_str())
-        && !text.is_empty()
-    {
-        return Some(text.to_string());
-    }
-
-    if let Some(response) = json.get("response").and_then(|r| r.as_str())
-        && !response.is_empty()
-    {
-        return Some(response.to_string());
-    }
-
-    None
+#[allow(clippy::too_many_arguments)]
+pub async fn fetch_proxy_logs(
+    page: u64,
+    per_page: u64,
+    start_ts: Option<i64>,
+    end_ts: Option<i64>,
+    provider_name: Option<String>,
+    provider_type: Option<String>,
+    model_name: Option<String>,
+    api_key_name: Option<String>,
+    client_ip: Option<String>,
+    status: Option<String>,
+    endpoint: Option<String>,
+    is_streaming: Option<bool>,
+) -> Result<PaginatedResponse<ProxyLogEntryResponse>, NetError> {
+    let mut parts = vec![format!("page={}", page), format!("per_page={}", per_page)];
+    push_qs(&mut parts, "start_ts", start_ts);
+    push_qs(&mut parts, "end_ts", end_ts);
+    push_qs(&mut parts, "provider_name", provider_name);
+    push_qs(&mut parts, "provider_type", provider_type);
+    push_qs(&mut parts, "model_name", model_name);
+    push_qs(&mut parts, "api_key_name", api_key_name);
+    push_qs(&mut parts, "client_ip", client_ip);
+    push_qs(&mut parts, "status", status);
+    push_qs(&mut parts, "endpoint", endpoint);
+    push_qs(&mut parts, "is_streaming", is_streaming);
+    let path = format!("api/data/proxy-log?{}", parts.join("&"));
+    api_get(&path).await
 }

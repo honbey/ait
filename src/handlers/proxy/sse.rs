@@ -52,6 +52,12 @@ impl<S> SseTransformStream<S> {
         }
     }
 
+    fn record_ttfb(&mut self) {
+        if self.event.time_to_first_token_ms.is_none() {
+            self.event.time_to_first_token_ms = Some(self.start.elapsed().as_millis() as i64);
+        }
+    }
+
     fn finalize_log(&mut self) {
         self.try_extract_usage();
         if let Some(usage) = self.user_tokens.take() {
@@ -59,6 +65,9 @@ impl<S> SseTransformStream<S> {
             self.event.completion_tokens = usage.completion_tokens;
             self.event.total_tokens = usage.total_tokens;
             self.event.cached_tokens = usage.cached_tokens;
+        }
+        if self.event.time_to_first_token_ms.is_none() {
+            self.event.time_to_first_token_ms = Some(self.start.elapsed().as_millis() as i64);
         }
         self.event.latency_ms = self.start.elapsed().as_millis() as i64;
         self.log_manager.log_proxy(self.event.clone());
@@ -134,8 +143,11 @@ where
         }
 
         if let Some(event_end) = this.find_event_boundary() {
+            this.record_ttfb();
             let event = this.buf.split_to(event_end);
             let transformed = this.transform_event(&event);
+            this.event.response_body_size =
+                Some(this.event.response_body_size.unwrap_or(0) + transformed.len() as i64);
             return Poll::Ready(Some(Ok(bytes::Bytes::from(transformed))));
         }
 
@@ -148,8 +160,12 @@ where
                 Poll::Ready(Some(Ok(bytes))) => {
                     this.buf.extend_from_slice(&bytes);
                     if let Some(event_end) = this.find_event_boundary() {
+                        this.record_ttfb();
                         let event = this.buf.split_to(event_end);
                         let transformed = this.transform_event(&event);
+                        this.event.response_body_size = Some(
+                            this.event.response_body_size.unwrap_or(0) + transformed.len() as i64,
+                        );
                         return Poll::Ready(Some(Ok(bytes::Bytes::from(transformed))));
                     }
                 }

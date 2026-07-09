@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::{sync::OnceLock, time::Instant};
 
 use axum::{
     Json,
@@ -11,9 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::db::{AuditEvent, Session, hash_key};
-use crate::error::{AitError, conflict, forbidden, internal_error, unauthorized};
-use crate::handlers::users::create_user;
-use crate::middleware::extract_session_key;
+use crate::error::{AitError, internal_error, unauthorized};
+use crate::middleware::{CACHE_TTL, extract_session_key};
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -25,13 +24,6 @@ pub struct LoginRequest {
 pub struct LoginResponse {
     pub ok: bool,
     pub session_key: String,
-}
-
-#[derive(Deserialize)]
-pub struct RegisterRequest {
-    pub username: String,
-    pub password: String,
-    pub registration_code: String,
 }
 
 #[derive(Serialize)]
@@ -78,15 +70,16 @@ pub async fn login(
     })
     .await
     {
-        Ok((u, true)) => u,
-        Ok((_u, false)) => return Err(unauthorized("Invalid credentials")),
-        Err(Lookup::NoUsers) => {
+        Ok(Ok((u, true))) => u,
+        Ok(Ok((_u, false))) => return Err(unauthorized("Invalid credentials")),
+        Ok(Err(Lookup::NoUsers)) => {
             return Err(unauthorized(
                 "No users configured. Please check server configuration.",
             ));
         }
-        Err(Lookup::InvalidCreds) => return Err(unauthorized("Invalid credentials")),
-        Err(Lookup::Db) => return Err(internal_error("Database error")),
+        Ok(Err(Lookup::InvalidCreds)) => return Err(unauthorized("Invalid credentials")),
+        Ok(Err(Lookup::Db)) => return Err(internal_error("Database error")),
+        Err(join_err) => return Err(internal_error(join_err)),
     };
 
     let session_key = generate_session_key();
@@ -101,6 +94,7 @@ pub async fn login(
     let db = state.db.clone();
     crate::run_blocking(move || db.insert_session(session))
         .await
+        .map_err(internal_error)?
         .map_err(|_| internal_error("Failed to create session"))?;
 
     let mut headers = HeaderMap::new();
@@ -127,54 +121,6 @@ pub async fn login(
     ))
 }
 
-pub async fn register(
-    State(state): State<AppState>,
-    Json(input): Json<RegisterRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<AitError>)> {
-    if !state.config.auth.allow_registration {
-        return Err(forbidden("Registration is disabled"));
-    }
-
-    if !state.config.auth.registration_code.is_empty()
-        && state.config.auth.registration_code != input.registration_code
-    {
-        return Err(forbidden("Invalid registration code"));
-    }
-
-    let db = state.db.clone();
-    let username = input.username.clone();
-    let password = input.password.clone();
-    let exists = crate::run_blocking(move || {
-        let user = db.get_user(&username).ok().flatten();
-        if user.is_some() {
-            let _ = bcrypt::verify(&password, dummy_hash());
-        }
-        user.is_some()
-    })
-    .await;
-    if exists {
-        return Err(conflict("Username already exists"));
-    }
-
-    let db = state.db.clone();
-    let username = input.username.clone();
-    let password = input.password.clone();
-    crate::run_blocking(move || create_user(&db, &username, &password))
-        .await
-        .map_err(internal_error)?;
-
-    state.log_manager.log_audit(AuditEvent {
-        timestamp: Utc::now(),
-        username: input.username.clone(),
-        action: "register".into(),
-        resource: "user".into(),
-        resource_id: input.username.clone(),
-        detail: None,
-    });
-
-    Ok(Json(serde_json::json!({"ok": true})))
-}
-
 pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -184,9 +130,9 @@ pub async fn logout(
         state.session_cache.remove(&hash);
         let db = state.db.clone();
         let session_key = raw_key.to_string();
-        crate::run_blocking(move || db.delete_session(&session_key))
-            .await
-            .ok();
+        match crate::run_blocking(move || db.delete_session(&session_key)).await {
+            Ok(_) | Err(_) => {}
+        }
     }
 
     let mut resp_headers = HeaderMap::new();
@@ -213,27 +159,42 @@ pub async fn session_check(
     };
 
     let session_key = session_key.to_string();
-    // Fast single RocksDB get_cf (~10–50 µs); spawn_blocking overhead
-    // (~5–20 µs) would exceed the work itself, so called directly.
-    let result = (|| {
-        let session = match state.db.get_session(&session_key) {
-            Ok(Some(s)) if !s.is_expired() => s,
-            _ => return Err(()),
-        };
-        let user = state.db.get_user(&session.username).ok().flatten();
-        Ok((session, user))
-    })();
+    let hash = hash_key(&session_key);
 
-    match result {
-        Ok((session, Some(_u))) => Json(SessionResponse {
-            authenticated: true,
-            username: Some(session.username),
-        }),
-        _ => Json(SessionResponse {
-            authenticated: false,
-            username: None,
-        }),
+    if let Some(cached) = state.session_cache.get(&hash) {
+        let (ref user, ref expires_at, ref inserted_at) = *cached;
+        if *expires_at > Utc::now() && inserted_at.elapsed() < CACHE_TTL {
+            return Json(SessionResponse {
+                authenticated: true,
+                username: Some(user.username.clone()),
+            });
+        }
     }
+
+    let db = state.db.clone();
+    let session = match crate::run_blocking(move || db.get_session(&session_key)).await {
+        Ok(Ok(Some(s))) if !s.is_expired() => s,
+        _ => {
+            return Json(SessionResponse {
+                authenticated: false,
+                username: None,
+            });
+        }
+    };
+
+    let user = crate::db::SessionUser {
+        username: session.username.clone(),
+        api_key_name: None,
+    };
+
+    state
+        .session_cache
+        .insert(hash, (user, session.expires_at, Instant::now()));
+
+    Json(SessionResponse {
+        authenticated: true,
+        username: Some(session.username),
+    })
 }
 
 fn generate_session_key() -> String {

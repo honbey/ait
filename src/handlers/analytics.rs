@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use crate::app::AppState;
 use crate::db::SessionUser;
-use crate::db::models::BucketEntry;
+use crate::db::models::{BucketEntry, ModelDistEntry, TokenDistEntry};
 use crate::error::AitError;
 
 #[derive(Deserialize)]
@@ -22,7 +22,7 @@ pub struct ValidatedRange {
     pub end: i64,
 }
 
-/// Validate and normalize timestamp range for analytics queries.
+/// Normalize timestamp range for analytics queries (tolerant mode).
 /// Defaults: start = now - 30d, end = now.
 /// Range upper bound = (retention_days + 1) * 86400 seconds.
 pub fn validate_ts_range(
@@ -42,18 +42,17 @@ pub fn validate_ts_range(
         return Err(AitError::bad_request("invalid end_ts").into_response());
     }
 
-    if start >= end {
-        return Err(AitError::bad_request("start_ts must be earlier than end_ts").into_response());
-    }
-
     let max_range = (retention_days as i64 + 1) * 86400;
-    if end - start > max_range {
-        return Err(AitError::bad_request("range exceeds log retention period").into_response());
-    }
 
-    if end > now + 3600 {
-        return Err(AitError::bad_request("end_ts cannot be in the future").into_response());
-    }
+    let (start, end) = if start >= end {
+        (end - 86400, end)
+    } else if end - start > max_range {
+        (end - max_range, end)
+    } else if end > now + 3600 {
+        (start, now + 3600)
+    } else {
+        (start, end)
+    };
 
     Ok(ValidatedRange { start, end })
 }
@@ -75,5 +74,25 @@ pub async fn tokens(
 ) -> Result<Json<Vec<BucketEntry>>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
     let result = state.log_manager.tokens(range.start, range.end).await;
+    Ok(Json(result))
+}
+
+pub async fn model_dist(
+    State(state): State<AppState>,
+    Extension(_session): Extension<SessionUser>,
+    Query(q): Query<AnalyticsQuery>,
+) -> Result<Json<Vec<ModelDistEntry>>, (StatusCode, Json<AitError>)> {
+    let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
+    let result = state.log_manager.model_dist(range.start, range.end).await;
+    Ok(Json(result))
+}
+
+pub async fn token_dist(
+    State(state): State<AppState>,
+    Extension(_session): Extension<SessionUser>,
+    Query(q): Query<AnalyticsQuery>,
+) -> Result<Json<Vec<TokenDistEntry>>, (StatusCode, Json<AitError>)> {
+    let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
+    let result = state.log_manager.token_dist(range.start, range.end).await;
     Ok(Json(result))
 }

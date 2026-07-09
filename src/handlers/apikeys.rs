@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, SessionUser};
+use crate::db::{ApiKey, AuditEvent, SessionUser};
 use crate::error::{AitError, forbidden, internal_error, not_found};
 
 #[derive(Deserialize)]
@@ -18,14 +18,6 @@ pub struct CreateApiKeyRequest {
 
 #[derive(serde::Serialize)]
 pub struct ApiKeyResponse {
-    pub key: String,
-    pub name: String,
-    pub created_at: i64,
-    pub expires_at: Option<i64>,
-}
-
-#[derive(serde::Serialize)]
-pub struct ApiKeyListItem {
     pub id: String,
     pub key: String,
     pub name: String,
@@ -59,6 +51,7 @@ pub async fn create_api_key(
     let (stored, raw_key) =
         crate::run_blocking(move || db.insert_api_key(&username_clone, &name, expires_at))
             .await
+            .map_err(internal_error)?
             .map_err(internal_error)?;
 
     state.log_manager.log_audit(AuditEvent {
@@ -71,9 +64,12 @@ pub async fn create_api_key(
     });
 
     Ok(Json(ApiKeyResponse {
+        id: stored.id.clone(),
         key: raw_key,
         name: stored.name,
         created_at: stored.created_at.timestamp(),
+        updated_at: stored.updated_at.timestamp(),
+        enabled: stored.enabled,
         expires_at: stored.expires_at.map(|dt| dt.timestamp()),
     }))
 }
@@ -82,23 +78,23 @@ pub async fn list_api_keys(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,
-) -> Result<Json<Vec<ApiKeyListItem>>, (StatusCode, Json<AitError>)> {
+) -> Result<Json<Vec<ApiKeyResponse>>, (StatusCode, Json<AitError>)> {
     if session.username != username {
         return Err(forbidden("You can only view your own API keys"));
     }
 
-    // Fast single RocksDB get_cf (~10–50 µs); spawn_blocking overhead
-    // (~5–20 µs) would exceed the work itself, so called directly.
-    let user = state
-        .db
-        .get_user(&username)
+    let db = state.db.clone();
+    let username_clone = username.clone();
+    let user = crate::run_blocking(move || db.get_user(&username_clone))
+        .await
+        .map_err(internal_error)?
         .map_err(internal_error)?
         .ok_or_else(|| not_found(format!("User '{}' not found", username)))?;
 
-    let items: Vec<ApiKeyListItem> = user
+    let items: Vec<ApiKeyResponse> = user
         .api_keys
         .into_iter()
-        .map(|k| ApiKeyListItem {
+        .map(|k| ApiKeyResponse {
             id: k.id.clone(),
             key: k.masked(),
             name: k.name,
@@ -125,6 +121,7 @@ pub async fn delete_api_key(
     let key_clone = key.clone();
     let hash = crate::run_blocking(move || db.delete_api_key(&username_clone, &key_clone))
         .await
+        .map_err(internal_error)?
         .map_err(internal_error)?;
     state.api_key_cache.remove(&hash);
 
@@ -141,40 +138,55 @@ pub async fn delete_api_key(
 }
 
 #[derive(Deserialize)]
-pub struct ToggleApiKeyRequest {
-    pub enabled: bool,
+pub struct UpdateApiKeyRequest {
+    pub name: Option<String>,
+    pub expires_at: Option<i64>,
+    pub enabled: Option<bool>,
 }
 
-pub async fn toggle_api_key(
+impl From<UpdateApiKeyRequest> for ApiKey {
+    fn from(r: UpdateApiKeyRequest) -> Self {
+        ApiKey {
+            name: r.name.unwrap_or_default(),
+            enabled: r.enabled.unwrap_or(true),
+            expires_at: r
+                .expires_at
+                .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or(DateTime::UNIX_EPOCH)),
+            ..Default::default()
+        }
+    }
+}
+
+pub async fn update_api_key(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Path((username, key_id)): Path<(String, String)>,
-    Json(input): Json<ToggleApiKeyRequest>,
-) -> Result<Json<ApiKeyListItem>, (StatusCode, Json<AitError>)> {
+    Json(input): Json<UpdateApiKeyRequest>,
+) -> Result<Json<ApiKeyResponse>, (StatusCode, Json<AitError>)> {
     if session.username != username {
         return Err(forbidden("You can only manage your own API keys"));
     }
 
+    let mut updates: ApiKey = input.into();
+    updates.id = key_id.clone();
     let db = state.db.clone();
     let username_clone = username.clone();
-    let key_id_clone = key_id.clone();
-    let (updated, hash) = crate::run_blocking(move || {
-        db.toggle_api_key(&username_clone, &key_id_clone, input.enabled)
-    })
-    .await
-    .map_err(internal_error)?;
+    let (updated, hash) = crate::run_blocking(move || db.update_api_key(&username_clone, &updates))
+        .await
+        .map_err(internal_error)?
+        .map_err(internal_error)?;
     state.api_key_cache.remove(&hash);
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         username: session.username.clone(),
-        action: "toggle".into(),
+        action: "update".into(),
         resource: "api_key".into(),
         resource_id: key_id,
         detail: None,
     });
 
-    Ok(Json(ApiKeyListItem {
+    Ok(Json(ApiKeyResponse {
         id: updated.id.clone(),
         key: updated.masked(),
         name: updated.name,

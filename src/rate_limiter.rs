@@ -33,8 +33,14 @@ impl RateLimiter {
     ) -> Result<(), Duration> {
         let now = Instant::now();
 
-        if !self.inner.contains_key(&ip) && self.inner.len() >= self.max_entries {
-            return Err(Duration::from_secs(60));
+        if !self.inner.contains_key(&ip)
+            && self.inner.len() >= self.max_entries
+            && let Some(entry) = self.inner.iter().next()
+        {
+            let key = *entry.key();
+            drop(entry);
+            tracing::warn!(evicted = %key, size = %self.inner.len(), "rate limiter at capacity, evicting entry");
+            self.inner.remove(&key);
         }
 
         let mut entry = self.inner.entry(ip).or_insert(RateEntry {

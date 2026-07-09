@@ -4,12 +4,13 @@ use axum::{
     http::StatusCode,
 };
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::app::AppState;
 use crate::db::{AuditEvent, Database, SessionUser, User};
-use crate::error::{AitError, conflict, forbidden, internal_error, not_found};
+use crate::error::{AitError, forbidden, internal_error, not_found};
 
+// Single-user mode with a full user model and user-level session and API key management.
 pub fn create_user(db: &Database, username: &str, password: &str) -> Result<User, String> {
     let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
         .map_err(|e| format!("Failed to hash password: {e}"))?;
@@ -25,78 +26,10 @@ pub fn create_user(db: &Database, username: &str, password: &str) -> Result<User
     Ok(user)
 }
 
-#[derive(Serialize)]
-pub struct UserInfoResponse {
-    pub username: String,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-impl From<User> for UserInfoResponse {
-    fn from(u: User) -> Self {
-        UserInfoResponse {
-            username: u.username,
-            created_at: u.created_at.timestamp(),
-            updated_at: u.updated_at.timestamp(),
-        }
-    }
-}
-
 #[derive(Deserialize)]
 pub struct ChangePasswordRequest {
     pub current_password: String,
     pub new_password: String,
-}
-
-pub async fn list_users(
-    State(state): State<AppState>,
-    Extension(_session): Extension<SessionUser>,
-) -> Result<Json<Vec<UserInfoResponse>>, (StatusCode, Json<AitError>)> {
-    let db = state.db.clone();
-    let users = crate::run_blocking(move || db.list_users())
-        .await
-        .map_err(internal_error)?;
-    Ok(Json(users.into_iter().map(Into::into).collect()))
-}
-
-pub async fn delete_user(
-    State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
-    Path(username): Path<String>,
-) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
-    // Cannot delete yourself
-    if session.username == username {
-        return Err(conflict("Cannot delete yourself"));
-    }
-
-    let db = state.db.clone();
-    let username_clone = username.clone();
-    crate::run_blocking(move || -> Result<(), crate::db::DbError> {
-        let _ = db.get_user(&username_clone).ok().flatten().ok_or_else(|| {
-            crate::db::DbError::NotFound(format!("User '{}' not found", username_clone))
-        })?;
-        db.delete_user(&username_clone)?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| match e {
-        crate::db::DbError::NotFound(msg) => not_found(msg),
-        crate::db::DbError::Storage(msg) => internal_error(msg),
-        _ => internal_error(e.to_string()),
-    })?;
-
-    state.session_cache.clear();
-
-    state.log_manager.log_audit(AuditEvent {
-        timestamp: Utc::now(),
-        username: session.username.clone(),
-        action: "delete".into(),
-        resource: "user".into(),
-        resource_id: username,
-        detail: None,
-    });
-
-    Ok((StatusCode::NO_CONTENT,))
 }
 
 pub async fn change_password(
@@ -141,6 +74,7 @@ pub async fn change_password(
             .map_err(|e| ChangeError::Internal(e.to_string()))
     })
     .await
+    .map_err(internal_error)?
     .map_err(|e| match e {
         ChangeError::NotFound(msg) => not_found(msg),
         ChangeError::WrongPassword => forbidden("Current password is incorrect"),

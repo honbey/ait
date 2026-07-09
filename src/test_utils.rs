@@ -4,7 +4,8 @@ use tempfile::TempDir;
 
 pub fn create_test_db(max_api_keys: u64) -> (Database, TempDir) {
     let dir = TempDir::new().unwrap();
-    let db = Database::new(dir.path().to_str().unwrap(), max_api_keys).unwrap();
+    let path = dir.path().join("test.db");
+    let db = Database::new(path.to_str().unwrap(), max_api_keys).unwrap();
     (db, dir)
 }
 

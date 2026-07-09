@@ -71,6 +71,11 @@ impl AitError {
                 code: 409,
                 r#type: "invalid_request_error".to_string(),
             },
+            DbError::Duplicate(msg) => Self {
+                message: msg,
+                code: 409,
+                r#type: "invalid_request_error".to_string(),
+            },
             DbError::Storage(msg) => Self {
                 message: msg,
                 code: 500,
@@ -99,10 +104,11 @@ impl From<DbError> for (StatusCode, Json<AitError>) {
 // --- HTTP response helpers ---
 
 pub fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<AitError>) {
+    tracing::error!("Internal error: {}", e);
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(AitError {
-            message: e.to_string(),
+            message: "Internal server error".to_string(),
             code: 500,
             r#type: "internal_error".to_string(),
         }),
@@ -138,17 +144,6 @@ pub fn unauthorized(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
             message: msg.into(),
             code: 401,
             r#type: "auth_error".to_string(),
-        }),
-    )
-}
-
-pub fn conflict(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
-    (
-        StatusCode::CONFLICT,
-        Json(AitError {
-            message: msg.into(),
-            code: 409,
-            r#type: "invalid_request_error".to_string(),
         }),
     )
 }

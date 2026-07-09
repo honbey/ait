@@ -2,7 +2,9 @@
 
 ## Project Overview
 
-Proxy service for aggregating LLM provider APIs (OpenAI-compatible). Backend in Rust (Axum), frontend WASM CSR in Sycamore 0.9.
+Proxy service for aggregating LLM provider APIs (OpenAI-compatible). Backend in Rust (Axum), frontend WASM CSR in Leptos 0.8.
+
+**Language**: Reply in the user's language (e.g., zh-CN, en).
 
 ## Commands
 
@@ -12,11 +14,14 @@ cargo check --target wasm32-unknown-unknown -p ait-frontend  # Frontend
 cargo clippy                    # Backend lint (no warnings)
 cargo clippy --target wasm32-unknown-unknown -p ait-frontend  # Frontend lint
 cargo test                      # All tests
-cargo fmt                       # Format both
+cargo fmt                       # Format backend only
+leptosfmt frontend/src/         # Format frontend Leptos code
 trunk build                     # Frontend dev (from frontend/), you use it
 trunk watch                     # Frontend dev (from frontend/), user use it
 trunk build --release --cargo-profile release-wasm  # Frontend prod
 ```
+
+> `leptosfmt` is a separate tool — `cargo fmt` does NOT format frontend Leptos view! macros.
 
 ## Guidelines
 
@@ -25,43 +30,45 @@ trunk build --release --cargo-profile release-wasm  # Frontend prod
 - Keep code comments concise:
   - Avoid repetitive or excessive inline explanations
   - Except `//` for complex logic, exceptional cases or doc comments
-- Use ASCII characters(`-`, `->`, `...`) not Unicode(`—`, `→`, `…`)
-- Keep code consistency (coding style, functional logic, component structure, error handling, etc.).
+- Use ASCII punctuation (`-`, `->`, `...`) not Unicode (`--`, `'->'`, `'...'`)
+- For self-documenting code, aim for the code to be as readable as documentation. Do not use abbreviated forms unless they are widely accepted conventions.
+- When editing a piece of code, first look at the code's surrounding context (especially its imports) to understand the choice of frameworks and libraries. Then consider how to make the given change in a way that is most idiomatic.
 
 ### Git
+
+- **Commit msg standards**: see `.gitmessage`
 
 - When performing a squash merge (or using a PR to squash merge):
   - Use a single comprehensive commit message that directly describes the final changes made
   - There is no need to mention bugs that were introduced and subsequently fixed during the development process
-- Before committing, run `cargo check`, `cargo clippy`, and `cargo fmt` to ensure code quality and formatting
+- Before committing, run `cargo check`, `cargo clippy`, `cargo fmt`, and `leptosfmt frontend/src/` to ensure code quality and formatting
 - After the pre-commit checks pass, wait for user review. The commit may be submitted only after the user has confirmed approval
-- Commit msg standards: see `.gitmessage`
 
 ### Backend (`src/`)
 
-- RocksDB is `Send + Sync` (via `Arc`) for CRUD storage
-  - Single `get_cf` (~10–50µs) can run on tokio worker, writes and batch reads use `spawn_blocking`
-- DuckDB (via `LogManager`) for structured logging and analytics
-- All handlers receive `Extension<Arc<Config>>`, `Extension<Database>`, `Extension<LogManager>`
-- API routes `/*` (via `/api/` prefix), proxy routes `/v1/*`
-- New providers: implement trait + register in `providers/mod.rs`
+- **Database**: SQLite (via rusqlite, `Arc<Mutex<Connection>>`) for app data (providers, models, users, api keys, sessions). DuckDB (via `LogManager`) for structured logging + analytics. All DB ops go through `crate::run_blocking()` because SQLite Mutex must be acquired on a blocking thread and bcrypt is CPU-bound.
+- **Handler modules**: `providers` (provider CRUD), `models` (model CRUD), `analytics`, `apikeys`, `users`, `auth`, `proxy` (proxy internals: `exec.rs`, `sse.rs`, `guard.rs`)
+- API routes under `/api/` prefix, proxy routes under `/v1/*`
+- New providers: implement `UpstreamProvider` trait + register in `providers/mod.rs`
+- Config: TOML file + env var override (`AIT_<SECTION>_<KEY>`)
 
 ### Frontend (`frontend/src/`)
 
-- Sycamore reactive signals, `View::from_dynamic` minimal (avoid closure-in-closure)
-- Use `Rc<Vec>` for shared data passed to modals/children
-- Use `create_client_resource` for async fetching in layout views
-- Loading states: Level-1 SVG spinner (session check) -> Level-2 skeleton (page data) -> actual view
-- `Index`, `Login`, `Register` are public routes
-- Routes under `/console/` are protected (auth guard in `layout.rs`)
-- ECharts loads lazily (dynamic `<script>` injection in `LineChart` mount)
+- Leptos 0.8 CSR, `gloo-net` for HTTP, `gloo-storage` for LocalStorage/SessionStorage fallback chain
+- Tailwind CSS 4.3 via Trunk pre-build hook, ECharts 6.1 injected dynamically via `<script>`
+- Build artifact at `frontend/dist/`, served by backend on `/*`
+
+#### Leptos Reactive Tracking
+
+- In **non-reactive** contexts (component body, `spawn_local`, async blocks, event handler callbacks, `#[prop]` initializers), use `.get_untracked()` / `.with_untracked()` on signals to avoid the "accessed outside a reactive tracking context" warning
+- For `LocalResource`, same rule: `.get_untracked()` in non-reactive positions, `.get()` only when used inside a `Transition` child closure or another reactive scope
+- Only use `.get()` / `.with()` when inside a `move ||` closure in a `view!` macro that genuinely needs reactive updates (e.g., `t!` macro's `move || i18n().t(K::Foo)`)
 
 #### i18n
 
 - Add new key to `frontend/locales/zh.json` and other `lang.json`
 - Keys are compile-time checked (`build.rs` generates `K` enum)
-- Access via `i18n.t(K::Variant)` or `i18n.t_replace(K::Variant, "placeholder", &value)`
 
-### Other
+## IMPORTANT NOTES
 
-Read `.agents.local.md`.
+**IMPORTANT**: Ensure you've thoroughly reviewed the `.agents.local.md`(if exists) file before beginning any work.

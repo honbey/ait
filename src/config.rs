@@ -9,6 +9,7 @@ pub struct ConfigApp {
     pub database: DatabaseConfig,
     pub log: LogConfig,
     pub proxy: ProxyConfig,
+    pub security: SecurityConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -18,6 +19,7 @@ pub struct ServerConfig {
     pub health_detail: bool,
     pub session_cleanup_interval_secs: u64,
     pub rate_limiter_cleanup_interval_secs: u64,
+    pub cache_cleanup_interval_secs: u64,
     pub graceful_timeout_secs: u64,
     pub trusted_proxies: Vec<IpAddr>,
 }
@@ -35,12 +37,9 @@ pub struct AuthConfig {
     pub session_ttl_secs: u64,
     pub bootstrap_username: String,
     pub bootstrap_password: Option<String>,
-    pub allow_registration: bool,
-    pub registration_code: String,
     pub max_api_keys_per_user: u64,
     pub rate_limiter_max_entries: u64,
     pub login_rate_limit: RateLimitConfig,
-    pub register_rate_limit: RateLimitConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -56,12 +55,22 @@ pub struct LogConfig {
     pub flush_batch: u64,
     pub channel_cap: u64,
     pub retention_every: u64,
+    pub level: String,
+    pub axum: String,
+    pub tower_http_trace: String,
+    pub analytics_timeout_secs: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ProxyConfig {
     pub timeout_secs: u64,
     pub stream: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SecurityConfig {
+    pub ssrf_allowed_cidrs: Vec<String>,
+    pub cors_allowed_origins: Vec<String>,
 }
 
 impl ConfigApp {
@@ -76,30 +85,32 @@ impl ConfigApp {
             .set_default("server.health_detail", false)?
             .set_default("server.session_cleanup_interval_secs", 3600u64)?
             .set_default("server.rate_limiter_cleanup_interval_secs", 600u64)?
+            .set_default("server.cache_cleanup_interval_secs", 300u64)?
             .set_default("server.graceful_timeout_secs", 10u64)?
             .set_default("server.trusted_proxies", vec!["127.0.0.1", "::1"])?
             .set_default("auth.enabled", true)?
             .set_default("auth.session_ttl_secs", 86400u64)?
             .set_default("auth.bootstrap_username", "admin")?
-            .set_default("auth.allow_registration", false)?
-            .set_default("auth.registration_code", "")?
             .set_default("auth.max_api_keys_per_user", 10u64)?
             .set_default("auth.rate_limiter_max_entries", 100000u64)?
             .set_default("auth.login_rate_limit.max_attempts", 5u64)?
             .set_default("auth.login_rate_limit.window_secs", 300u64)?
             .set_default("auth.login_rate_limit.ban_secs", 900u64)?
-            .set_default("auth.register_rate_limit.max_attempts", 3u64)?
-            .set_default("auth.register_rate_limit.window_secs", 3600u64)?
-            .set_default("auth.register_rate_limit.ban_secs", 3600u64)?
-            .set_default("database.path", "./data/ait.rocksdb")?
+            .set_default("database.path", "./data/ait.db")?
             .set_default("log.path", "./data/ait-logs.duckdb")?
             .set_default("log.retention_days", 30u64)?
             .set_default("log.flush_interval_secs", 10u64)?
             .set_default("log.flush_batch", 100u64)?
             .set_default("log.channel_cap", 10000u64)?
             .set_default("log.retention_every", 100u64)?
+            .set_default("log.level", "info")?
+            .set_default("log.axum", "info")?
+            .set_default("log.tower_http_trace", "info")?
+            .set_default("log.analytics_timeout_secs", 10u64)?
             .set_default("proxy.timeout_secs", 300u64)?
             .set_default("proxy.stream", true)?
+            .set_default("security.ssrf_allowed_cidrs", Vec::<String>::new())?
+            .set_default("security.cors_allowed_origins", Vec::<String>::new())?
             .add_source(File::new(config_file, FileFormat::Toml).required(false))
             .add_source(Environment::with_prefix("AIT").separator("_"))
             .build()?
@@ -130,19 +141,20 @@ mod tests {
         assert_eq!(config.server.rate_limiter_cleanup_interval_secs, 600);
         assert!(config.auth.enabled);
         assert_eq!(config.auth.max_api_keys_per_user, 10);
-        assert_eq!(config.database.path, "./data/ait.rocksdb");
+        assert_eq!(config.database.path, "./data/ait.db");
         assert_eq!(config.log.path, "./data/ait-logs.duckdb");
         assert_eq!(config.log.retention_days, 30);
         assert_eq!(config.log.flush_interval_secs, 10);
         assert_eq!(config.log.flush_batch, 100);
         assert_eq!(config.log.channel_cap, 10000);
         assert_eq!(config.log.retention_every, 100);
+        assert_eq!(config.log.level, "info");
+        assert_eq!(config.log.axum, "info");
+        assert_eq!(config.log.tower_http_trace, "info");
+        assert_eq!(config.log.analytics_timeout_secs, 10);
         assert_eq!(config.auth.login_rate_limit.max_attempts, 5);
         assert_eq!(config.auth.login_rate_limit.window_secs, 300);
         assert_eq!(config.auth.login_rate_limit.ban_secs, 900);
-        assert_eq!(config.auth.register_rate_limit.max_attempts, 3);
-        assert_eq!(config.auth.register_rate_limit.window_secs, 3600);
-        assert_eq!(config.auth.register_rate_limit.ban_secs, 3600);
     }
 
     #[test]
@@ -169,17 +181,20 @@ max_api_keys_per_user = 20
         // still defaults
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.session_cleanup_interval_secs, 3600);
-        assert_eq!(config.database.path, "./data/ait.rocksdb");
+        assert_eq!(config.database.path, "./data/ait.db");
         assert_eq!(config.proxy.timeout_secs, 300);
         assert!(config.proxy.stream);
     }
 
     #[test]
-    fn config_missing_file() {
+    fn test_missing_file() {
         let config = ConfigApp::new(Some("/nonexistent/path/that/does/not/exist")).unwrap();
         assert_eq!(config.server.port, 8000);
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.auth.max_api_keys_per_user, 10);
         assert_eq!(config.log.retention_days, 30);
+        assert_eq!(config.log.analytics_timeout_secs, 10);
+        assert!(config.security.ssrf_allowed_cidrs.is_empty());
+        assert!(config.security.cors_allowed_origins.is_empty());
     }
 }

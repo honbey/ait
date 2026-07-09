@@ -6,7 +6,10 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 
 use super::analytics::Analytics;
-use super::models::{AccessEvent, AuditEvent, BucketEntry, LogEvent, ProxyEvent};
+use super::models::{
+    AccessEvent, AuditEvent, BucketEntry, LogEvent, ModelDistEntry, ProxyEvent,
+    ProxyLogQueryParams, ProxyLogQueryResult, TokenDistEntry,
+};
 
 #[derive(Clone)]
 pub struct LogManager {
@@ -39,7 +42,15 @@ impl LogManager {
                 total_tokens      BIGINT,
                 cached_tokens     BIGINT,
                 latency_ms        BIGINT NOT NULL,
-                status            VARCHAR NOT NULL
+                status                 VARCHAR NOT NULL,
+                endpoint               VARCHAR NOT NULL DEFAULT '',
+                is_streaming           BOOLEAN NOT NULL DEFAULT false,
+                time_to_first_token_ms BIGINT,
+                upstream_model         VARCHAR NOT NULL DEFAULT '',
+                provider_type          VARCHAR NOT NULL DEFAULT '',
+                response_body_size     BIGINT,
+                error_message          VARCHAR,
+                client_ip              VARCHAR
             );
             CREATE TABLE IF NOT EXISTS audit_log (
                 timestamp   TIMESTAMP NOT NULL,
@@ -59,7 +70,7 @@ impl LogManager {
         let retention_every = config.retention_every;
         let retention_days = config.retention_days;
         let (sender, receiver) = mpsc::sync_channel(config.channel_cap as usize);
-        let analytics = Analytics::new(conn.try_clone()?);
+        let analytics = Analytics::new(conn.try_clone()?, config.analytics_timeout_secs);
 
         let handle = thread::spawn(move || match conn.try_clone() {
             Ok(worker_conn) => {
@@ -91,7 +102,7 @@ impl LogManager {
     }
 
     pub fn log_proxy(&self, event: ProxyEvent) {
-        if let Err(e) = self.sender.try_send(LogEvent::Proxy(event)) {
+        if let Err(e) = self.sender.try_send(LogEvent::Proxy(Box::new(event))) {
             warn!("[logs] proxy buffer full, dropping event: {e}");
         }
     }
@@ -102,12 +113,12 @@ impl LogManager {
         }
     }
 
-    pub async fn total_requests(&self, days: i64) -> u64 {
-        self.analytics.total_requests(days).await
+    pub async fn total_requests(&self, start_ts: i64, end_ts: i64) -> u64 {
+        self.analytics.total_requests(start_ts, end_ts).await
     }
 
-    pub async fn total_tokens(&self, days: i64) -> u64 {
-        self.analytics.total_tokens(days).await
+    pub async fn total_tokens(&self, start_ts: i64, end_ts: i64) -> u64 {
+        self.analytics.total_tokens(start_ts, end_ts).await
     }
 
     pub async fn requests(&self, start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
@@ -118,19 +129,24 @@ impl LogManager {
         self.analytics.tokens(start_ts, end_ts).await
     }
 
+    pub async fn model_dist(&self, start_ts: i64, end_ts: i64) -> Vec<ModelDistEntry> {
+        self.analytics.model_dist(start_ts, end_ts).await
+    }
+
+    pub async fn token_dist(&self, start_ts: i64, end_ts: i64) -> Vec<TokenDistEntry> {
+        self.analytics.token_dist(start_ts, end_ts).await
+    }
+
+    pub async fn query_proxy_logs(&self, params: ProxyLogQueryParams) -> ProxyLogQueryResult {
+        self.analytics.query_proxy_logs(params).await
+    }
+
     pub fn shutdown(&self) {
-        for _ in 0..20 {
-            match self.sender.try_send(LogEvent::Shutdown) {
-                Ok(()) => break,
-                Err(mpsc::TrySendError::Full(_)) => {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(mpsc::TrySendError::Disconnected(_)) => {
-                    warn!("Log channel disconnected, skipping graceful shutdown");
-                    break;
-                }
-            }
-        }
+        let sender = self.sender.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(LogEvent::Shutdown);
+        });
+
         if let Ok(mut guard) = self.worker_handle.lock()
             && let Some(handle) = guard.take()
         {
@@ -230,7 +246,7 @@ fn flush_events(conn: &Connection, events: &[LogEvent]) -> bool {
     for event in events {
         match event {
             LogEvent::Access(e) => access.push(e),
-            LogEvent::Proxy(e) => proxy.push(e),
+            LogEvent::Proxy(e) => proxy.push(e.as_ref()),
             LogEvent::Audit(e) => audit.push(e),
             LogEvent::Shutdown => {}
         }
@@ -292,8 +308,11 @@ fn flush_proxies(conn: &Connection, events: &[&ProxyEvent]) -> Result<()> {
     }
     let mut stmt = conn.prepare_cached(
         "INSERT INTO proxy_log (timestamp, username, api_key_name, model_name, provider_name,
-         prompt_tokens, completion_tokens, total_tokens, cached_tokens, latency_ms, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+         prompt_tokens, completion_tokens, total_tokens, cached_tokens, latency_ms, status,
+         endpoint, is_streaming, time_to_first_token_ms, upstream_model, provider_type,
+         response_body_size, error_message, client_ip)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                 ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
     )?;
     for e in events {
         stmt.execute(params![
@@ -308,6 +327,14 @@ fn flush_proxies(conn: &Connection, events: &[&ProxyEvent]) -> Result<()> {
             e.cached_tokens,
             e.latency_ms,
             e.status,
+            e.endpoint,
+            e.is_streaming,
+            e.time_to_first_token_ms,
+            e.upstream_model,
+            e.provider_type,
+            e.response_body_size,
+            e.error_message,
+            e.client_ip,
         ])?;
     }
     Ok(())

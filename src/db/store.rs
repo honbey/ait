@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use rocksdb::{DB as RocksDB, IteratorMode, Options, WriteBatch};
+use rusqlite::{Connection, Row, params};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
@@ -8,15 +8,6 @@ use uuid::Uuid;
 
 use super::models::*;
 
-// RocksDB Column Family
-const PROVIDERS_CF: &str = "providers";
-const MODELS_CF: &str = "models";
-const USERS_CF: &str = "users";
-const SESSIONS_CF: &str = "sessions";
-const API_KEYS_CF: &str = "api_keys";
-const PROVIDER_MODEL_CF: &str = "provider_model";
-const SESSION_EXPIRY_CF: &str = "session_expiry";
-
 pub(crate) fn hash_key(key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(key.as_bytes());
@@ -24,17 +15,15 @@ pub(crate) fn hash_key(key: &str) -> String {
 }
 
 pub struct Database {
-    db: Arc<RocksDB>,
+    conn: Arc<Mutex<Connection>>,
     max_api_keys_per_user: u64,
-    provider_lock: Mutex<()>,
-    model_lock: Mutex<()>,
-    user_lock: Mutex<()>,
 }
 
 #[derive(Debug)]
 pub enum DbError {
     NotFound(String),
     LimitExceeded(String),
+    Duplicate(String),
     Storage(String),
 }
 
@@ -43,12 +32,154 @@ impl std::fmt::Display for DbError {
         match self {
             DbError::NotFound(msg) => write!(f, "Not found: {}", msg),
             DbError::LimitExceeded(msg) => write!(f, "Limit exceeded: {}", msg),
+            DbError::Duplicate(msg) => write!(f, "Duplicate: {}", msg),
             DbError::Storage(msg) => write!(f, "Storage error: {}", msg),
         }
     }
 }
 
 impl std::error::Error for DbError {}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn ts(ts: i64) -> DateTime<Utc> {
+    DateTime::from_timestamp(ts, 0).unwrap()
+}
+
+fn opt_ts(ts: Option<i64>) -> Option<DateTime<Utc>> {
+    ts.map(|t| DateTime::from_timestamp(t, 0).unwrap())
+}
+
+fn to_storage(e: rusqlite::Error) -> DbError {
+    DbError::Storage(e.to_string())
+}
+
+fn row_to_provider(row: &Row) -> rusqlite::Result<Provider> {
+    Ok(Provider {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        provider_type: ProviderType::from_db(&row.get::<_, String>(2)?),
+        base_url: row.get(3)?,
+        api_key: row.get(4)?,
+        enabled: row.get::<_, i32>(5)? != 0,
+        created_at: ts(row.get::<_, i64>(6)?),
+        updated_at: ts(row.get::<_, i64>(7)?),
+    })
+}
+
+fn row_to_model(row: &Row) -> rusqlite::Result<Model> {
+    Ok(Model {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        provider_id: row.get(2)?,
+        upstream_model: row.get(3)?,
+        enabled: row.get::<_, i32>(4)? != 0,
+        created_at: ts(row.get::<_, i64>(5)?),
+        updated_at: ts(row.get::<_, i64>(6)?),
+    })
+}
+
+fn row_to_api_key(row: &Row) -> rusqlite::Result<ApiKey> {
+    Ok(ApiKey {
+        id: row.get(0)?,
+        key: row.get(1)?,
+        display: row.get(2)?,
+        name: row.get(3)?,
+        created_at: ts(row.get::<_, i64>(4)?),
+        updated_at: ts(row.get::<_, i64>(5)?),
+        enabled: row.get::<_, i32>(6)? != 0,
+        expires_at: opt_ts(row.get::<_, Option<i64>>(7)?),
+    })
+}
+
+fn row_to_api_key_info(row: &Row) -> rusqlite::Result<ApiKeyInfo> {
+    Ok(ApiKeyInfo {
+        id: row.get(0)?,
+        username: row.get(1)?,
+        name: row.get(2)?,
+        enabled: row.get::<_, i32>(3)? != 0,
+        expires_at: opt_ts(row.get::<_, Option<i64>>(4)?),
+        created_at: ts(row.get::<_, i64>(5)?),
+    })
+}
+
+fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
+    Ok(Session {
+        session_key: row.get(0)?,
+        username: row.get(1)?,
+        created_at: ts(row.get::<_, i64>(2)?),
+        expires_at: ts(row.get::<_, i64>(3)?),
+    })
+}
+
+fn row_to_user_basic(row: &Row) -> rusqlite::Result<(String, String, i64, i64)> {
+    Ok((
+        row.get::<_, String>(0)?,
+        row.get::<_, String>(1)?,
+        row.get::<_, i64>(2)?,
+        row.get::<_, i64>(3)?,
+    ))
+}
+
+fn create_tables(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS providers (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            type        TEXT NOT NULL DEFAULT 'openai_compat',
+            base_url    TEXT NOT NULL,
+            api_key     TEXT,
+            enabled     INTEGER NOT NULL DEFAULT 1,
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS models (
+            id             TEXT PRIMARY KEY,
+            name           TEXT NOT NULL UNIQUE,
+            provider_id    TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+            upstream_model TEXT NOT NULL,
+            enabled        INTEGER NOT NULL DEFAULT 1,
+            created_at     INTEGER NOT NULL,
+            updated_at     INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id);
+        CREATE INDEX IF NOT EXISTS idx_models_enabled ON models(enabled);
+        CREATE TABLE IF NOT EXISTS users (
+            username      TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            created_at    INTEGER NOT NULL,
+            updated_at    INTEGER NOT NULL
+        );
+        -- no FK on username: sessions are transient cache data, user cleanup
+        -- is handled explicitly before the user row is removed
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_key_hash TEXT PRIMARY KEY,
+            username         TEXT NOT NULL,
+            created_at       INTEGER NOT NULL,
+            expires_at       INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id         TEXT PRIMARY KEY,
+            key_hash   TEXT NOT NULL UNIQUE,
+            display    TEXT NOT NULL,
+            username   TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+            name       TEXT NOT NULL,
+            enabled    INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            expires_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_apikeys_username ON api_keys(username);",
+    )
+    .map_err(to_storage)
+}
+
+// ---------------------------------------------------------------------------
+// Database impl
+// ---------------------------------------------------------------------------
 
 impl Database {
     pub fn new(
@@ -59,136 +190,14 @@ impl Database {
             fs::create_dir_all(parent)?;
         }
 
-        let mut db_opts = Options::default();
-        db_opts.create_if_missing(true);
-        db_opts.create_missing_column_families(true);
-
-        let cf_names = vec![
-            PROVIDERS_CF,
-            MODELS_CF,
-            USERS_CF,
-            SESSIONS_CF,
-            API_KEYS_CF,
-            PROVIDER_MODEL_CF,
-            SESSION_EXPIRY_CF,
-        ];
-        let db = RocksDB::open_cf(&db_opts, path, &cf_names)?;
+        let conn = Connection::open(path)?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        create_tables(&conn)?;
 
         Ok(Self {
-            db: Arc::new(db),
+            conn: Arc::new(Mutex::new(conn)),
             max_api_keys_per_user,
-            provider_lock: Mutex::new(()),
-            model_lock: Mutex::new(()),
-            user_lock: Mutex::new(()),
         })
-    }
-
-    fn cf(&self, name: &str) -> Result<&rocksdb::ColumnFamily, DbError> {
-        self.db
-            .cf_handle(name)
-            .ok_or_else(|| DbError::Storage(format!("CF '{}' not found", name)))
-    }
-
-    fn cf_get<T: serde::de::DeserializeOwned>(
-        &self,
-        cf_name: &str,
-        key: impl AsRef<[u8]>,
-    ) -> Result<Option<T>, DbError> {
-        let cf = self.cf(cf_name)?;
-        self.db
-            .get_cf(&cf, key)
-            .map_err(|e| DbError::Storage(e.to_string()))?
-            .map(|val| serde_json::from_slice(&val).map_err(|e| DbError::Storage(e.to_string())))
-            .transpose()
-    }
-
-    fn cf_list<T: serde::de::DeserializeOwned>(&self, cf_name: &str) -> Result<Vec<T>, DbError> {
-        let cf = self.cf(cf_name)?;
-        let mut items = Vec::new();
-        for item in self.db.iterator_cf(&cf, IteratorMode::Start).flatten() {
-            items.push(
-                serde_json::from_slice(&item.1).map_err(|e| DbError::Storage(e.to_string()))?,
-            );
-        }
-        Ok(items)
-    }
-
-    fn cf_count(&self, cf_name: &str) -> Result<usize, DbError> {
-        let cf = self.cf(cf_name)?;
-        let mut count = 0;
-        for item in self.db.iterator_cf(&cf, IteratorMode::Start) {
-            match item {
-                Ok(_) => count += 1,
-                Err(e) => return Err(DbError::Storage(e.to_string())),
-            }
-        }
-        Ok(count)
-    }
-
-    fn cf_put<T: serde::Serialize>(
-        &self,
-        cf_name: &str,
-        key: impl AsRef<[u8]>,
-        val: &T,
-    ) -> Result<(), DbError> {
-        let cf = self.cf(cf_name)?;
-        let bytes = serde_json::to_vec(val).map_err(|e| DbError::Storage(e.to_string()))?;
-        self.db
-            .put_cf(&cf, key, bytes)
-            .map_err(|e| DbError::Storage(e.to_string()))
-    }
-
-    fn cf_put_batch<T: serde::Serialize>(
-        &self,
-        batch: &mut WriteBatch,
-        cf_name: &str,
-        key: impl AsRef<[u8]>,
-        val: &T,
-    ) -> Result<(), DbError> {
-        let cf = self.cf(cf_name)?;
-        let bytes = serde_json::to_vec(val).map_err(|e| DbError::Storage(e.to_string()))?;
-        batch.put_cf(cf, key, bytes);
-        Ok(())
-    }
-
-    fn cf_del_batch(
-        &self,
-        batch: &mut WriteBatch,
-        cf_name: &str,
-        key: impl AsRef<[u8]>,
-    ) -> Result<(), DbError> {
-        let cf = self.cf(cf_name)?;
-        batch.delete_cf(cf, key);
-        Ok(())
-    }
-
-    fn write_batch(&self, batch: WriteBatch) -> Result<(), DbError> {
-        self.db
-            .write(batch)
-            .map_err(|e| DbError::Storage(e.to_string()))
-    }
-
-    fn cf_prefix_keys(
-        &self,
-        cf_name: &str,
-        prefix: impl AsRef<[u8]>,
-    ) -> Result<Vec<Vec<u8>>, DbError> {
-        let cf = self.cf(cf_name)?;
-        let mut keys = Vec::new();
-        for item in self
-            .db
-            .iterator_cf(
-                &cf,
-                IteratorMode::From(prefix.as_ref(), rocksdb::Direction::Forward),
-            )
-            .flatten()
-        {
-            if !item.0.starts_with(prefix.as_ref()) {
-                break;
-            }
-            keys.push(item.0.to_vec());
-        }
-        Ok(keys)
     }
 
     // --- Provider CRUD ---
@@ -201,15 +210,48 @@ impl Database {
         provider.created_at = now;
         provider.updated_at = now;
 
-        self.cf_put(PROVIDERS_CF, format!("prov:{}", provider.id), &provider)?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO providers (id, name, type, base_url, api_key, enabled, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                provider.id,
+                provider.name,
+                provider.provider_type.to_db(),
+                provider.base_url,
+                provider.api_key,
+                provider.enabled as i32,
+                provider.created_at.timestamp(),
+                provider.updated_at.timestamp(),
+            ],
+        )
+        .map_err(to_storage)?;
+
         Ok(provider)
     }
 
     pub fn update_provider(&self, updates: &Provider) -> Result<Provider, DbError> {
-        let _guard = self.provider_lock.lock().unwrap();
-        let mut provider = self
-            .get_provider(&updates.id)?
-            .ok_or_else(|| DbError::NotFound(format!("Provider '{}' not found", &updates.id)))?;
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now();
+
+        let mut provider = {
+            let result = conn.query_row(
+                "SELECT id, name, type, base_url, api_key, enabled, created_at, updated_at
+                 FROM providers WHERE id = ?1",
+                params![updates.id],
+                row_to_provider,
+            );
+            match result {
+                Ok(p) => p,
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    return Err(DbError::NotFound(format!(
+                        "Provider '{}' not found",
+                        updates.id
+                    )));
+                }
+                Err(e) => return Err(DbError::Storage(e.to_string())),
+            }
+        };
 
         provider.name = updates.name.clone();
         provider.provider_type = updates.provider_type.clone();
@@ -220,47 +262,71 @@ impl Database {
             Some(s) => Some(s.clone()),
         };
         provider.enabled = updates.enabled;
-        provider.updated_at = Utc::now();
+        provider.updated_at = now;
 
-        self.cf_put(PROVIDERS_CF, format!("prov:{}", &updates.id), &provider)?;
+        conn.execute(
+            "UPDATE providers SET name=?1, type=?2, base_url=?3, api_key=?4, enabled=?5, updated_at=?6
+             WHERE id=?7",
+            params![
+                provider.name,
+                provider.provider_type.to_db(),
+                provider.base_url,
+                provider.api_key,
+                provider.enabled as i32,
+                provider.updated_at.timestamp(),
+                provider.id,
+            ],
+        )
+        .map_err(to_storage)?;
+
         Ok(provider)
     }
 
     pub fn delete_provider(&self, id: &str) -> Result<bool, DbError> {
-        let _p_guard = self.provider_lock.lock().unwrap();
-        let _m_guard = self.model_lock.lock().unwrap();
-        if self.get_provider(id)?.is_none() {
-            return Ok(false);
-        }
-
-        let mut batch = WriteBatch::default();
-        self.cf_del_batch(&mut batch, PROVIDERS_CF, format!("prov:{}", id))?;
-
-        let pm_prefix = format!("pm:{}:", id);
-        let pm_keys = self.cf_prefix_keys(PROVIDER_MODEL_CF, &pm_prefix)?;
-        for key in &pm_keys {
-            let key_str = std::str::from_utf8(key).map_err(|e| DbError::Storage(e.to_string()))?;
-            let model_name = key_str
-                .strip_prefix(&pm_prefix)
-                .ok_or_else(|| DbError::Storage("invalid pm key".to_string()))?;
-            self.cf_del_batch(&mut batch, MODELS_CF, format!("model:{}", model_name))?;
-            self.cf_del_batch(&mut batch, PROVIDER_MODEL_CF, key)?;
-        }
-
-        self.write_batch(batch)?;
-        Ok(true)
+        let conn = self.conn.lock().unwrap();
+        let rows = conn
+            .execute("DELETE FROM providers WHERE id = ?1", params![id])
+            .map_err(to_storage)?;
+        Ok(rows > 0)
     }
 
     pub fn get_provider(&self, id: &str) -> Result<Option<Provider>, DbError> {
-        self.cf_get(PROVIDERS_CF, format!("prov:{}", id))
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT id, name, type, base_url, api_key, enabled, created_at, updated_at
+             FROM providers WHERE id = ?1",
+            params![id],
+            row_to_provider,
+        );
+        match result {
+            Ok(p) => Ok(Some(p)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(DbError::Storage(e.to_string())),
+        }
     }
 
     pub fn count_providers(&self) -> Result<usize, DbError> {
-        self.cf_count(PROVIDERS_CF)
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))
+            .map_err(to_storage)?;
+        Ok(count as usize)
     }
 
     pub fn list_providers(&self) -> Result<Vec<Provider>, DbError> {
-        self.cf_list(PROVIDERS_CF)
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, type, base_url, api_key, enabled, created_at, updated_at
+                 FROM providers ORDER BY name",
+            )
+            .map_err(to_storage)?;
+        let items = stmt
+            .query_map([], row_to_provider)
+            .map_err(to_storage)?
+            .flatten()
+            .collect();
+        Ok(items)
     }
 
     // --- Model CRUD ---
@@ -273,115 +339,176 @@ impl Database {
         model.created_at = now;
         model.updated_at = now;
 
-        // Check provider exists
+        let conn = self.conn.lock().unwrap();
 
-        if model.provider_id.is_empty() {
-            return Err(DbError::Storage("provider_id is required".to_string()));
-        }
-        let prov = self.get_provider(&model.provider_id)?;
-        if prov.is_none() {
+        let (prov_exists, name_exists): (bool, bool) = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM providers WHERE id = ?1),
+                        EXISTS(SELECT 1 FROM models WHERE name = ?2)",
+                params![model.provider_id, model.name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(to_storage)?;
+        if !prov_exists {
             return Err(DbError::NotFound(format!(
                 "Provider '{}' not found",
                 model.provider_id
             )));
         }
+        if name_exists {
+            return Err(DbError::Duplicate(format!(
+                "Model '{}' already exists",
+                model.name
+            )));
+        }
 
-        let mut batch = WriteBatch::default();
-        self.cf_put_batch(
-            &mut batch,
-            MODELS_CF,
-            format!("model:{}", model.name),
-            &model,
-        )?;
-        self.cf_put_batch(
-            &mut batch,
-            PROVIDER_MODEL_CF,
-            format!("pm:{}:{}", model.provider_id, model.name),
-            &String::new(),
-        )?;
-        self.write_batch(batch)?;
+        conn.execute(
+            "INSERT INTO models (id, name, provider_id, upstream_model, enabled, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                model.id,
+                model.name,
+                model.provider_id,
+                model.upstream_model,
+                model.enabled as i32,
+                model.created_at.timestamp(),
+                model.updated_at.timestamp(),
+            ],
+        )
+        .map_err(to_storage)?;
+
         Ok(model)
     }
 
     pub fn update_model(&self, updates: &Model) -> Result<Model, DbError> {
-        let _guard = self.model_lock.lock().unwrap();
-        let mut model = self
-            .get_model(&updates.name)?
-            .ok_or_else(|| DbError::NotFound(format!("Model '{}' not found", &updates.name)))?;
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now();
 
-        let old_provider_id = model.provider_id.clone();
+        let mut model = {
+            let result = conn.query_row(
+                "SELECT id, name, provider_id, upstream_model, enabled, created_at, updated_at
+                 FROM models WHERE name = ?1",
+                params![updates.name],
+                row_to_model,
+            );
+            match result {
+                Ok(m) => m,
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    return Err(DbError::NotFound(format!(
+                        "Model '{}' not found",
+                        updates.name
+                    )));
+                }
+                Err(e) => return Err(DbError::Storage(e.to_string())),
+            }
+        };
+
         model.provider_id = updates.provider_id.clone();
         model.upstream_model = updates.upstream_model.clone();
         model.enabled = updates.enabled;
-        model.updated_at = Utc::now();
+        model.updated_at = now;
 
-        let mut batch = WriteBatch::default();
-        self.cf_put_batch(
-            &mut batch,
-            MODELS_CF,
-            format!("model:{}", &updates.name),
-            &model,
-        )?;
-        if old_provider_id != model.provider_id {
-            self.cf_del_batch(
-                &mut batch,
-                PROVIDER_MODEL_CF,
-                format!("pm:{}:{}", old_provider_id, updates.name),
-            )?;
-            self.cf_put_batch(
-                &mut batch,
-                PROVIDER_MODEL_CF,
-                format!("pm:{}:{}", model.provider_id, updates.name),
-                &String::new(),
-            )?;
-        }
-        self.write_batch(batch)?;
+        conn.execute(
+            "UPDATE models SET provider_id=?1, upstream_model=?2, enabled=?3, updated_at=?4
+             WHERE name=?5",
+            params![
+                model.provider_id,
+                model.upstream_model,
+                model.enabled as i32,
+                model.updated_at.timestamp(),
+                updates.name,
+            ],
+        )
+        .map_err(to_storage)?;
+
         Ok(model)
     }
 
     pub fn delete_model(&self, name: &str) -> Result<(), DbError> {
-        let model = match self.get_model(name)? {
-            Some(m) => m,
-            None => return Ok(()),
-        };
-        let mut batch = WriteBatch::default();
-        self.cf_del_batch(&mut batch, MODELS_CF, format!("model:{}", name))?;
-        self.cf_del_batch(
-            &mut batch,
-            PROVIDER_MODEL_CF,
-            format!("pm:{}:{}", model.provider_id, name),
-        )?;
-        self.write_batch(batch)?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM models WHERE name = ?1", params![name])
+            .map_err(to_storage)?;
         Ok(())
     }
 
     pub fn get_model(&self, name: &str) -> Result<Option<Model>, DbError> {
-        self.cf_get(MODELS_CF, format!("model:{}", name))
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT id, name, provider_id, upstream_model, enabled, created_at, updated_at
+             FROM models WHERE name = ?1",
+            params![name],
+            row_to_model,
+        );
+        match result {
+            Ok(m) => Ok(Some(m)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(DbError::Storage(e.to_string())),
+        }
     }
 
     pub fn count_models(&self) -> Result<usize, DbError> {
-        self.cf_count(MODELS_CF)
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM models", [], |row| row.get(0))
+            .map_err(to_storage)?;
+        Ok(count as usize)
     }
 
     pub fn list_models(&self) -> Result<Vec<Model>, DbError> {
-        self.cf_list(MODELS_CF)
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, provider_id, upstream_model, enabled, created_at, updated_at
+                 FROM models ORDER BY name",
+            )
+            .map_err(to_storage)?;
+        let items = stmt
+            .query_map([], row_to_model)
+            .map_err(to_storage)?
+            .flatten()
+            .collect();
+        Ok(items)
     }
 
-    // --- Lookup: model name -> (Model, Provider) ---
+    // --- resolve_model: hot path ---
+
     pub fn resolve_model(&self, model_name: &str) -> Result<Option<(Model, Provider)>, DbError> {
-        let model = match self.get_model(model_name)? {
-            Some(m) if m.enabled => m,
-            Some(_) => return Ok(None), // model disabled
-            None => return Ok(None),
-        };
-
-        let provider = match self.get_provider(&model.provider_id)? {
-            Some(p) if p.enabled => p,
-            Some(_) => return Ok(None), // provider disabled
-            None => return Ok(None),
-        };
-
-        Ok(Some((model, provider)))
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT m.id, m.name, m.provider_id, m.upstream_model, m.enabled, m.created_at, m.updated_at,
+                    p.id, p.name, p.type, p.base_url, p.api_key, p.enabled, p.created_at, p.updated_at
+             FROM models m
+             JOIN providers p ON p.id = m.provider_id
+             WHERE m.name = ?1 AND m.enabled = 1 AND p.enabled = 1",
+            params![model_name],
+            |row| {
+                let model = Model {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    provider_id: row.get(2)?,
+                    upstream_model: row.get(3)?,
+                    enabled: row.get::<_, i32>(4)? != 0,
+                    created_at: ts(row.get::<_, i64>(5)?),
+                    updated_at: ts(row.get::<_, i64>(6)?),
+                };
+                let provider = Provider {
+                    id: row.get(7)?,
+                    name: row.get(8)?,
+                    provider_type: ProviderType::from_db(&row.get::<_, String>(9)?),
+                    base_url: row.get(10)?,
+                    api_key: row.get(11)?,
+                    enabled: row.get::<_, i32>(12)? != 0,
+                    created_at: ts(row.get::<_, i64>(13)?),
+                    updated_at: ts(row.get::<_, i64>(14)?),
+                };
+                Ok((model, provider))
+            },
+        );
+        match result {
+            Ok((m, p)) => Ok(Some((m, p))),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(DbError::Storage(e.to_string())),
+        }
     }
 
     // --- User CRUD ---
@@ -390,75 +517,101 @@ impl Database {
         let now = Utc::now();
         user.created_at = now;
         user.updated_at = now;
-        self.cf_put(USERS_CF, format!("user:{}", user.username), &user)?;
+
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO users (username, password_hash, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                user.username,
+                user.password_hash,
+                user.created_at.timestamp(),
+                user.updated_at.timestamp(),
+            ],
+        )
+        .map_err(to_storage)?;
+
         Ok(user)
     }
 
     pub fn get_user(&self, username: &str) -> Result<Option<User>, DbError> {
-        self.cf_get(USERS_CF, format!("user:{}", username))
+        let conn = self.conn.lock().unwrap();
+
+        let mut user = match conn.query_row(
+            "SELECT username, password_hash, created_at, updated_at
+             FROM users WHERE username = ?1",
+            params![username],
+            |row| {
+                let (username, password_hash, created_ts, updated_ts) = row_to_user_basic(row)?;
+                Ok(User {
+                    username,
+                    password_hash,
+                    api_keys: vec![],
+                    created_at: ts(created_ts),
+                    updated_at: ts(updated_ts),
+                })
+            },
+        ) {
+            Ok(u) => u,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+            Err(e) => return Err(DbError::Storage(e.to_string())),
+        };
+
+        // Fill api_keys
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, key_hash, display, name, created_at, updated_at, enabled, expires_at
+                 FROM api_keys WHERE username = ?1 ORDER BY created_at",
+            )
+            .map_err(to_storage)?;
+        let keys = stmt
+            .query_map(params![username], row_to_api_key)
+            .map_err(to_storage)?;
+
+        for key in keys.flatten() {
+            user.api_keys.push(key);
+        }
+
+        Ok(Some(user))
     }
 
     pub fn has_any_users(&self) -> Result<bool, DbError> {
-        let cf = self.cf(USERS_CF)?;
-        match self.db.iterator_cf(&cf, IteratorMode::Start).next() {
-            Some(Ok(_)) => Ok(true),
-            Some(Err(e)) => Err(DbError::Storage(e.to_string())),
-            None => Ok(false),
-        }
-    }
-
-    pub fn list_users(&self) -> Result<Vec<User>, DbError> {
-        self.cf_list(USERS_CF)
+        let conn = self.conn.lock().unwrap();
+        let exists: bool = conn
+            .query_row("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)", [], |row| {
+                row.get(0)
+            })
+            .map_err(to_storage)?;
+        Ok(exists)
     }
 
     pub fn update_user(&self, user: &User) -> Result<User, DbError> {
-        let _guard = self.user_lock.lock().unwrap();
-        self.get_user(&user.username)?
-            .ok_or_else(|| DbError::NotFound(format!("User '{}' not found", user.username)))?;
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?1)",
+                params![user.username],
+                |row| row.get(0),
+            )
+            .map_err(to_storage)?;
+        if !exists {
+            return Err(DbError::NotFound(format!(
+                "User '{}' not found",
+                user.username
+            )));
+        }
+
+        conn.execute(
+            "UPDATE users SET password_hash = ?1, updated_at = ?2 WHERE username = ?3",
+            params![user.password_hash, now, user.username],
+        )
+        .map_err(to_storage)?;
+
         let mut updated = user.clone();
         updated.updated_at = Utc::now();
-        self.cf_put(USERS_CF, format!("user:{}", &updated.username), &updated)?;
         Ok(updated)
-    }
-
-    pub fn delete_user(&self, username: &str) -> Result<(), DbError> {
-        let _guard = self.user_lock.lock().unwrap();
-        let user = self.get_user_or_err(username)?;
-
-        let mut batch = WriteBatch::default();
-
-        for api_key in &user.api_keys {
-            self.cf_del_batch(&mut batch, API_KEYS_CF, &api_key.key)?;
-        }
-
-        let sessions: Vec<Session> = self.cf_list(SESSIONS_CF)?;
-        for session in &sessions {
-            if session.username == username {
-                self.cf_del_batch(
-                    &mut batch,
-                    SESSIONS_CF,
-                    format!("sess:{}", &session.session_key),
-                )?;
-                self.cf_del_batch(
-                    &mut batch,
-                    SESSION_EXPIRY_CF,
-                    format!(
-                        "expire:{:020}:{}",
-                        session.expires_at.timestamp(),
-                        session.session_key
-                    ),
-                )?;
-            }
-        }
-
-        self.cf_del_batch(&mut batch, USERS_CF, format!("user:{}", username))?;
-        self.write_batch(batch)?;
-        Ok(())
-    }
-
-    fn get_user_or_err(&self, username: &str) -> Result<User, DbError> {
-        self.get_user(username)?
-            .ok_or_else(|| DbError::NotFound(format!("User '{}' not found", username)))
     }
 
     // --- Session CRUD ---
@@ -468,69 +621,57 @@ impl Database {
         let hash = hash_key(&session.session_key);
         session.session_key = hash.clone();
 
-        let mut batch = WriteBatch::default();
-        self.cf_put_batch(&mut batch, SESSIONS_CF, format!("sess:{}", hash), &session)?;
-        let ts = format!("expire:{:020}:{}", session.expires_at.timestamp(), hash);
-        self.cf_put_batch(&mut batch, SESSION_EXPIRY_CF, ts, &String::new())?;
-        self.write_batch(batch)?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO sessions (session_key_hash, username, created_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                hash,
+                session.username,
+                session.created_at.timestamp(),
+                session.expires_at.timestamp(),
+            ],
+        )
+        .map_err(to_storage)?;
+
         Ok(session)
     }
 
     pub fn get_session(&self, session_key: &str) -> Result<Option<Session>, DbError> {
-        self.cf_get(SESSIONS_CF, format!("sess:{}", hash_key(session_key)))
+        let hash = hash_key(session_key);
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT session_key_hash, username, created_at, expires_at
+             FROM sessions WHERE session_key_hash = ?1",
+            params![hash],
+            row_to_session,
+        );
+        match result {
+            Ok(s) => Ok(Some(s)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(DbError::Storage(e.to_string())),
+        }
     }
 
     pub fn delete_session(&self, session_key: &str) -> Result<bool, DbError> {
         let hash = hash_key(session_key);
-        let key = format!("sess:{}", hash);
-        let session = match self.cf_get::<Session>(SESSIONS_CF, &key)? {
-            Some(s) => s,
-            None => return Ok(false),
-        };
-        let mut batch = WriteBatch::default();
-        self.cf_del_batch(&mut batch, SESSIONS_CF, &key)?;
-        let ts = format!("expire:{:020}:{}", session.expires_at.timestamp(), hash);
-        self.cf_del_batch(&mut batch, SESSION_EXPIRY_CF, ts)?;
-        self.write_batch(batch)?;
-        Ok(true)
+        let conn = self.conn.lock().unwrap();
+        let rows = conn
+            .execute(
+                "DELETE FROM sessions WHERE session_key_hash = ?1",
+                params![hash],
+            )
+            .map_err(to_storage)?;
+        Ok(rows > 0)
     }
 
     pub fn cleanup_expired_sessions(&self) -> Result<usize, DbError> {
         let now = Utc::now().timestamp();
-        let cf = self.cf(SESSION_EXPIRY_CF)?;
-        let prefix = b"expire:";
-        let mut batch = WriteBatch::default();
-        let mut count = 0;
-        let iter = self
-            .db
-            .iterator_cf(&cf, IteratorMode::From(prefix, rocksdb::Direction::Forward));
-        for item in iter.flatten() {
-            let key = &item.0;
-            if !key.starts_with(prefix) {
-                break;
-            }
-            // key format: "expire:{:020}:{sha256_hex}" → 7 + 20 + 1 + 64 = 92 bytes
-            //            "expire:"                    7-byte prefix
-            //            "{:020}"                    20-byte zero-padded i64 timestamp (secs)
-            //            ":"                          1-byte separator
-            //            "{sha256_hex}"              64-byte SHA-256 hex digest
-            let key_str = std::str::from_utf8(key).map_err(|e| DbError::Storage(e.to_string()))?;
-            let ts_str = &key_str[7..27];
-            let ts: i64 = ts_str
-                .parse()
-                .map_err(|_| DbError::Storage("invalid ts".to_string()))?;
-            if ts > now {
-                break;
-            }
-            let hash = &key_str[28..];
-            self.cf_del_batch(&mut batch, SESSIONS_CF, format!("sess:{}", hash))?;
-            self.cf_del_batch(&mut batch, SESSION_EXPIRY_CF, key)?;
-            count += 1;
-        }
-        if count > 0 {
-            self.write_batch(batch)?;
-        }
-        Ok(count)
+        let conn = self.conn.lock().unwrap();
+        let rows = conn
+            .execute("DELETE FROM sessions WHERE expires_at < ?1", params![now])
+            .map_err(to_storage)?;
+        Ok(rows)
     }
 
     // --- API Key CRUD ---
@@ -551,25 +692,60 @@ impl Database {
         name: &str,
         expires_at: Option<DateTime<Utc>>,
     ) -> Result<(ApiKey, String), DbError> {
-        let _guard = self.user_lock.lock().unwrap();
-        // Check user exists and key limit
-        let mut user = self.get_user_or_err(username)?;
-        if user.api_keys.len() as u64 >= self.max_api_keys_per_user {
+        let raw_key = Self::generate_api_key();
+        let hash = hash_key(&raw_key);
+        let now = Utc::now();
+        let id = Uuid::new_v4().to_string();
+        let now_ts = now.timestamp();
+        let expires_ts = expires_at.map(|dt| dt.timestamp());
+
+        let conn = self.conn.lock().unwrap();
+
+        let user_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?1)",
+                params![username],
+                |row| row.get(0),
+            )
+            .map_err(to_storage)?;
+        if !user_exists {
+            return Err(DbError::NotFound(format!("User '{}' not found", username)));
+        }
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM api_keys WHERE username = ?1",
+                params![username],
+                |row| row.get(0),
+            )
+            .map_err(to_storage)?;
+        if count as u64 >= self.max_api_keys_per_user {
             return Err(DbError::LimitExceeded(format!(
                 "Maximum of {} API keys per user",
                 self.max_api_keys_per_user
             )));
         }
 
-        let raw_key = Self::generate_api_key();
-        let hash = hash_key(&raw_key);
-        let now = Utc::now();
-        let id = Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO api_keys (id, key_hash, display, username, name, enabled, created_at, updated_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                id,
+                hash,
+                mask_api_key(&raw_key),
+                username,
+                name,
+                1i32,
+                now_ts,
+                now_ts,
+                expires_ts,
+            ],
+        )
+        .map_err(to_storage)?;
 
-        // Stored ApiKey (key is hash, display is masked raw key)
         let stored = ApiKey {
             id: id.clone(),
-            key: hash.clone(),
+            key: hash,
             display: mask_api_key(&raw_key),
             name: name.to_string(),
             created_at: now,
@@ -578,102 +754,135 @@ impl Database {
             expires_at,
         };
 
-        // Store in api_keys CF for reverse lookup
-        let info = ApiKeyInfo {
-            id: id.clone(),
-            username: username.to_string(),
-            name: name.to_string(),
-            enabled: true,
-            expires_at,
-            created_at: now,
-        };
-
-        user.api_keys.push(stored.clone());
-        user.updated_at = now;
-
-        let mut batch = WriteBatch::default();
-        self.cf_put_batch(&mut batch, API_KEYS_CF, &hash, &info)?;
-        self.cf_put_batch(&mut batch, USERS_CF, format!("user:{}", username), &user)?;
-        self.write_batch(batch)?;
-
         Ok((stored, raw_key))
     }
 
     pub fn get_user_by_api_key(&self, api_key: &str) -> Result<Option<ApiKeyInfo>, DbError> {
-        self.cf_get(API_KEYS_CF, hash_key(api_key))
+        let api_hash = hash_key(api_key);
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT id, username, name, enabled, expires_at, created_at
+             FROM api_keys WHERE key_hash = ?1",
+            params![api_hash],
+            row_to_api_key_info,
+        );
+        match result {
+            Ok(info) => Ok(Some(info)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(DbError::Storage(e.to_string())),
+        }
     }
 
     pub fn delete_api_key(&self, username: &str, key_id: &str) -> Result<String, DbError> {
-        let _guard = self.user_lock.lock().unwrap();
-        let mut user = self.get_user_or_err(username)?;
+        let conn = self.conn.lock().unwrap();
 
-        let idx = user
-            .api_keys
-            .iter()
-            .position(|k| k.id == key_id)
-            .ok_or_else(|| DbError::NotFound("API key not found".to_string()))?;
-        let hash = user.api_keys[idx].key.clone();
-        user.api_keys.remove(idx);
-        user.updated_at = Utc::now();
+        let hash: String = conn
+            .query_row(
+                "SELECT key_hash FROM api_keys WHERE id = ?1 AND username = ?2",
+                params![key_id, username],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    DbError::NotFound("API key not found".to_string())
+                }
+                _ => DbError::Storage(e.to_string()),
+            })?;
 
-        let mut batch = WriteBatch::default();
-        self.cf_del_batch(&mut batch, API_KEYS_CF, &hash)?;
-        self.cf_put_batch(&mut batch, USERS_CF, format!("user:{}", username), &user)?;
-        self.write_batch(batch)?;
+        conn.execute(
+            "DELETE FROM api_keys WHERE id = ?1 AND username = ?2",
+            params![key_id, username],
+        )
+        .map_err(to_storage)?;
 
         Ok(hash)
     }
 
-    fn find_api_key_mut<'a>(
-        api_keys: &'a mut [ApiKey],
-        key_id: &str,
-    ) -> Result<&'a mut ApiKey, DbError> {
-        api_keys
-            .iter_mut()
-            .find(|k| k.id == key_id)
-            .ok_or_else(|| DbError::NotFound("API key not found".to_string()))
-    }
-
-    pub fn toggle_api_key(
+    pub fn update_api_key(
         &self,
         username: &str,
-        key_id: &str,
-        enabled: bool,
+        updates: &ApiKey,
     ) -> Result<(ApiKey, String), DbError> {
-        let _guard = self.user_lock.lock().unwrap();
-        let mut user = self.get_user_or_err(username)?;
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now();
 
-        let api_key = Self::find_api_key_mut(&mut user.api_keys, key_id)?;
+        let mut api_key = {
+            let result = conn.query_row(
+                "SELECT id, key_hash, display, name, created_at, updated_at, enabled, expires_at
+                 FROM api_keys WHERE id = ?1 AND username = ?2",
+                params![updates.id, username],
+                row_to_api_key,
+            );
+            match result {
+                Ok(k) => k,
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    return Err(DbError::NotFound("API key not found".to_string()));
+                }
+                Err(e) => return Err(DbError::Storage(e.to_string())),
+            }
+        };
+
+        api_key.name = if updates.name.is_empty() {
+            api_key.name
+        } else {
+            updates.name.clone()
+        };
+        api_key.enabled = updates.enabled;
+        api_key.expires_at = match updates.expires_at {
+            None => api_key.expires_at,
+            Some(dt) if dt.timestamp() == 0 => None,
+            Some(dt) => Some(dt),
+        };
+        api_key.updated_at = now;
+
+        conn.execute(
+            "UPDATE api_keys SET name = ?1, enabled = ?2, expires_at = ?3, updated_at = ?4 WHERE id = ?5 AND username = ?6",
+            params![
+                api_key.name,
+                api_key.enabled as i32,
+                api_key.expires_at.map(|dt| dt.timestamp()),
+                api_key.updated_at.timestamp(),
+                api_key.id,
+                username,
+            ],
+        )
+        .map_err(to_storage)?;
 
         let hash = api_key.key.clone();
-        api_key.enabled = enabled;
-        api_key.updated_at = Utc::now();
-        let result = api_key.clone();
-        user.updated_at = Utc::now();
+        Ok((api_key, hash))
+    }
 
-        let mut batch = WriteBatch::default();
-        self.cf_put_batch(&mut batch, USERS_CF, format!("user:{}", username), &user)?;
+    // --- Test helpers ---
 
-        // Keep ApiKeyInfo in sync
-        if let Some(mut info) = self.cf_get::<ApiKeyInfo>(API_KEYS_CF, &hash)? {
-            info.enabled = enabled;
-            self.cf_put_batch(&mut batch, API_KEYS_CF, &hash, &info)?;
-        }
-
-        self.write_batch(batch)?;
-
-        Ok((result, hash))
+    #[cfg(test)]
+    pub fn list_sessions(&self) -> Result<Vec<Session>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT session_key_hash, username, created_at, expires_at
+                 FROM sessions ORDER BY created_at",
+            )
+            .map_err(to_storage)?;
+        let items: Vec<Session> = stmt
+            .query_map([], row_to_session)
+            .map_err(to_storage)?
+            .flatten()
+            .collect();
+        Ok(items)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     fn setup() -> (Database, tempfile::TempDir) {
         crate::test_utils::create_test_db(10)
     }
-
-    // ── Provider CRUD ──
 
     fn make_prov(id: &str) -> Provider {
         crate::test_utils::create_test_provider(
@@ -682,6 +891,12 @@ mod tests {
             "https://example.com",
         )
     }
+
+    fn make_user() -> User {
+        crate::test_utils::create_test_user()
+    }
+
+    // ── Provider CRUD ──
 
     #[test]
     fn provider_create() {
@@ -893,8 +1108,7 @@ mod tests {
     #[test]
     fn resolve_model_provider_disabled() {
         let (db, _dir) = setup();
-        let prov = make_prov("p1");
-        let mut disabled = prov.clone();
+        let mut disabled = make_prov("p1");
         disabled.enabled = false;
         db.insert_provider(disabled).unwrap();
         db.insert_model(crate::test_utils::create_test_model("m1", "p1"))
@@ -910,10 +1124,6 @@ mod tests {
     }
 
     // ── User CRUD ──
-
-    fn make_user() -> User {
-        crate::test_utils::create_test_user()
-    }
 
     #[test]
     fn user_create() {
@@ -950,14 +1160,6 @@ mod tests {
     }
 
     #[test]
-    fn user_list() {
-        let (db, _dir) = setup();
-        db.insert_user(make_user()).unwrap();
-        db.insert_user(make_user()).unwrap();
-        assert_eq!(db.list_users().unwrap().len(), 2);
-    }
-
-    #[test]
     fn user_update() {
         let (db, _dir) = setup();
         let user = make_user();
@@ -972,15 +1174,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn user_delete() {
-        let (db, _dir) = setup();
-        let user = db.insert_user(make_user()).unwrap();
-        let uname = user.username.clone();
-        db.delete_user(&uname).unwrap();
-        assert!(db.get_user(&uname).unwrap().is_none());
-    }
-
     // ── Session CRUD ──
 
     #[test]
@@ -990,9 +1183,7 @@ mod tests {
         let mut session = crate::test_utils::create_test_session("alice", 3600);
         session.session_key = raw_key.to_string();
         let stored = db.insert_session(session).unwrap();
-        // stored key should be hashed
         assert_ne!(stored.session_key, raw_key);
-        // lookup with raw key should still work
         let found = db.get_session(raw_key).unwrap().expect("should find");
         assert_eq!(found.username, "alice");
     }
@@ -1023,7 +1214,6 @@ mod tests {
         let s = db.insert_session(session).unwrap();
         assert!(db.delete_session(raw_key).unwrap());
         assert!(db.get_session(raw_key).unwrap().is_none());
-        // stored key is hashed, deleting by hashed key (double-hash) should return false
         assert!(!db.delete_session(&s.session_key).unwrap());
     }
 
@@ -1038,8 +1228,7 @@ mod tests {
             .unwrap();
         let cleaned = db.cleanup_expired_sessions().unwrap();
         assert_eq!(cleaned, 2);
-        // alice's session should still exist
-        let all: Vec<Session> = db.cf_list(SESSIONS_CF).unwrap();
+        let all = db.list_sessions().unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].username, "alice");
     }
@@ -1058,7 +1247,7 @@ mod tests {
         let user = db.insert_user(make_user()).unwrap();
         let (stored, raw) = db.insert_api_key(&user.username, "test-key", None).unwrap();
         assert!(raw.starts_with("sk-"));
-        assert_eq!(raw.len(), 35); // "sk-" + 32 random chars
+        assert_eq!(raw.len(), 35);
         assert_eq!(stored.name, "test-key");
     }
 
@@ -1088,14 +1277,20 @@ mod tests {
     }
 
     #[test]
-    fn api_key_toggle() {
+    fn api_key_update() {
         let (db, _dir) = setup();
         let user = db.insert_user(make_user()).unwrap();
         let (stored, raw) = db.insert_api_key(&user.username, "test-key", None).unwrap();
-        db.toggle_api_key(&user.username, &stored.id, false)
-            .unwrap();
+        db.update_api_key(
+            &user.username,
+            &ApiKey {
+                id: stored.id.clone(),
+                enabled: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let info = db.get_user_by_api_key(&raw).unwrap().unwrap();
-        // fetch user to verify the key's enabled status
         let u = db.get_user(&user.username).unwrap().unwrap();
         let key = u.api_keys.iter().find(|k| k.id == info.id).unwrap();
         assert!(!key.enabled);
@@ -1109,9 +1304,7 @@ mod tests {
         let (stored, _) = db
             .insert_api_key(&alice.username, "alice-key", None)
             .unwrap();
-        // bob cannot see or delete alice's key
         db.delete_api_key(&bob.username, &stored.id).unwrap_err();
-        // list should show only bob's keys
         let bob_user = db.get_user(&bob.username).unwrap().unwrap();
         assert_eq!(bob_user.api_keys.len(), 0);
     }

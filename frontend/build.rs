@@ -50,7 +50,6 @@ fn main() {
 
     let mut code = String::new();
 
-    // Enum definition
     code.push_str("#[derive(Clone, Copy, Debug, PartialEq, Eq)]\n");
     code.push_str("#[allow(dead_code)]\n");
     code.push_str("pub enum K {\n");
@@ -60,7 +59,6 @@ fn main() {
     }
     code.push_str("}\n\n");
 
-    // as_str() implementation
     code.push_str("impl K {\n");
     code.push_str("    pub fn as_str(&self) -> &'static str {\n");
     code.push_str("        match self {\n");

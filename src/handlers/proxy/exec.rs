@@ -26,16 +26,28 @@ pub(crate) async fn proxy_non_streamed(
     upstream: Arc<dyn UpstreamProvider>,
     model_name: &str,
     provider: &crate::db::Provider,
-) -> Result<(impl IntoResponse, UsageTokens), (StatusCode, Json<AitError>)> {
+    start: Instant,
+) -> Result<(impl IntoResponse, UsageTokens, i64, usize), (StatusCode, Json<AitError>)> {
     let response = state.http_client.execute(request).await.map_err(|e| {
-        AitError::upstream_error(
-            502,
-            format!("Failed to connect to provider '{}': {}", provider.name, e),
-        )
-        .into_response()
+        let msg = format!("Failed to connect to provider '{}': {}", provider.name, e);
+        AitError::upstream_error(502, msg).into_response()
     })?;
 
+    let ttfb = start.elapsed().as_millis() as i64;
     let status = response.status();
+
+    if status.is_redirection() {
+        warn!(
+            "[proxy] upstream returned redirect {} for '{}'",
+            status, provider.name
+        );
+        return Err(AitError::upstream_error(
+            502,
+            "Ait does not support redirect policy. If the provider's base_url \
+             has changed, please update the provider configuration.",
+        )
+        .into_response());
+    }
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -55,23 +67,23 @@ pub(crate) async fn proxy_non_streamed(
         .map_err(|e| AitError::upstream_error(502, e.to_string()).into_response())?;
 
     if !status.is_success() {
-        warn!(
-            "[proxy] upstream error {}: {}",
-            status,
-            String::from_utf8_lossy(&bytes)
-        );
-        return Err(AitError::upstream_error(
-            status.as_u16(),
-            "upstream request failed".to_string(),
-        )
-        .into_response());
+        let body_str = String::from_utf8_lossy(&bytes);
+        let truncated = if body_str.len() > 512 {
+            format!("{}...", &body_str[..512])
+        } else {
+            body_str.to_string()
+        };
+        warn!("[proxy] upstream error {}: {}", status, truncated);
+        return Err(AitError::upstream_error(status.as_u16(), truncated).into_response());
     }
 
+    let body_size = bytes.len();
     let body = upstream.transform_response(&bytes, model_name);
     let usage = parse_usage(&body);
-    Ok(((StatusCode::OK, headers, body), usage))
+    Ok(((StatusCode::OK, headers, body), usage, ttfb, body_size))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn proxy_streamed(
     state: AppState,
     request: Request,
@@ -80,6 +92,10 @@ pub(crate) async fn proxy_streamed(
     model_name: String,
     session: SessionUser,
     start: Instant,
+    endpoint: String,
+    upstream_model: String,
+    provider_type: String,
+    client_ip: Option<String>,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     let log_manager = state.log_manager.clone();
     let model_name_for_transform = model_name.clone();
@@ -95,20 +111,47 @@ pub(crate) async fn proxy_streamed(
         cached_tokens: None,
         latency_ms: 0,
         status: "200".to_string(),
+        endpoint,
+        is_streaming: true,
+        time_to_first_token_ms: None,
+        upstream_model,
+        provider_type,
+        response_body_size: None,
+        error_message: None,
+        client_ip,
     };
 
     let mut guard = ProxyLogGuard::new(log_manager.clone(), base_event.clone(), start);
 
     let response = state.http_client.execute(request).await.map_err(|e| {
+        guard.event.error_message = Some(e.to_string());
         guard.finalize(&UsageTokens::default(), "502");
         AitError::upstream_error(502, format!("Failed to connect to provider: {}", e))
             .into_response()
     })?;
 
-    if !response.status().is_success() {
-        let status = response.status();
+    let status = response.status();
+
+    if status.is_redirection() {
+        guard.event.error_message = Some(format!("upstream returned redirect {}", status));
+        guard.finalize(&UsageTokens::default(), "502");
+        return Err(AitError::upstream_error(
+            502,
+            "Ait does not support redirect policy. If the provider's base_url \
+             has changed, please update the provider configuration.",
+        )
+        .into_response());
+    }
+
+    if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
         warn!("[proxy] upstream error {}: {}", status, body);
+        let truncated = if body.len() > 512 {
+            format!("{}...", &body[..512])
+        } else {
+            body
+        };
+        guard.event.error_message = Some(truncated);
         guard.finalize(&UsageTokens::default(), &status.as_u16().to_string());
         return Err(AitError::upstream_error(
             status.as_u16(),

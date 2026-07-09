@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::time::Instant;
 
 use axum::{
@@ -11,9 +12,11 @@ use chrono::Utc;
 use tracing::debug;
 
 use crate::app::AppState;
-use crate::db::{ProxyEvent, SessionUser};
-use crate::error::{AitError, not_found};
+use crate::db::{Model, Provider, ProxyEvent, SessionUser};
+use crate::error::{AitError, internal_error, not_found};
+use crate::middleware::CACHE_TTL;
 use crate::providers::create_provider;
+use crate::ssrf;
 
 mod exec;
 mod guard;
@@ -25,25 +28,28 @@ use guard::{ProxyLogGuard, UsageTokens};
 pub async fn chat_completions(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(client_ip): Extension<Option<IpAddr>>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, body, "/v1/chat/completions").await
+    proxy_request(state, session, client_ip, body, "/v1/chat/completions").await
 }
 
 pub async fn completions(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(client_ip): Extension<Option<IpAddr>>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, body, "/v1/completions").await
+    proxy_request(state, session, client_ip, body, "/v1/completions").await
 }
 
 pub async fn embeddings(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(client_ip): Extension<Option<IpAddr>>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, body, "/v1/embeddings").await
+    proxy_request(state, session, client_ip, body, "/v1/embeddings").await
 }
 
 pub async fn health(State(state): State<AppState>) -> AxumJson<serde_json::Value> {
@@ -60,7 +66,8 @@ pub async fn health(State(state): State<AppState>) -> AxumJson<serde_json::Value
             let m = db.count_models().unwrap_or(0);
             (p, m)
         })
-        .await;
+        .await
+        .unwrap_or((0, 0));
 
         AxumJson(serde_json::json!({
             "status": "ok",
@@ -88,7 +95,9 @@ pub async fn list_models_proxy(
         let p = db.list_providers()?;
         Ok::<_, crate::db::DbError>((m, p))
     })
-    .await?;
+    .await
+    .map_err(internal_error)?
+    .map_err(internal_error)?;
 
     let provider_names: HashMap<&str, &str> = providers
         .iter()
@@ -121,6 +130,7 @@ pub async fn list_models_proxy(
 pub async fn proxy_request(
     state: AppState,
     session: SessionUser,
+    client_ip: Option<IpAddr>,
     body: serde_json::Value,
     upstream_path: &str,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
@@ -130,18 +140,67 @@ pub async fn proxy_request(
         AitError::bad_request("Missing 'model' field in request body").into_response()
     })?;
 
-    // Two sequential RocksDB get_cf (~20–100 µs); spawn_blocking overhead
-    // (~5–20 µs) still exceeds the benefit, so called directly.
-    let (model, provider) = match state.db.resolve_model(model_name) {
-        Ok(Some((m, p))) => (m, p),
-        Ok(None) => {
-            return Err(not_found(format!(
-                "Model '{}' not found or disabled",
-                model_name
-            )));
+    let (model, provider) = {
+        async fn resolve(
+            state: &AppState,
+            model_name: &str,
+        ) -> Result<(Model, Provider), (StatusCode, Json<AitError>)> {
+            let db = state.db.clone();
+            let name = model_name.to_string();
+            match crate::run_blocking(move || db.resolve_model(&name)).await {
+                Ok(Ok(Some((m, p)))) => {
+                    let upstream = create_provider(&p, state.http_client.clone());
+                    state
+                        .provider_cache
+                        .insert(p.id.clone(), (upstream, Instant::now()));
+                    state.model_cache.insert(
+                        model_name.to_string(),
+                        (Some((m.clone(), p.clone())), Instant::now()),
+                    );
+                    Ok((m, p))
+                }
+                Ok(Ok(None)) => {
+                    state
+                        .model_cache
+                        .insert(model_name.to_string(), (None, Instant::now()));
+                    Err(not_found(format!(
+                        "Model '{}' not found or disabled",
+                        model_name
+                    )))
+                }
+                Ok(Err(e)) => Err(AitError::from_db_error(e).into_response()),
+                Err(join_err) => Err(internal_error(join_err)),
+            }
         }
-        Err(e) => {
-            return Err(AitError::from_db_error(e).into_response());
+
+        if let Some(cached) = state.model_cache.get(model_name) {
+            let (ref resolved, ref inserted_at) = *cached;
+            if inserted_at.elapsed() < CACHE_TTL {
+                match resolved {
+                    Some((m, p)) => (m.clone(), p.clone()),
+                    None => {
+                        return Err(not_found(format!(
+                            "Model '{}' not found or disabled",
+                            model_name
+                        )));
+                    }
+                }
+            } else {
+                resolve(&state, model_name).await?
+            }
+        } else {
+            resolve(&state, model_name).await?
+        }
+    };
+
+    let upstream = match state.provider_cache.get(&provider.id) {
+        Some(cached) if cached.1.elapsed() < CACHE_TTL => cached.0.clone(),
+        _ => {
+            let upstream = create_provider(&provider, state.http_client.clone());
+            state
+                .provider_cache
+                .insert(provider.id.clone(), (upstream.clone(), Instant::now()));
+            upstream
         }
     };
 
@@ -154,7 +213,6 @@ pub async fn proxy_request(
         .unwrap_or(false)
         && state.config.proxy.stream;
 
-    let upstream = create_provider(&provider, state.http_client.clone());
     let request = upstream
         .build_request(
             &state.http_client,
@@ -166,6 +224,14 @@ pub async fn proxy_request(
         .await
         .map_err(|e| AitError::bad_request(e).into_response())?;
 
+    ssrf::check_ssrf(
+        request.url(),
+        &state.config.security.ssrf_allowed_cidrs,
+        &state.ssrf_dns_cache,
+        &provider_name,
+    )
+    .await?;
+
     debug!(
         "Proxying to provider '{}' for model '{}' -> upstream '{}', base_url: {}",
         provider_name,
@@ -173,6 +239,11 @@ pub async fn proxy_request(
         model.upstream_model,
         request.url()
     );
+
+    let endpoint = upstream_path.to_string();
+    let upstream_model = model.upstream_model.clone();
+    let provider_type = provider.provider_type.as_ref().to_string();
+    let client_ip_str = client_ip.map(|ip| ip.to_string());
 
     if stream {
         return proxy_streamed(
@@ -183,6 +254,10 @@ pub async fn proxy_request(
             model_name,
             session.clone(),
             start,
+            endpoint,
+            upstream_model,
+            provider_type,
+            client_ip_str,
         )
         .await
         .map(|r| r.into_response());
@@ -203,16 +278,36 @@ pub async fn proxy_request(
             cached_tokens: None,
             latency_ms: 0,
             status: "200".to_string(),
+            endpoint,
+            is_streaming: false,
+            time_to_first_token_ms: None,
+            upstream_model,
+            provider_type,
+            response_body_size: None,
+            error_message: None,
+            client_ip: client_ip_str,
         },
         start,
     );
 
-    match proxy_non_streamed(state.clone(), request, upstream, &model_name, &provider).await {
-        Ok((resp, usage)) => {
+    match proxy_non_streamed(
+        state.clone(),
+        request,
+        upstream,
+        &model_name,
+        &provider,
+        start,
+    )
+    .await
+    {
+        Ok((resp, usage, ttfb, body_size)) => {
+            guard.event.time_to_first_token_ms = Some(ttfb);
+            guard.event.response_body_size = Some(body_size as i64);
             guard.finalize(&usage, "200");
             Ok(resp.into_response())
         }
         Err(e) => {
+            guard.event.error_message = Some(e.1.0.message.clone());
             guard.finalize(&UsageTokens::default(), &e.0.as_u16().to_string());
             Err(e)
         }

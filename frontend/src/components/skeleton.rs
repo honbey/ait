@@ -1,101 +1,111 @@
-use sycamore::prelude::*;
-use sycamore::web::tags::*;
+use leptos::prelude::*;
 
-use crate::components::modal::CLASS_PAGE_SHELL;
-
-fn sk(classes: &str) -> View {
-    div()
-        .class(format!("skeleton bg-gray-200 dark:bg-gray-700 {}", classes))
-        .into()
+fn sk(extra: &str) -> impl IntoView {
+    view! { <div class=format!("skeleton bg-gray-200 dark:bg-gray-600 {}", extra)></div> }
 }
 
-pub fn dashboard_skeleton() -> View {
-    div()
-        .class(format!("{} space-y-6 sm:space-y-8", CLASS_PAGE_SHELL))
-        .children((
-            div()
-                .class("grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6")
-                .children((
-                    stat_card_skeleton(),
-                    stat_card_skeleton(),
-                    stat_card_skeleton(),
-                    stat_card_skeleton(),
-                )),
-            div()
-                .class("grid grid-cols-1 lg:grid-cols-2 gap-6")
-                .children((chart_area_skeleton(), chart_area_skeleton())),
-        ))
-        .into()
+fn stat_card() -> impl IntoView {
+    view! {
+        <div class="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm">
+            <div class="flex items-center gap-4">
+                <div class="w-14 h-14 rounded-full skeleton bg-gray-200 dark:bg-gray-600 shrink-0"></div>
+                <div class="flex-1 space-y-3">
+                    {sk("h-8 w-24 rounded")} {sk("h-4 w-16 rounded")}
+                </div>
+            </div>
+        </div>
+    }
 }
 
-pub fn table_skeleton() -> View {
-    let toolbar = div()
-        .class("flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700")
-        .children((
-            sk("h-6 w-24 rounded"),
-            sk("h-9 w-20 rounded-lg"),
-        ));
+fn chart_card() -> impl IntoView {
+    view! {
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
+            {sk("h-5 w-48 rounded mb-4")} {sk("h-48 rounded-lg w-full")}
+        </div>
+    }
+}
 
-    let rows: Vec<View> = (0..6)
-        .map(|i| {
-            let cls = if i == 5 {
-                "border-b-0"
-            } else {
-                "border-b border-gray-200 dark:border-gray-700"
-            };
-            div()
-                .class(format!("flex items-center gap-4 px-6 py-4 {}", cls))
-                .children((
-                    sk("h-5 w-28 rounded"),
-                    sk("h-5 w-24 rounded"),
-                    sk("h-5 w-20 rounded"),
-                    sk("h-5 w-32 rounded"),
-                ))
-                .into()
+pub fn overview_skeleton() -> impl IntoView {
+    view! {
+        <div class="space-y-6 sm:space-y-8">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                {stat_card()} {stat_card()} {stat_card()} {stat_card()}
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">{chart_card()} {chart_card()}</div>
+        </div>
+    }
+}
+
+pub fn render_loading() -> impl IntoView {
+    view! {
+        <div class="min-h-[calc(100vh-3.5rem)] bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+            <div class="w-32 h-32 rounded-full bg-indigo-200 dark:bg-indigo-700 flex items-center justify-center">
+                <svg
+                    class="animate-spin text-indigo-600 dark:text-indigo-400"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                >
+                    <circle
+                        class="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        stroke-width="4"
+                    ></circle>
+                    <path
+                        class="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l 3-2.647z"
+                    ></path>
+                </svg>
+            </div>
+        </div>
+    }
+}
+
+fn table_rows() -> Vec<impl IntoView> {
+    (0..5)
+        .map(|_| {
+            view! {
+                <tr class="border-b border-gray-100 dark:border-gray-700 last:border-b-0">
+                    <td class="px-6 py-4">{sk("h-4 w-28 rounded")}</td>
+                    <td class="px-6 py-4">{sk("h-4 w-24 rounded")}</td>
+                    <td class="px-6 py-4">{sk("h-4 w-36 rounded")}</td>
+                    <td class="px-6 py-4">{sk("h-5 w-16 rounded-full")}</td>
+                    <td class="px-6 py-4">{sk("h-4 w-28 rounded")}</td>
+                    <td class="px-6 py-4 text-center">{sk("h-4 w-12 rounded mx-auto")}</td>
+                </tr>
+            }
         })
-        .collect();
-
-    div()
-        .class(CLASS_PAGE_SHELL)
-        .children(
-            div()
-                .class("bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden")
-                .children({
-                    let mut all: Vec<View> = Vec::new();
-                    all.push(toolbar.into());
-                    all.extend(rows);
-                    all
-                }),
-        )
-        .into()
+        .collect()
 }
 
-pub fn text_gen_skeleton() -> View {
-    div()
-        .class(CLASS_PAGE_SHELL)
-        .children(
-            div()
-                .class("bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 max-w-6xl mx-auto")
-                .children(sk("w-full h-96 rounded-lg")),
-        )
-        .into()
-}
-
-fn stat_card_skeleton() -> View {
-    div()
-        .class("bg-white dark:bg-gray-800 rounded-xl p-6 flex items-center gap-4 shadow-sm")
-        .children((
-            sk("w-14 h-14 rounded-full shrink-0"),
-            div()
-                .class("flex flex-col gap-3")
-                .children((sk("w-24 h-8 rounded"), sk("w-16 h-4 rounded"))),
-        ))
-        .into()
-}
-
-fn chart_area_skeleton() -> View {
-    div()
-        .class("bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm")
-        .children((sk("w-40 h-5 mb-4 rounded"), sk("w-full h-64 rounded-lg")))
-        .into()
+pub fn table_skeleton() -> impl IntoView {
+    view! {
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm">
+            <div class="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    {sk("h-6 w-15 rounded-full")} {sk("h-5 w-5 rounded")}
+                </div>
+                {sk("h-9 w-28 rounded-lg")}
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="border-b border-gray-100 dark:border-gray-700">
+                            <th class="px-6 py-3">{sk("h-4 w-10 rounded")}</th>
+                            <th class="px-6 py-3">{sk("h-4 w-16 rounded")}</th>
+                            <th class="px-6 py-3">{sk("h-4 w-14 rounded")}</th>
+                            <th class="px-6 py-3">{sk("h-4 w-10 rounded")}</th>
+                            <th class="px-6 py-3">{sk("h-4 w-14 rounded")}</th>
+                            <th class="px-6 py-3 text-center">{sk("h-4 w-10 rounded mx-auto")}</th>
+                        </tr>
+                    </thead>
+                    <tbody>{table_rows()}</tbody>
+                </table>
+            </div>
+        </div>
+    }
 }

@@ -9,13 +9,12 @@
 ## 特性
 
 - **多提供商支持** — [llama.cpp](https://llama.app/)、[Ollama](https://ollama.com)、[DeepSeek](https://www.deepseek.com/)、[Zhipu](https://bigmodel.cn/) 等提供了 OpenAI Compatible 接口的
-- **Web 管理界面** — 基于 Sycamore 0.9 的 WASM CSR 前端（ECharts 仪表盘图表）
+- **Web 管理界面** — 基于 Leptos 0.8 CSR 的 WASM 前端（ECharts 图表）
   - **Admin 管理** — 添加/更新/删除提供商和模型
   - **API Key 管理** — 创建/启用/禁用/删除 API Key
-  - **用户注册** — 受控注册（可选注册码）
   - **骨架屏加载** — 页面切换时显示占位骨架屏，减少布局抖动
   - **全局 Toast** — 会话过期、操作结果等全局通知
-- **日志审计** — 访问日志、代理请求日志（含 Token 用量）、操作审计日志，支持自动清理和每日统计
+- **日志审计** — 访问日志、代理请求日志（含 Token 用量）、敏感操作审计日志，支持自动清理和统计分析
 
 ## 快速开始
 
@@ -59,15 +58,12 @@ enabled = true
 session_ttl_secs = 86400
 bootstrap_username = "admin"
 bootstrap_password = "must_replace_with_your_password"
-allow_registration = false
-registration_code = ""
 max_api_keys_per_user = 10
 rate_limiter_max_entries = 100000
 login_rate_limit = { max_attempts = 5, window_secs = 300, ban_secs = 900 }
-register_rate_limit = { max_attempts = 3, window_secs = 3600, ban_secs = 3600 }
 
 [database]
-path = "./data/ait.rocksdb"
+path = "./data/ait.db"
 
 [log]
 path = "./data/ait-logs.duckdb"
@@ -76,13 +72,16 @@ flush_interval_secs = 10
 flush_batch = 100
 channel_cap = 10000
 retention_every = 100
+level = "info"
+axum = "info"
+tower_http_trace = "info"
 
 [proxy]
 timeout_secs = 300
 stream = true
 ```
 
-**注意**：所有配置项都可通过 `AIT_<SECTION>_<KEY>` 环境变量覆盖，例如：
+**注意**：大部分配置项都可通过 `AIT_<SECTION>_<KEY>` 环境变量覆盖，例如：
 
 ```bash
 export AIT_SERVER_PORT=9000
@@ -110,7 +109,7 @@ ait -c /path/to/config.toml
 ## OpenAI Compatible 接口
 
 认证方式：`Authorization: Bearer <token>` ，
-可以通过配置文件 `auth.enabled: false` 关闭认证，但 Admin 接口（/admin/*）必须认证。
+可以通过配置文件 `auth.enabled: false` 关闭认证，但 Admin 接口（/api/*）必须认证。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|

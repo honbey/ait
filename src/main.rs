@@ -7,6 +7,7 @@ mod handlers;
 mod middleware;
 mod providers;
 mod rate_limiter;
+mod ssrf;
 
 pub(crate) use blocking::run_blocking;
 
@@ -16,38 +17,39 @@ mod test_utils;
 use axum::routing::{Router, delete, get, post, put};
 use std::net::SocketAddr;
 use std::time::Duration;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::info;
 
-use handlers::admin::{
-    create_model, create_provider, delete_model, delete_provider, get_provider,
-    get_provider_api_key, list_models, list_provider_types, list_providers, update_model,
-    update_provider,
+use handlers::analytics::{model_dist, requests, token_dist, tokens};
+use handlers::apikeys::{create_api_key, delete_api_key, list_api_keys, update_api_key};
+use handlers::auth::{login, logout, session_check};
+use handlers::logs::list_proxy_logs;
+use handlers::models::{create_model, delete_model, get_model, list_models, update_model};
+use handlers::providers::{
+    create_provider, delete_provider, get_provider, get_provider_api_key, list_provider_types,
+    list_providers, update_provider,
 };
-use handlers::analytics::{requests, tokens};
-use handlers::apikeys::{create_api_key, delete_api_key, list_api_keys, toggle_api_key};
-use handlers::auth::{login, logout, register, session_check};
 use handlers::proxy::{chat_completions, completions, embeddings, health, list_models_proxy};
-use handlers::stats::dashboard_stats;
-use handlers::users::{change_password, delete_user, list_users};
+use handlers::stats::overview_stats;
+use handlers::users::change_password;
 use middleware::{
     access_log_middleware, admin_auth_middleware, auth_middleware, login_rate_limit_middleware,
-    register_rate_limit_middleware,
 };
 
 #[tokio::main]
 async fn main() {
-    init_logging();
-
     let config_path = parse_config_path();
     let config = match config::ConfigApp::new(config_path.as_deref()) {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Failed to load config: {}", e);
+            eprintln!("Failed to load config: {e}");
             std::process::exit(1);
         }
     };
+
+    init_logging(&config.log);
 
     let state = match app::AppState::new(config.clone()) {
         Ok(s) => s,
@@ -99,9 +101,11 @@ async fn main() {
         tokio::select! {
             _ = tokio::time::sleep(graceful_timeout) => {
                 tracing::warn!("Graceful shutdown timeout, forcing exit");
+                std::process::exit(0);
             }
             _ = tokio::signal::ctrl_c() => {
                 tracing::warn!("Forced shutdown via Ctrl+C");
+                std::process::exit(0);
             }
         }
     };
@@ -136,13 +140,41 @@ fn parse_config_path() -> Option<String> {
     None
 }
 
-fn init_logging() {
+fn parse_level(s: &str) -> tracing::Level {
+    match s.to_lowercase().as_str() {
+        "trace" => tracing::Level::TRACE,
+        "debug" => tracing::Level::DEBUG,
+        "info" => tracing::Level::INFO,
+        "warn" => tracing::Level::WARN,
+        "error" => tracing::Level::ERROR,
+        _ => tracing::Level::INFO,
+    }
+}
+
+fn init_logging(cfg: &config::LogConfig) {
+    let filter = format!("info,ait={},axum={}", cfg.level, cfg.axum);
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ait=debug,axum=info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()),
         )
         .init();
+}
+
+fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
+    if allowed_origins.is_empty() {
+        return CorsLayer::permissive();
+    }
+    let origins: Vec<_> = allowed_origins
+        .iter()
+        .map(|o| {
+            o.parse()
+                .expect("Invalid origin in security.cors_allowed_origins")
+        })
+        .collect();
+    CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods(Any)
+        .allow_headers(Any)
 }
 
 fn build_app(state: app::AppState) -> Router {
@@ -150,12 +182,8 @@ fn build_app(state: app::AppState) -> Router {
     let login_route = Router::new().route("/auth/login", post(login)).layer(
         axum::middleware::from_fn_with_state(state.clone(), login_rate_limit_middleware),
     );
-    let register_route = Router::new().route("/auth/register", post(register)).layer(
-        axum::middleware::from_fn_with_state(state.clone(), register_rate_limit_middleware),
-    );
     let auth_route = Router::new()
         .merge(login_route)
-        .merge(register_route)
         .route("/auth/logout", post(logout))
         .route("/auth/session", get(session_check))
         .layer(axum::middleware::from_fn_with_state(
@@ -176,22 +204,25 @@ fn build_app(state: app::AppState) -> Router {
         // Model management
         .route("/models", post(create_model))
         .route("/models", get(list_models))
+        .route("/models/{name}", get(get_model))
         .route("/models/{name}", put(update_model))
         .route("/models/{name}", delete(delete_model))
         // User management
-        .route("/users", get(list_users))
-        .route("/users/{username}", delete(delete_user))
         .route("/users/{username}/password", put(change_password))
         // API key management
         .route("/users/{username}/api-keys", get(list_api_keys))
         .route("/users/{username}/api-keys", post(create_api_key))
-        .route("/users/{username}/api-keys/{key}", put(toggle_api_key))
+        .route("/users/{username}/api-keys/{key}", put(update_api_key))
         .route("/users/{username}/api-keys/{key}", delete(delete_api_key))
-        // Dashboard statistics
-        .route("/stats", get(dashboard_stats))
-        // Hourly-bucketed analytics
+        // Overview statistics
+        .route("/stats", get(overview_stats))
+        // Analytics
         .route("/data/requests", get(requests))
         .route("/data/tokens", get(tokens))
+        .route("/data/model-dist", get(model_dist))
+        .route("/data/token-dist", get(token_dist))
+        // Proxy logs
+        .route("/data/proxy-log", get(list_proxy_logs))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             access_log_middleware,
@@ -225,6 +256,9 @@ fn build_app(state: app::AppState) -> Router {
         .clone()
         .fallback(ServeFile::new("frontend/dist/index.html"));
 
+    let trace_level = parse_level(&state.config.log.tower_http_trace);
+    let cors = cors_layer(&state.config.security.cors_allowed_origins);
+
     Router::new()
         .nest_service("/static", frontend_root)
         .fallback_service(frontend_spa)
@@ -233,8 +267,6 @@ fn build_app(state: app::AppState) -> Router {
         .merge(health_route)
         .nest("/api", Router::new().merge(admin_api))
         .with_state(state)
-        .layer(
-            TraceLayer::new_for_http()
-                .on_response(DefaultOnResponse::new().level(tracing::Level::DEBUG)),
-        )
+        .layer(cors)
+        .layer(TraceLayer::new_for_http().on_response(DefaultOnResponse::new().level(trace_level)))
 }

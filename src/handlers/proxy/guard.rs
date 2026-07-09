@@ -41,7 +41,7 @@ pub(crate) fn parse_usage(body: &[u8]) -> UsageTokens {
 
 pub(crate) struct ProxyLogGuard {
     log_manager: LogManager,
-    event: ProxyEvent,
+    pub(crate) event: ProxyEvent,
     start: Instant,
     finalized: bool,
 }

@@ -1,148 +1,190 @@
-use std::cell::RefCell;
-use std::rc::Rc;
+use leptos::prelude::*;
+use reactive_graph::traits::Write;
+use reactive_stores::{Field, Patch, PatchField};
 
-use gloo_timers::callback::Timeout;
-use sycamore::prelude::*;
-use sycamore::web::events;
-use sycamore::web::tags::*;
+use crate::components::style::{
+    CLASS_BTN_PRIMARY, CLASS_DETAIL_LABEL, CLASS_DETAIL_VALUE, CLASS_ICON_BTN, CLASS_TOGGLE_LABEL,
+};
+use crate::{t, tr};
 
-use crate::components::modal::{CLASS_CARD, zebra_bg};
-use crate::i18n::{I18n, K};
-
-pub struct Column<T: 'static> {
-    pub header: View,
-    pub cell: Rc<dyn Fn(T) -> View>,
+#[component]
+pub fn DataTableCard(
+    item_count: Signal<usize>,
+    on_refresh: impl Fn() + 'static + Clone + Send,
+    on_add: impl Fn() + 'static + Clone + Send,
+    add_label: String,
+    children: Children,
+) -> impl IntoView {
+    view! {
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm">
+            <div class="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <span class="text-sm text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-3 py-1 rounded-full">
+                        {move || tr!(TotalCount, &[("count", &item_count.get().to_string())])()}
+                    </span>
+                    <button class=CLASS_ICON_BTN on:click=move |_| on_refresh()>
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+                <button
+                    class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors flex items-center gap-2 text-sm font-medium cursor-pointer active:scale-95"
+                    on:click=move |_| on_add()
+                >
+                    <i class="fas fa-plus"></i>
+                    {add_label}
+                </button>
+            </div>
+            {children()}
+        </div>
+    }
 }
 
-pub enum CrudModal<T> {
-    Closed,
-    Detail(T),
-    Add,
-    Edit(T),
-    Delete(T),
-}
-
-impl<T> Clone for CrudModal<T>
-where
-    T: Clone,
-{
-    fn clone(&self) -> Self {
-        match self {
-            Self::Closed => Self::Closed,
-            Self::Detail(a) => Self::Detail(a.clone()),
-            Self::Add => Self::Add,
-            Self::Edit(a) => Self::Edit(a.clone()),
-            Self::Delete(a) => Self::Delete(a.clone()),
+pub fn status_badge(enabled: bool) -> AnyView {
+    if enabled {
+        view! {
+            <span class="inline-block px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400">
+                {t!(StatusEnabled)}
+            </span>
         }
+            .into_any()
+    } else {
+        view! {
+            <span class="inline-block px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400">
+                {t!(StatusDisabled)}
+            </span>
+        }
+            .into_any()
     }
 }
 
-pub fn common_table<T: Clone + 'static>(
-    title: String,
-    items: Vec<T>,
-    refreshing: Signal<bool>,
-    on_refresh: impl Fn() + 'static,
-    columns: Vec<Column<T>>,
-    add_button: View,
-    modals: Vec<View>,
-) -> View {
-    let i18n = use_context::<I18n>();
-    let count = items.len();
-
-    let cells: Vec<Rc<dyn Fn(T) -> View>> = columns.iter().map(|col| col.cell.clone()).collect();
-    let headers: Vec<View> = columns.into_iter().map(|col| col.header).collect();
-
-    let rows: Vec<View> = items
-        .into_iter()
-        .enumerate()
-        .map(|(idx, item)| {
-            let cols: Vec<View> = cells.iter().map(|cell| (cell)(item.clone())).collect();
-            tr().class(zebra_bg(idx)).children(cols).into()
-        })
-        .collect();
-
-    let header = render_table_header(i18n, title, count, refreshing, on_refresh, add_button);
-    let table = table_shell(headers, rows);
-    table_container(header, table, modals)
-}
-
-pub fn debounce_refresh(refresh: Signal<usize>, refreshing: Signal<bool>) -> impl Fn() + 'static {
-    let pending: Rc<RefCell<Option<Timeout>>> = Rc::new(RefCell::new(None));
-    move || {
-        refreshing.set(true);
-        let timer = Timeout::new(50, move || {
-            refresh.update(|v| *v += 1);
-        });
-        *pending.borrow_mut() = Some(timer);
+#[component]
+pub fn DetailRow(
+    label: String,
+    children: Children,
+    #[prop(optional, default = CLASS_DETAIL_VALUE)] value_class: &'static str,
+) -> impl IntoView {
+    view! {
+        <div class="flex justify-between py-2.5">
+            <span class=CLASS_DETAIL_LABEL>{label}</span>
+            <span class=value_class>{children()}</span>
+        </div>
     }
 }
 
-pub fn render_table_header(
-    i18n: I18n,
-    title: String,
-    count: usize,
-    refreshing: Signal<bool>,
-    on_refresh: impl Fn() + 'static,
-    add_button: View,
-) -> View {
-    div()
-        .class("p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between")
-        .children((
-            div().class("flex items-center gap-3").children((
-                h2().class("text-xl font-semibold text-gray-800 dark:text-gray-100")
-                    .children(title),
-                span().class(
-                    "text-sm text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-3 py-1 rounded-full",
-                )
-                .children(i18n.t_replace(K::TotalCount, "count", &count.to_string())),
-                button()
-                    .disabled(move || refreshing.get())
-                    .class("text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed")
-                    .on(events::click, move |_| {
-                        if refreshing.get() { return; }
-                        on_refresh();
-                    })
-                    .children(i().class(move || {
-                        if refreshing.get() { "fas fa-sync-alt animate-spin" } else { "fas fa-sync-alt" }
-                    })),
-            )),
-            add_button,
-        ))
-        .into()
+#[component]
+pub fn SubmitButton(is_edit: bool, #[prop(into)] pending: Signal<bool>) -> impl IntoView {
+    view! {
+        <button type="submit" disabled=move || pending.get() class=CLASS_BTN_PRIMARY>
+            {move || {
+                let label = if is_edit { t!(Save)() } else { t!(SaveCreate)() };
+                if pending.get() {
+                    view! {
+                        <>
+                            <i class="fas fa-spinner fa-spin"></i>
+                            {label}
+                        </>
+                    }
+                        .into_any()
+                } else {
+                    view! { {label} }.into_any()
+                }
+            }}
+        </button>
+    }
 }
 
-pub fn table_shell(headers: Vec<View>, rows: Vec<View>) -> View {
-    div()
-        .class("overflow-x-auto")
-        .children(
-            table().class("w-full text-sm").children((
-                thead().children(
-                    tr().class("border-b border-gray-100 dark:border-gray-700")
-                        .children(headers),
-                ),
-                tbody().children(rows),
-            )),
-        )
-        .into()
+#[component]
+pub fn ToggleField(id: &'static str, signal: RwSignal<bool>, label: String) -> impl IntoView {
+    view! {
+        <div class="flex items-center gap-2">
+            <input
+                id=id
+                type="checkbox"
+                prop:checked=signal
+                on:input=move |ev| signal.set(event_target_checked(&ev))
+            />
+            <label for=id class=CLASS_TOGGLE_LABEL>
+                {label}
+            </label>
+        </div>
+    }
 }
 
-pub fn th_left(label: String) -> View {
-    th().class("text-left px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
-        .children(label)
-        .into()
+#[component]
+pub fn DetailCloseButton(on_close: impl Fn() + 'static + Clone + Send) -> impl IntoView {
+    view! {
+        <div class="mt-6 flex justify-end">
+            <button type="button" class=CLASS_BTN_PRIMARY on:click=move |_| on_close()>
+                {t!(Close)}
+            </button>
+        </div>
+    }
 }
 
-pub fn th_center(label: String) -> View {
-    th().class("text-center px-6 py-3 text-gray-500 dark:text-gray-400 font-medium")
-        .children(label)
-        .into()
+pub enum EntityModal<T: 'static> {
+    Closed,
+    Add,
+    Detail(Field<T>),
+    Edit(Field<T>),
+    Delete(Field<T>),
 }
 
-pub fn table_container(header: View, table: View, modals: Vec<View>) -> View {
-    div()
-        .class(format!("{} overflow-hidden", CLASS_CARD))
-        .children((header, table, modals))
-        .into()
+impl<T: 'static> Clone for EntityModal<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
-// --- Modal gating helpers (deprecated — use CrudModal enum + single from_dynamic instead) ---
+impl<T: 'static> Copy for EntityModal<T> {}
+
+pub fn attach_save_effect<T, A>(
+    action: &Action<A, Result<T, String>>,
+    edit_field: Option<Field<T>>,
+    store_items: impl Write<Value = Vec<T>> + 'static,
+    form_error: RwSignal<String>,
+    on_success: impl Fn() + 'static + Clone,
+) where
+    T: PatchField + Clone + 'static,
+    A: 'static,
+{
+    let action = *action;
+    Effect::new(move |_| {
+        if let Some(Ok(model)) = action.value().get() {
+            if let Some(field) = edit_field {
+                field.patch(model);
+            } else {
+                store_items.write().push(model);
+            }
+            (on_success)();
+        }
+    });
+    Effect::new(move |_| {
+        if let Some(Err(e)) = action.value().get() {
+            form_error.set(e);
+        }
+    });
+}
+
+pub fn provider_display_name<'a>(id: &'a str, pairs: &'a [(String, String)]) -> &'a str {
+    pairs
+        .iter()
+        .find(|(key, _)| key == id)
+        .map(|(_, name)| name.as_str())
+        .unwrap_or(id)
+}
+
+pub fn timestamp_str(ts: i64) -> String {
+    if ts == 0 {
+        return String::new();
+    }
+    let d = js_sys::Date::new(&((ts as f64) * 1000.0).into());
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        d.get_full_year(),
+        d.get_month() + 1,
+        d.get_date(),
+        d.get_hours(),
+        d.get_minutes(),
+        d.get_seconds(),
+    )
+}

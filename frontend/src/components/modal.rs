@@ -1,338 +1,103 @@
-use sycamore::prelude::*;
-use sycamore::web::bind;
-use sycamore::web::events;
-use sycamore::web::tags::*;
+use leptos::ev;
+use leptos::prelude::*;
 
-pub struct FormStatus {
-    pub err: Signal<String>,
-    pub loading: Signal<bool>,
-}
+use crate::components::style::{CLASS_BTN_CANCEL, CLASS_BTN_DANGER, CLASS_ICON_BTN};
+use crate::components::toast::use_toast;
+use crate::{t, tr, trs, ts};
 
-impl FormStatus {
-    pub fn new() -> Self {
-        Self {
-            err: create_signal(String::new()),
-            loading: create_signal(false),
-        }
-    }
-}
-
-pub const CLASS_LABEL: &str = "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1";
-pub const CLASS_INPUT: &str = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 \
-    rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 \
-    focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none";
-pub const CLASS_PAGE_SHELL: &str = "p-4 sm:p-8";
-pub const CLASS_CARD: &str = "bg-white dark:bg-gray-800 rounded-xl shadow-sm";
-pub const CLASS_ICON_BTN: &str = "cursor-pointer text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 \
-     transition-colors";
-
-pub fn modal_dialog(
-    children: impl Into<View>,
-    on_close: impl Fn(web_sys::MouseEvent) + 'static,
-) -> View {
-    let content: View = children.into();
-    div()
-        .class("fixed inset-0 z-50 flex items-center justify-center")
-        .children((
-            div()
-                .class("absolute inset-0 bg-black/50")
-                .on(events::click, on_close),
-            div()
-                .class("relative z-10 bg-white dark:bg-gray-800 rounded-xl p-6 shadow-2xl max-w-md w-full mx-4")
-                .children(content),
-        ))
-        .into()
-}
-
-pub fn modal_title(title: String, on_close: impl Fn(web_sys::MouseEvent) + 'static) -> View {
-    div()
-        .class("flex items-center justify-between mb-4")
-        .children((
-            h2().class("text-lg font-semibold text-gray-800 dark:text-gray-100")
-                .children(title),
-            button()
-                .attr("type", "button")
-                .class(CLASS_ICON_BTN)
-                .on(events::click, on_close)
-                .children(i().class("fas fa-times")),
-        ))
-        .into()
-}
-
-pub fn detail_row(label: String, value: String) -> View {
-    div()
-        .class("flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700 last:border-0")
-        .children((
-            span().class("text-gray-500 dark:text-gray-400 text-sm").children(label),
-            span().class("text-gray-900 dark:text-gray-100 font-medium text-sm text-right ml-4 truncate").children(value),
-        ))
-        .into()
-}
-
-pub fn form_field(id: String, label_text: String, input: View) -> View {
-    div()
-        .children((
-            label()
-                .attr("for", id)
-                .class(CLASS_LABEL)
-                .children(label_text),
-            input,
-        ))
-        .into()
-}
-
-pub fn form_field_with_hint(id: String, label_text: String, hint: String, input: View) -> View {
-    div()
-        .children((
-            label().attr("for", id).class(CLASS_LABEL).children((
-                span().children(label_text),
-                span()
-                    .class("text-xs text-gray-400 dark:text-gray-500 ml-1")
-                    .children(hint),
-            )),
-            input,
-        ))
-        .into()
-}
-
-pub fn form_input(id: String, placeholder: String, value: Signal<String>) -> View {
-    input()
-        .attr("id", id)
-        .class(CLASS_INPUT)
-        .attr("type", "text")
-        .attr("placeholder", placeholder)
-        .bind(bind::value, value)
-        .into()
-}
-
-pub fn form_checkbox(id: String, label_text: String, checked: Signal<bool>) -> View {
-    div()
-        .class("flex items-center gap-2")
-        .children((
-            input()
-                .attr("type", "checkbox")
-                .attr("id", id.clone())
-                .bind(bind::checked, checked),
-            label()
-                .attr("for", id)
-                .class("text-sm text-gray-700 dark:text-gray-300")
-                .children(label_text),
-        ))
-        .into()
-}
-
-pub fn form_error(error: Signal<String>) -> View {
-    View::from_dynamic(move || {
-        let msg = error.get_clone();
-        if msg.is_empty() {
-            View::new()
-        } else {
-            p().class("text-red-500 text-sm").children(msg).into()
-        }
-    })
-}
-
-fn cancel_button(text: String, on_click: impl Fn(web_sys::MouseEvent) + 'static) -> View {
-    button()
-        .attr("type", "button")
-        .class("px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 cursor-pointer transition-colors")
-        .on(events::click, on_click)
-        .children(text)
-        .into()
-}
-
-fn loading_button<F: Fn(web_sys::MouseEvent) + 'static>(
-    color: &str,
-    label: String,
-    loading: Signal<bool>,
-    btn_type: &str,
-    on_click: Option<F>,
-) -> View {
-    let bt = btn_type.to_string();
-    let color_class = format!(
-        "{color} text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 px-4 py-2"
-    );
-    let mut btn = button()
-        .attr("type", bt)
-        .disabled(move || loading.get())
-        .class(color_class);
-    if let Some(handler) = on_click {
-        btn = btn.on(events::click, handler);
-    }
-    btn.children(View::from_dynamic(move || -> View {
-        if loading.get() {
-            div()
-                .class("flex items-center gap-2")
-                .children((
-                    i().class("fas fa-spinner animate-spin"),
-                    span().children(label.clone()),
-                ))
-                .into()
-        } else {
-            span().children(label.clone()).into()
-        }
-    }))
-    .into()
-}
-
-pub fn form_submit_footer(
-    cancel_text: String,
-    on_cancel: impl Fn(web_sys::MouseEvent) + 'static,
-    loading: Signal<bool>,
-    submit_text: String,
-) -> View {
-    div()
-        .class("flex items-center justify-end gap-3")
-        .children((
-            cancel_button(cancel_text, on_cancel),
-            loading_button::<fn(web_sys::MouseEvent)>(
-                "bg-blue-500 hover:enabled:bg-blue-600",
-                submit_text,
-                loading,
-                "submit",
-                None,
-            ),
-        ))
-        .into()
-}
-
-pub fn form_delete_footer(
-    cancel_text: String,
-    on_cancel: impl Fn(web_sys::MouseEvent) + 'static,
-    deleting: Signal<bool>,
-    delete_text: String,
-    on_delete: impl Fn(web_sys::MouseEvent) + 'static,
-) -> View {
-    div()
-        .class("flex items-center justify-end gap-3")
-        .children((
-            cancel_button(cancel_text, on_cancel),
-            loading_button(
-                "bg-red-500 hover:enabled:bg-red-600",
-                delete_text,
-                deleting,
-                "button",
-                Some(on_delete),
-            ),
-        ))
-        .into()
-}
-
-// --- Table helpers ---
-
-pub fn status_badge(enabled: bool, enabled_text: &str, disabled_text: &str) -> View {
-    let (bg, text) = if enabled {
-        (
-            "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400",
-            enabled_text,
-        )
-    } else {
-        (
-            "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
-            disabled_text,
-        )
-    };
-    span()
-        .class(format!(
-            "inline-block px-2 py-1 rounded-full text-xs font-medium {}",
-            bg
-        ))
-        .children(text.to_string())
-        .into()
-}
-
-pub fn zebra_bg(idx: usize) -> &'static str {
-    if idx.is_multiple_of(2) {
-        ""
-    } else {
-        "bg-gray-50 dark:bg-gray-800/50"
-    }
-}
-
-pub fn icon_button(icon: &str, on_click: impl Fn(web_sys::MouseEvent) + 'static) -> View {
-    button()
-        .class(CLASS_ICON_BTN)
-        .on(events::click, on_click)
-        .children(i().class(format!("{} text-xs", icon)))
-        .into()
-}
-
-pub fn blue_add_button(label: String, on_click: impl Fn(web_sys::MouseEvent) + 'static) -> View {
-    button()
-        .on(events::click, on_click)
-        .class("px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors flex items-center gap-2 text-sm font-medium cursor-pointer")
-        .children((
-            i().class("fas fa-plus"),
-            span().children(label),
-        ))
-        .into()
-}
-
-pub fn action_cell(buttons: impl Into<View>) -> View {
-    td().class("px-6 py-4 text-center whitespace-nowrap")
-        .children(buttons)
-        .into()
-}
-
-pub fn text_cell(content: impl Into<View>) -> View {
-    td().class("px-6 py-4").children(content).into()
-}
-
-pub fn name_cell(name: String) -> View {
-    td().class("px-6 py-4 font-medium text-gray-800 dark:text-gray-200")
-        .children(name)
-        .into()
-}
-
-pub fn secondary_cell(content: String) -> View {
-    td().class("px-6 py-4 text-gray-600 dark:text-gray-400")
-        .children(content)
-        .into()
-}
-
-pub fn mono_cell(content: String) -> View {
-    td().class("px-6 py-4 text-gray-400 dark:text-gray-500 text-xs font-mono")
-        .children(content)
-        .into()
-}
-
-pub fn timestamp_cell(ts: f64) -> View {
-    td().class("px-6 py-4 text-gray-400 dark:text-gray-500 text-sm")
-        .children(crate::models::format_timestamp(ts))
-        .into()
-}
-
-pub fn render_detail_modal(
+/// One-shot modal shell. All props are static (not reactive) — modals are
+/// dismissed and re-created on language switch, so tracking is unnecessary.
+#[component]
+pub fn ModalShell(
+    on_close: impl Fn() + 'static + Clone + Send,
     title: String,
-    rows: Vec<(String, String)>,
-    on_close: impl Fn(web_sys::MouseEvent) + Clone + 'static,
-) -> View {
-    let on_close_clone = on_close.clone();
-    let row_views: Vec<View> = rows
-        .into_iter()
-        .map(|(label, value)| detail_row(label, value))
-        .collect();
-    modal_dialog((modal_title(title, on_close_clone), row_views), on_close)
+    #[prop(default = "max-w-md")] card_class: &'static str,
+    children: Children,
+) -> impl IntoView {
+    let class = format!(
+        "relative z-10 bg-white dark:bg-gray-800 rounded-xl p-6 shadow-2xl w-full mx-4 {}",
+        card_class
+    );
+    let on_close_esc = on_close.clone();
+    let close = move |_: leptos::ev::MouseEvent| on_close();
+    let handle = window_event_listener(ev::keydown, move |ev: leptos::ev::KeyboardEvent| {
+        if ev.key() == "Escape" {
+            on_close_esc();
+        }
+    });
+    on_cleanup(move || handle.remove());
+    view! {
+        <div class="fixed inset-0 z-50 flex items-center justify-center">
+            <div class="absolute inset-0 bg-black/50" on:click=close.clone()></div>
+            <div class=class>
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">{title}</h2>
+                    <button type="button" class=CLASS_ICON_BTN on:click=close.clone()>
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                {children()}
+            </div>
+        </div>
+    }
 }
 
-pub fn select_input(id: String, value: Signal<String>, options: Vec<(String, String)>) -> View {
-    let option_views: Vec<View> = options
-        .into_iter()
-        .map(|(val, label)| {
-            option()
-                .attr("value", val.clone())
-                .bool_attr("selected", {
-                    let val = val.clone();
-                    move || value.get_clone() == val
-                })
-                .children(label)
-                .into()
-        })
-        .collect();
-    select()
-        .attr("id", id)
-        .class(CLASS_INPUT)
-        .bind(bind::value, value)
-        .children(option_views)
-        .into()
+#[component]
+pub fn DeleteConfirmModal(
+    entity_name: Box<dyn Fn() -> String + Send>,
+    item_name: String,
+    action: Action<(), Result<(), String>>,
+    on_close: impl Fn() + 'static + Clone + Send,
+    on_success: impl Fn() + 'static + Clone + Send,
+) -> impl IntoView {
+    let toast = use_toast();
+
+    Effect::new(move |_| {
+        if let Some(Ok(_)) = action.value().get() {
+            let en = entity_name();
+            let act = ts!(ActionDeleted);
+            toast.success(trs!(EntityAction, &[("entity", &en), ("action", &act)]));
+            on_success();
+        }
+    });
+
+    let on_delete = move |_: leptos::ev::MouseEvent| {
+        if action.pending().get_untracked() {
+            return;
+        }
+        action.dispatch(());
+    };
+
+    view! {
+        <ModalShell on_close=on_close.clone() title=ts!(DeleteConfirmTitle)>
+            <p class="text-gray-600 dark:text-gray-400 text-sm mb-6">
+                {tr!(DeleteConfirmMessage, &[("name", &item_name)])}
+            </p>
+            <div class="flex items-center justify-end gap-3">
+                <button type="button" class=CLASS_BTN_CANCEL on:click=move |_| on_close()>
+                    {t!(Cancel)}
+                </button>
+                <button
+                    type="button"
+                    disabled=move || action.pending().get()
+                    class=CLASS_BTN_DANGER
+                    on:click=on_delete
+                >
+                    {move || {
+                        if action.pending().get_untracked() {
+                            view! {
+                                <>
+                                    <i class="fas fa-spinner fa-spin"></i>
+                                    {t!(Delete)}
+                                </>
+                            }
+                                .into_any()
+                        } else {
+                            view! { {t!(Delete)} }.into_any()
+                        }
+                    }}
+                </button>
+            </div>
+        </ModalShell>
+    }
 }

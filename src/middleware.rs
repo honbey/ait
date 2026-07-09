@@ -1,6 +1,6 @@
 use crate::app::AppState;
 use crate::db::{AccessEvent, ApiKeyInfo, SessionUser, hash_key};
-use crate::error::{AitError, db_error, too_many_requests, unauthorized};
+use crate::error::{AitError, db_error, internal_error, too_many_requests, unauthorized};
 use axum::{
     Json,
     extract::{ConnectInfo, Request, State},
@@ -66,30 +66,35 @@ pub async fn auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
+    let client_ip = get_client_ip(&req, &state.config.server.trusted_proxies);
+
     if !state.config.auth.enabled {
         req.extensions_mut().insert(full_access("anonymous"));
+        req.extensions_mut().insert(client_ip);
         return Ok(next.run(req).await);
     }
 
     let token = extract_bearer_token(req.headers())
-        .ok_or_else(|| unauthorized("Unauthorized: invalid or missing API key"))?
-        .to_string();
+        .ok_or_else(|| unauthorized("Unauthorized: invalid or missing API key"))?;
 
-    let hash = hash_key(&token);
+    let hash = hash_key(token);
 
     // Cache hit — verify freshness
     if let Some(cached) = state.api_key_cache.get(&hash) {
         let (ref key_info, ref inserted_at) = *cached;
         if inserted_at.elapsed() < CACHE_TTL {
             verify_key(key_info, &mut req)?;
+            req.extensions_mut().insert(client_ip);
             return Ok(next.run(req).await);
         }
     }
 
     // Cache miss or stale — load from DB
+    let token = token.to_string();
     let db = state.db.clone();
     let key_info = crate::run_blocking(move || db.get_user_by_api_key(&token))
         .await
+        .map_err(internal_error)?
         .map_err(|_| db_error())?
         .ok_or_else(|| unauthorized("Unauthorized: invalid or missing API key"))?;
 
@@ -99,6 +104,7 @@ pub async fn auth_middleware(
         .api_key_cache
         .insert(hash, (key_info.clone(), Instant::now()));
 
+    req.extensions_mut().insert(client_ip);
     Ok(next.run(req).await)
 }
 
@@ -107,26 +113,30 @@ pub async fn admin_auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
+    let client_ip = get_client_ip(&req, &state.config.server.trusted_proxies);
+
     // Admin endpoints always require authentication
     let session_key = extract_session_key(req.headers())
-        .ok_or_else(|| unauthorized("Unauthorized: invalid or missing API key"))?
-        .to_string();
+        .ok_or_else(|| unauthorized("Unauthorized: invalid or missing API key"))?;
 
-    let hash = hash_key(&session_key);
+    let hash = hash_key(session_key);
 
     // Cache hit — verify freshness
     if let Some(cached) = state.session_cache.get(&hash) {
         let (ref user, ref expires_at, ref inserted_at) = *cached;
         if *expires_at > Utc::now() && inserted_at.elapsed() < CACHE_TTL {
             req.extensions_mut().insert(user.clone());
+            req.extensions_mut().insert(client_ip);
             return Ok(next.run(req).await);
         }
     }
 
     // Cache miss or stale — load from DB (only session; username is enough for SessionUser)
+    let session_key = session_key.to_string();
     let db = state.db.clone();
     let session = crate::run_blocking(move || db.get_session(&session_key))
         .await
+        .map_err(internal_error)?
         .map_err(|_| db_error())?
         .ok_or_else(|| unauthorized("Unauthorized: invalid or missing API key"))?;
 
@@ -144,6 +154,7 @@ pub async fn admin_auth_middleware(
         .insert(hash, (user.clone(), session.expires_at, Instant::now()));
 
     req.extensions_mut().insert(user);
+    req.extensions_mut().insert(client_ip);
     Ok(next.run(req).await)
 }
 
@@ -214,26 +225,6 @@ pub async fn login_rate_limit_middleware(
     }
 
     Ok(response)
-}
-
-pub async fn register_rate_limit_middleware(
-    State(state): State<AppState>,
-    req: Request,
-    next: Next,
-) -> Result<Response, (StatusCode, Json<AitError>)> {
-    let config = &state.config.auth.register_rate_limit;
-    let ip = get_client_ip(&req, &state.config.server.trusted_proxies)
-        .ok_or_else(|| too_many_requests("Could not determine client IP"))?;
-
-    check_and_record(
-        &state.register_rate_limiter,
-        ip,
-        config.max_attempts,
-        config.window_secs,
-        config.ban_secs,
-    )?;
-
-    Ok(next.run(req).await)
 }
 
 pub async fn access_log_middleware(

@@ -7,6 +7,8 @@ health_detail = false
 session_cleanup_interval_secs = 3600
 # 频率限制器过期条目清理间隔（秒）
 rate_limiter_cleanup_interval_secs = 600
+# 内存缓存（session / api_key / model / provider）过期条目清理间隔（秒）
+cache_cleanup_interval_secs = 300
 # Ctrl-C 后等待 in-flight 请求完成的最大时间（秒），超时后强制退出
 graceful_timeout_secs = 10
 # 允许设置 X-Forwarded-For 的可信代理 IP，空数组则不信任任何 XFF
@@ -20,21 +22,16 @@ session_ttl_secs = 86400
 # 首次启动时自动创建初始管理员
 bootstrap_username = "admin"
 bootstrap_password = "admin123"
-# 是否允许用户自行注册
-allow_registration = false
-# 注册码，不为空时注册需匹配此码
-registration_code = ""
 # 每个用户最大 API key 数量
 max_api_keys_per_user = 10
 # 频率限制器 DashMap 最大 IP 条目数，防内存耗尽
 rate_limiter_max_entries = 100000
 # 登录频率限制 (最多5次/300秒，超限封禁900秒)
 login_rate_limit = { max_attempts = 5, window_secs = 300, ban_secs = 900 }
-# 注册频率限制 (最多3次/3600秒，超限封禁3600秒)
-register_rate_limit = { max_attempts = 3, window_secs = 3600, ban_secs = 3600 }
+
 
 [database]
-path = "./data/ait.rocksdb"
+path = "./data/ait.db"
 
 [log]
 path = "./data/ait-logs.duckdb"
@@ -48,7 +45,26 @@ flush_batch = 100
 channel_cap = 10000
 # 每 flush_batch * retention_every 次写入后执行一次过期清理
 retention_every = 100
+# Analytics 查询超时（秒）
+analytics_timeout_secs = 10
+
+# 日志级别（trace / debug / info / warn / error）
+level = "info"
+# axum 框架日志级别
+axum = "info"
+# TraceLayer 每次请求的响应日志级别
+tower_http_trace = "info"
 
 [proxy]
+# 代理请求超时时间
 timeout_secs = 300
+# 是否支持流失传输
 stream = true
+
+[security]
+# 允许的跨域来源域名，空列表则允许所有
+cors_allowed_origins = []
+# SSRF 白名单 CIDR（空列表则阻断所有私有 IP 出站请求）
+# 例如 ssrf_allowed_cidrs = ["127.0.0.1/32", "::1/128"] 允许本机 Ollama/LocalAI
+# 支持单 IP（自动 /32 或 /128）和 CIDR 段
+ssrf_allowed_cidrs = []

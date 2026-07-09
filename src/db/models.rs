@@ -37,6 +37,7 @@ pub struct Provider {
     strum::AsRefStr,
     strum::EnumMessage,
     strum::EnumIter,
+    strum::EnumString,
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -56,6 +57,16 @@ pub enum ProviderType {
     Llamacpp,
 }
 
+impl ProviderType {
+    pub fn to_db(&self) -> &str {
+        self.as_ref()
+    }
+
+    pub fn from_db(s: &str) -> Self {
+        s.parse().unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Model {
     pub id: String,
@@ -69,7 +80,7 @@ pub struct Model {
     pub updated_at: DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ApiKey {
     pub id: String,
     pub key: String,
@@ -166,6 +177,14 @@ pub struct ProxyEvent {
     pub cached_tokens: Option<i64>,
     pub latency_ms: i64,
     pub status: String,
+    pub endpoint: String,
+    pub is_streaming: bool,
+    pub time_to_first_token_ms: Option<i64>,
+    pub upstream_model: String,
+    pub provider_type: String,
+    pub response_body_size: Option<i64>,
+    pub error_message: Option<String>,
+    pub client_ip: Option<String>,
 }
 
 pub struct AuditEvent {
@@ -179,13 +198,79 @@ pub struct AuditEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BucketEntry {
-    pub timestamp: f64,
+    pub timestamp: i64,
     pub count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelDistEntry {
+    pub model: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenDistEntry {
+    pub category: String,
+    pub count: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ProxyLogEntryResponse {
+    pub timestamp: i64,
+    pub username: Option<String>,
+    pub api_key_name: Option<String>,
+    pub model_name: String,
+    pub provider_name: String,
+    pub prompt_tokens: Option<i64>,
+    pub completion_tokens: Option<i64>,
+    pub total_tokens: Option<i64>,
+    pub cached_tokens: Option<i64>,
+    pub latency_ms: i64,
+    pub status: String,
+    pub endpoint: String,
+    pub is_streaming: bool,
+    pub time_to_first_token_ms: Option<i64>,
+    pub upstream_model: String,
+    pub provider_type: String,
+    pub response_body_size: Option<i64>,
+    pub error_message: Option<String>,
+    pub client_ip: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PaginatedResponse<T: Serialize> {
+    pub items: Vec<T>,
+    pub total: u64,
+    pub page: u64,
+    pub per_page: u64,
+}
+
+pub struct ProxyLogQueryParams {
+    pub page: u64,
+    pub per_page: u64,
+    pub start_ts: Option<i64>,
+    pub end_ts: Option<i64>,
+    pub model_name: Option<String>,
+    pub provider_name: Option<String>,
+    pub status: Option<String>,
+    pub username: Option<String>,
+    pub api_key_name: Option<String>,
+    pub endpoint: Option<String>,
+    pub is_streaming: Option<bool>,
+    pub upstream_model: Option<String>,
+    pub provider_type: Option<String>,
+    pub client_ip: Option<String>,
+}
+
+pub struct ProxyLogQueryResult {
+    pub items: Vec<ProxyLogEntryResponse>,
+    pub total: u64,
 }
 
 pub enum LogEvent {
     Access(AccessEvent),
-    Proxy(ProxyEvent),
+    Proxy(Box<ProxyEvent>),
     Audit(AuditEvent),
     Shutdown,
 }

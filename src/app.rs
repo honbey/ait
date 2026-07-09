@@ -1,10 +1,13 @@
+use std::net::IpAddr;
+
 use crate::config::ConfigApp;
 use crate::db::Database;
 use crate::db::logger::LogManager;
-use crate::db::{ApiKeyInfo, SessionUser};
+use crate::db::{ApiKeyInfo, Model, Provider, SessionUser};
 use crate::error::AppInitError;
 use crate::handlers::users::create_user;
 use crate::middleware::CACHE_TTL;
+use crate::providers::UpstreamProvider;
 use crate::rate_limiter::RateLimiter;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -13,6 +16,8 @@ use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 type SessionCacheEntry = (SessionUser, DateTime<Utc>, Instant);
+type ModelCacheEntry = (Option<(Model, Provider)>, Instant);
+type ProviderCacheEntry = (Arc<dyn UpstreamProvider>, Instant);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -22,10 +27,12 @@ pub struct AppState {
     pub log_manager: LogManager,
     pub start_time: DateTime<Utc>,
     pub login_rate_limiter: RateLimiter,
-    pub register_rate_limiter: RateLimiter,
     pub shutdown_token: CancellationToken,
     pub api_key_cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>>,
     pub session_cache: Arc<DashMap<String, SessionCacheEntry>>,
+    pub model_cache: Arc<DashMap<String, ModelCacheEntry>>,
+    pub provider_cache: Arc<DashMap<String, ProviderCacheEntry>>,
+    pub ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
 }
 
 impl AppState {
@@ -47,6 +54,7 @@ impl AppState {
         );
 
         let http_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(config.proxy.timeout_secs))
             .build()
             .map_err(AppInitError::HttpClient)?;
@@ -62,22 +70,14 @@ impl AppState {
         // can also live on the returned AppState.
         let max_entries = config.auth.rate_limiter_max_entries as usize;
         let login_limiter = RateLimiter::new(max_entries);
-        let register_limiter = RateLimiter::new(max_entries);
         let cleanup_interval = config.server.rate_limiter_cleanup_interval_secs;
         let login_rl = config.auth.login_rate_limit.clone();
-        let register_rl = config.auth.register_rate_limit.clone();
 
         spawn_rate_limiter_cleanup(
             login_limiter.clone(),
             shutdown_token.clone(),
             cleanup_interval,
             login_rl.window_secs,
-        );
-        spawn_rate_limiter_cleanup(
-            register_limiter.clone(),
-            shutdown_token.clone(),
-            cleanup_interval,
-            register_rl.window_secs,
         );
 
         spawn_session_cleanup(
@@ -87,10 +87,19 @@ impl AppState {
         );
 
         let api_key_cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>> = Arc::new(DashMap::new());
-        spawn_api_key_cache_cleanup(api_key_cache.clone(), shutdown_token.clone());
-
         let session_cache: Arc<DashMap<String, SessionCacheEntry>> = Arc::new(DashMap::new());
-        spawn_session_cache_cleanup(session_cache.clone(), shutdown_token.clone());
+        let model_cache: Arc<DashMap<String, ModelCacheEntry>> = Arc::new(DashMap::new());
+        let provider_cache: Arc<DashMap<String, ProviderCacheEntry>> = Arc::new(DashMap::new());
+        let ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
+        spawn_caches_cleanup(
+            session_cache.clone(),
+            api_key_cache.clone(),
+            model_cache.clone(),
+            provider_cache.clone(),
+            ssrf_dns_cache.clone(),
+            shutdown_token.clone(),
+            config.server.cache_cleanup_interval_secs,
+        );
 
         Ok(Self {
             config,
@@ -99,10 +108,12 @@ impl AppState {
             log_manager,
             start_time: Utc::now(),
             login_rate_limiter: login_limiter,
-            register_rate_limiter: register_limiter,
             shutdown_token,
             api_key_cache,
             session_cache,
+            model_cache,
+            provider_cache,
+            ssrf_dns_cache,
         })
     }
 }
@@ -137,12 +148,13 @@ fn spawn_session_cleanup(db: Arc<Database>, shutdown: CancellationToken, interva
                 _ = interval.tick() => {
                     let db = db.clone();
                     match crate::run_blocking(move || db.cleanup_expired_sessions()).await {
-                        Ok(count) => {
+                        Ok(Ok(count)) => {
                             if count > 0 {
                                 tracing::info!("Cleaned up {} expired sessions", count);
                             }
                         }
-                        Err(e) => tracing::error!("Session cleanup error: {}", e),
+                        Ok(Err(e)) => tracing::error!("Session cleanup error: {}", e),
+                        Err(join_err) => tracing::error!("Session cleanup task failed: {}", join_err),
                     }
                 }
             }
@@ -150,33 +162,29 @@ fn spawn_session_cleanup(db: Arc<Database>, shutdown: CancellationToken, interva
     });
 }
 
-/// Evict expired session_cache entries every 60s (TTL is 300s, see middleware.rs).
-fn spawn_session_cache_cleanup(
-    cache: Arc<DashMap<String, SessionCacheEntry>>,
+/// Evict expired in-memory cache entries at a configurable interval.
+/// Covers session, api_key, model, provider, and SSRF DNS caches in one task.
+fn spawn_caches_cleanup(
+    session_cache: Arc<DashMap<String, SessionCacheEntry>>,
+    api_key_cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>>,
+    model_cache: Arc<DashMap<String, ModelCacheEntry>>,
+    provider_cache: Arc<DashMap<String, ProviderCacheEntry>>,
+    ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
     shutdown: CancellationToken,
+    interval_secs: u64,
 ) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
-                _ = interval.tick() => cache.retain(|_, v| v.2.elapsed() < CACHE_TTL),
-            }
-        }
-    });
-}
-
-/// Evict expired api_key_cache entries every 60s (TTL is 300s, see middleware.rs).
-fn spawn_api_key_cache_cleanup(
-    cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>>,
-    shutdown: CancellationToken,
-) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
-        loop {
-            tokio::select! {
-                _ = shutdown.cancelled() => break,
-                _ = interval.tick() => cache.retain(|_, v| v.1.elapsed() < CACHE_TTL),
+                _ = interval.tick() => {
+                    session_cache.retain(|_, v| v.2.elapsed() < CACHE_TTL);
+                    api_key_cache.retain(|_, v| v.1.elapsed() < CACHE_TTL);
+                    model_cache.retain(|_, v| v.1.elapsed() < CACHE_TTL);
+                    provider_cache.retain(|_, v| v.1.elapsed() < CACHE_TTL);
+                    ssrf_dns_cache.retain(|_, v| v.1.elapsed() < CACHE_TTL);
+                }
             }
         }
     });
