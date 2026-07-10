@@ -31,7 +31,9 @@ use handlers::providers::{
     create_provider, delete_provider, get_provider, get_provider_api_key, list_provider_types,
     list_providers, update_provider,
 };
-use handlers::proxy::{chat_completions, completions, embeddings, health, list_models_proxy};
+use handlers::proxy::{
+    chat_completions, completions, embeddings, health, list_models_proxy, responses,
+};
 use handlers::stats::overview_stats;
 use handlers::users::change_password;
 use middleware::{
@@ -240,6 +242,7 @@ fn build_app(state: app::AppState) -> Router {
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/completions", post(completions))
         .route("/v1/embeddings", post(embeddings))
+        .route("/v1/responses", post(responses))
         .route("/v1/models", get(list_models_proxy))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

@@ -16,7 +16,6 @@ pub(crate) struct SseTransformStream<S> {
     pub(crate) buf: bytes::BytesMut,
     pub(crate) upstream: Arc<dyn UpstreamProvider>,
     pub(crate) model_name: String,
-    pub(crate) last_payload: Option<Vec<u8>>,
     pub(crate) user_tokens: Option<UsageTokens>,
     pub(crate) log_manager: LogManager,
     pub(crate) event: ProxyEvent,
@@ -36,17 +35,11 @@ impl<S> SseTransformStream<S> {
             .map(|i| i + 2)
     }
 
-    fn try_extract_usage(&mut self) {
-        if self.user_tokens.is_some() {
-            return;
-        }
-        let Some(last) = self.last_payload.take() else {
-            return;
-        };
-        let tokens = parse_usage(&last);
-        if tokens.prompt_tokens.is_some()
-            || tokens.completion_tokens.is_some()
-            || tokens.total_tokens.is_some()
+    fn try_extract_usage_from(&mut self, payload: &[u8]) {
+        let tokens = parse_usage(payload);
+        if tokens.prompt_tokens.is_some_and(|v| v > 0)
+            || tokens.completion_tokens.is_some_and(|v| v > 0)
+            || tokens.total_tokens.is_some_and(|v| v > 0)
         {
             self.user_tokens = Some(tokens);
         }
@@ -59,7 +52,6 @@ impl<S> SseTransformStream<S> {
     }
 
     fn finalize_log(&mut self) {
-        self.try_extract_usage();
         if let Some(usage) = self.user_tokens.take() {
             self.event.prompt_tokens = usage.prompt_tokens;
             self.event.completion_tokens = usage.completion_tokens;
@@ -95,14 +87,10 @@ impl<S> SseTransformStream<S> {
         let mut out = String::with_capacity(event.len() + 64);
         for line in text.lines() {
             if let Some(payload) = line.strip_prefix("data: ") {
+                self.try_extract_usage_from(payload.as_bytes());
                 let transformed = self
                     .upstream
                     .transform_response(payload.as_bytes(), &self.model_name);
-                if payload == "[DONE]" {
-                    self.try_extract_usage();
-                } else {
-                    self.last_payload = Some(payload.as_bytes().to_vec());
-                }
                 out.push_str("data: ");
                 if let Ok(t) = std::str::from_utf8(&transformed) {
                     out.push_str(t);
@@ -169,7 +157,12 @@ where
                         return Poll::Ready(Some(Ok(bytes::Bytes::from(transformed))));
                     }
                 }
-                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                Poll::Ready(Some(Err(e))) => {
+                    this.event.error_message = Some(e.to_string());
+                    this.finalize_log();
+                    this.done = true;
+                    return Poll::Ready(Some(Err(e)));
+                }
                 Poll::Ready(None) => return this.finalize_stream(),
                 Poll::Pending => return Poll::Pending,
             }

@@ -96,6 +96,7 @@ pub(crate) async fn proxy_streamed(
     upstream_model: String,
     provider_type: String,
     client_ip: Option<String>,
+    prompt_tokens: Option<i64>,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     let log_manager = state.log_manager.clone();
     let model_name_for_transform = model_name.clone();
@@ -105,7 +106,7 @@ pub(crate) async fn proxy_streamed(
         api_key_name: session.api_key_name,
         model_name,
         provider_name,
-        prompt_tokens: None,
+        prompt_tokens,
         completion_tokens: None,
         total_tokens: None,
         cached_tokens: None,
@@ -185,7 +186,6 @@ pub(crate) async fn proxy_streamed(
         buf: bytes::BytesMut::new(),
         upstream,
         model_name: model_name_for_transform,
-        last_payload: None,
         user_tokens: None,
         log_manager,
         event: base_event,

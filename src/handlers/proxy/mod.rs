@@ -21,9 +21,11 @@ use crate::ssrf;
 mod exec;
 mod guard;
 mod sse;
+mod tokenizer;
 
 use exec::{proxy_non_streamed, proxy_streamed};
 use guard::{ProxyLogGuard, UsageTokens};
+use tokenizer::count_prompt_tokens;
 
 pub async fn chat_completions(
     State(state): State<AppState>,
@@ -31,7 +33,7 @@ pub async fn chat_completions(
     Extension(client_ip): Extension<Option<IpAddr>>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, client_ip, body, "/v1/chat/completions").await
+    proxy_request(state, session, client_ip, body, "/chat/completions").await
 }
 
 pub async fn completions(
@@ -40,7 +42,7 @@ pub async fn completions(
     Extension(client_ip): Extension<Option<IpAddr>>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, client_ip, body, "/v1/completions").await
+    proxy_request(state, session, client_ip, body, "/completions").await
 }
 
 pub async fn embeddings(
@@ -49,7 +51,16 @@ pub async fn embeddings(
     Extension(client_ip): Extension<Option<IpAddr>>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, client_ip, body, "/v1/embeddings").await
+    proxy_request(state, session, client_ip, body, "/embeddings").await
+}
+
+pub async fn responses(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionUser>,
+    Extension(client_ip): Extension<Option<IpAddr>>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Response, (StatusCode, Json<AitError>)> {
+    proxy_request(state, session, client_ip, body, "/responses").await
 }
 
 pub async fn health(State(state): State<AppState>) -> AxumJson<serde_json::Value> {
@@ -244,6 +255,7 @@ pub async fn proxy_request(
     let upstream_model = model.upstream_model.clone();
     let provider_type = provider.provider_type.as_ref().to_string();
     let client_ip_str = client_ip.map(|ip| ip.to_string());
+    let prompt_tokens = count_prompt_tokens(&body);
 
     if stream {
         return proxy_streamed(
@@ -258,6 +270,7 @@ pub async fn proxy_request(
             upstream_model,
             provider_type,
             client_ip_str,
+            prompt_tokens,
         )
         .await
         .map(|r| r.into_response());
@@ -272,7 +285,7 @@ pub async fn proxy_request(
             api_key_name: session.api_key_name,
             model_name: model_name.clone(),
             provider_name: provider_name.clone(),
-            prompt_tokens: None,
+            prompt_tokens,
             completion_tokens: None,
             total_tokens: None,
             cached_tokens: None,
