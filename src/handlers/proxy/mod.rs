@@ -184,23 +184,25 @@ pub async fn proxy_request(
             }
         }
 
-        if let Some(cached) = state.model_cache.get(model_name) {
-            let (ref resolved, ref inserted_at) = *cached;
-            if inserted_at.elapsed() < CACHE_TTL {
-                match resolved {
-                    Some((m, p)) => (m.clone(), p.clone()),
-                    None => {
-                        return Err(not_found(format!(
-                            "Model '{}' not found or disabled",
-                            model_name
-                        )));
-                    }
-                }
-            } else {
-                resolve(&state, model_name).await?
-            }
-        } else {
+        let needs_resolve = state
+            .model_cache
+            .get(model_name)
+            .is_none_or(|cached| cached.1.elapsed() >= CACHE_TTL);
+
+        if needs_resolve {
             resolve(&state, model_name).await?
+        } else {
+            let cached = state.model_cache.get(model_name).unwrap();
+            let (ref resolved, _) = *cached;
+            match resolved {
+                Some((m, p)) => (m.clone(), p.clone()),
+                None => {
+                    return Err(not_found(format!(
+                        "Model '{}' not found or disabled",
+                        model_name
+                    )));
+                }
+            }
         }
     };
 

@@ -47,6 +47,7 @@ trunk build --release --cargo-profile release-wasm  # Frontend prod
 ### Backend (`src/`)
 
 - **Database**: SQLite (via rusqlite, `Arc<Mutex<Connection>>`) for app data (providers, models, users, api keys, sessions). DuckDB (via `LogManager`) for structured logging + analytics. All DB ops go through `crate::run_blocking()` because SQLite Mutex must be acquired on a blocking thread and bcrypt is CPU-bound.
+- **DashMap deadlock prevention**: Never hold a `DashMap` `Ref` (from `.get()`) across an `.await` point. The `Ref` holds a shard read lock; if an async path also calls `.insert()` or another write on the same shard, the write blocks waiting for the read lock, and the read lock won't release until the async future completes — deadlock. Always `clone()` the needed data and `drop()` the `Ref` before any `.await`.
 - **Handler modules**: `providers` (provider CRUD), `models` (model CRUD), `analytics`, `apikeys`, `users`, `auth`, `proxy` (proxy internals: `exec.rs`, `sse.rs`, `guard.rs`)
 - API routes under `/api/` prefix, proxy routes under `/v1/*`
 - New providers: implement `UpstreamProvider` trait + register in `providers/mod.rs`
@@ -68,7 +69,3 @@ trunk build --release --cargo-profile release-wasm  # Frontend prod
 
 - Add new key to `frontend/locales/zh.json` and other `lang.json`
 - Keys are compile-time checked (`build.rs` generates `K` enum)
-
-## IMPORTANT NOTES
-
-**IMPORTANT**: Ensure you've thoroughly reviewed the `.agents.local.md`(if exists) file before beginning any work.

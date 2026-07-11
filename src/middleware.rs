@@ -83,7 +83,9 @@ pub async fn auth_middleware(
     if let Some(cached) = state.api_key_cache.get(&hash) {
         let (ref key_info, ref inserted_at) = *cached;
         if inserted_at.elapsed() < CACHE_TTL {
-            verify_key(key_info, &mut req)?;
+            let key_info = key_info.clone();
+            drop(cached);
+            verify_key(&key_info, &mut req)?;
             req.extensions_mut().insert(client_ip);
             return Ok(next.run(req).await);
         }
@@ -125,7 +127,9 @@ pub async fn admin_auth_middleware(
     if let Some(cached) = state.session_cache.get(&hash) {
         let (ref user, ref expires_at, ref inserted_at) = *cached;
         if *expires_at > Utc::now() && inserted_at.elapsed() < CACHE_TTL {
-            req.extensions_mut().insert(user.clone());
+            let user = user.clone();
+            drop(cached);
+            req.extensions_mut().insert(user);
             req.extensions_mut().insert(client_ip);
             return Ok(next.run(req).await);
         }

@@ -58,15 +58,13 @@ impl<S> SseTransformStream<S> {
             self.event.total_tokens = usage.total_tokens;
             self.event.cached_tokens = usage.cached_tokens;
         }
-        if self.event.time_to_first_token_ms.is_none() {
-            self.event.time_to_first_token_ms = Some(self.start.elapsed().as_millis() as i64);
-        }
         self.event.latency_ms = self.start.elapsed().as_millis() as i64;
         self.log_manager.log_proxy(self.event.clone());
     }
 
     fn finalize_stream(&mut self) -> Poll<Option<Result<bytes::Bytes, std::io::Error>>> {
         self.done = true;
+        self.record_ttfb();
         self.finalize_log();
 
         if !self.buf.is_empty() {
@@ -131,7 +129,6 @@ where
         }
 
         if let Some(event_end) = this.find_event_boundary() {
-            this.record_ttfb();
             let event = this.buf.split_to(event_end);
             let transformed = this.transform_event(&event);
             this.event.response_body_size =
@@ -147,8 +144,8 @@ where
             match Pin::new(&mut this.inner).poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
                     this.buf.extend_from_slice(&bytes);
+                    this.record_ttfb();
                     if let Some(event_end) = this.find_event_boundary() {
-                        this.record_ttfb();
                         let event = this.buf.split_to(event_end);
                         let transformed = this.transform_event(&event);
                         this.event.response_body_size = Some(
