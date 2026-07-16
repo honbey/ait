@@ -9,7 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::app::AppState;
 use crate::db::{Model, Provider, ProxyEvent, SessionUser};
@@ -151,6 +151,8 @@ pub async fn proxy_request(
         AitError::bad_request("Missing 'model' field in request body").into_response()
     })?;
 
+    trace!(model_name, "proxy_request: start");
+
     let (model, provider) = {
         async fn resolve(
             state: &AppState,
@@ -206,6 +208,13 @@ pub async fn proxy_request(
         }
     };
 
+    trace!(
+        model = model_name,
+        provider = provider.name,
+        "proxy_request: model resolved, elapsed={}ms",
+        start.elapsed().as_millis()
+    );
+
     let upstream = match state.provider_cache.get(&provider.id) {
         Some(cached) if cached.1.elapsed() < CACHE_TTL => cached.0.clone(),
         _ => {
@@ -260,6 +269,12 @@ pub async fn proxy_request(
     let prompt_tokens = count_prompt_tokens(&body);
 
     if stream {
+        trace!(
+            model = model_name,
+            provider = provider_name,
+            "proxy_request: -> streamed, elapsed={}ms",
+            start.elapsed().as_millis()
+        );
         return proxy_streamed(
             state,
             request,
@@ -305,7 +320,14 @@ pub async fn proxy_request(
         start,
     );
 
-    match proxy_non_streamed(
+    trace!(
+        model = model_name,
+        provider = provider_name,
+        "proxy_request: -> non-streamed, elapsed={}ms",
+        start.elapsed().as_millis()
+    );
+
+    let result = proxy_non_streamed(
         state.clone(),
         request,
         upstream,
@@ -313,15 +335,29 @@ pub async fn proxy_request(
         &provider,
         start,
     )
-    .await
-    {
+    .await;
+
+    match result {
         Ok((resp, usage, ttfb, body_size)) => {
+            trace!(
+                model = model_name,
+                provider = provider_name,
+                "proxy_request: non-streamed done, ttfb={}ms, elapsed={}ms",
+                ttfb,
+                start.elapsed().as_millis()
+            );
             guard.event.time_to_first_token_ms = Some(ttfb);
             guard.event.response_body_size = Some(body_size as i64);
             guard.finalize(&usage, "200");
             Ok(resp.into_response())
         }
         Err(e) => {
+            trace!(
+                model = model_name,
+                provider = provider_name,
+                "proxy_request: non-streamed error, elapsed={}ms",
+                start.elapsed().as_millis()
+            );
             guard.event.error_message = Some(e.1.0.message.clone());
             guard.finalize(&UsageTokens::default(), &e.0.as_u16().to_string());
             Err(e)

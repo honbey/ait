@@ -10,7 +10,7 @@ use axum::{
 use chrono::Utc;
 use futures_util::StreamExt;
 use reqwest::Request;
-use tracing::warn;
+use tracing::{trace, warn};
 
 use crate::app::AppState;
 use crate::db::{ProxyEvent, SessionUser};
@@ -28,10 +28,20 @@ pub(crate) async fn proxy_non_streamed(
     provider: &crate::db::Provider,
     start: Instant,
 ) -> Result<(impl IntoResponse, UsageTokens, i64, usize), (StatusCode, Json<AitError>)> {
+    trace!(
+        model = model_name,
+        "proxy_non_streamed: execute start, elapsed={}ms",
+        start.elapsed().as_millis()
+    );
     let response = state.http_client.execute(request).await.map_err(|e| {
         let msg = format!("Failed to connect to provider '{}': {}", provider.name, e);
         AitError::upstream_error(502, msg).into_response()
     })?;
+    trace!(
+        model = model_name,
+        "proxy_non_streamed: response received, elapsed={}ms",
+        start.elapsed().as_millis()
+    );
 
     let ttfb = start.elapsed().as_millis() as i64;
     let status = response.status();
@@ -61,10 +71,21 @@ pub(crate) async fn proxy_non_streamed(
         }
     }
 
+    trace!(
+        model = model_name,
+        "proxy_non_streamed: fetching body, elapsed={}ms",
+        start.elapsed().as_millis()
+    );
     let bytes = response
         .bytes()
         .await
         .map_err(|e| AitError::upstream_error(502, e.to_string()).into_response())?;
+    trace!(
+        model = model_name,
+        body_size = bytes.len(),
+        "proxy_non_streamed: body fetched, elapsed={}ms",
+        start.elapsed().as_millis()
+    );
 
     if !status.is_success() {
         let body_str = String::from_utf8_lossy(&bytes);
@@ -124,12 +145,20 @@ pub(crate) async fn proxy_streamed(
 
     let mut guard = ProxyLogGuard::new(log_manager.clone(), base_event.clone(), start);
 
+    trace!(
+        model = base_event.model_name,
+        "proxy_streamed: execute start"
+    );
     let response = state.http_client.execute(request).await.map_err(|e| {
         guard.event.error_message = Some(e.to_string());
         guard.finalize(&UsageTokens::default(), "502");
         AitError::upstream_error(502, format!("Failed to connect to provider: {}", e))
             .into_response()
     })?;
+    trace!(
+        model = base_event.model_name,
+        "proxy_streamed: response received"
+    );
 
     let status = response.status();
 

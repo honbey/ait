@@ -2,6 +2,7 @@ mod app;
 mod blocking;
 mod config;
 mod db;
+mod diagnostics;
 mod error;
 mod handlers;
 mod middleware;
@@ -52,6 +53,12 @@ async fn main() {
     };
 
     init_logging(&config.log);
+
+    diagnostics::install_signal_handler();
+    info!(
+        "SIGUSR1 handler installed — send `kill -USR1 {}` to dump thread stacks",
+        std::process::id()
+    );
 
     let state = match app::AppState::new(config.clone()) {
         Ok(s) => s,
