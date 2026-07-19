@@ -115,6 +115,7 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
                     </button>
                     <input
                         node_ref=input_ref
+                        id="filter-page"
                         class="w-10 text-center px-1 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 outline-none"
                         prop:value=move || page.get().to_string()
                         on:keydown=on_keydown
@@ -253,6 +254,7 @@ pub fn LogsPage() -> impl IntoView {
                 </h1>
                 <div class="flex items-center gap-2 shrink-0">
                     <select
+                        id="filter-source"
                         title=t!(LogSource)
                         disabled
                         class=format!(
@@ -270,10 +272,14 @@ pub fn LogsPage() -> impl IntoView {
             <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-5 space-y-4">
                 <div class="grid grid-cols-8 gap-3 items-end">
                     <div class="col-span-2">
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                        <label
+                            for="filter-provider-name"
+                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
+                        >
                             {t!(Providers)}
                         </label>
                         <input
+                            id="filter-provider-name"
                             type="text"
                             class=CLASS_INPUT
                             prop:value=move || provider_name.get()
@@ -281,10 +287,14 @@ pub fn LogsPage() -> impl IntoView {
                         />
                     </div>
                     <div class="col-span-2">
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                        <label
+                            for="filter-model-name"
+                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
+                        >
                             {t!(Models)}
                         </label>
                         <input
+                            id="filter-model-name"
                             type="text"
                             class=CLASS_INPUT
                             prop:value=move || model_name.get()
@@ -292,10 +302,14 @@ pub fn LogsPage() -> impl IntoView {
                         />
                     </div>
                     <div class="col-span-2">
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                        <label
+                            for="filter-api-key-name"
+                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
+                        >
                             {t!(LogApiKeyName)}
                         </label>
                         <input
+                            id="filter-api-key-name"
                             type="text"
                             class=CLASS_INPUT
                             prop:value=move || api_key_name.get()
@@ -303,10 +317,14 @@ pub fn LogsPage() -> impl IntoView {
                         />
                     </div>
                     <div class="col-span-1">
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                        <label
+                            for="filter-client-ip"
+                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
+                        >
                             {t!(LogClientIp)}
                         </label>
                         <input
+                            id="filter-client-ip"
                             type="text"
                             class=CLASS_INPUT
                             prop:value=move || client_ip.get()
@@ -314,10 +332,14 @@ pub fn LogsPage() -> impl IntoView {
                         />
                     </div>
                     <div class="col-span-1">
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                        <label
+                            for="filter-status"
+                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
+                        >
                             {t!(TableStatus)}
                         </label>
                         <input
+                            id="filter-status"
                             type="text"
                             class=CLASS_INPUT
                             prop:value=move || status.get()
@@ -328,10 +350,14 @@ pub fn LogsPage() -> impl IntoView {
 
                 <div class="flex items-center gap-3 flex-wrap">
                     <div class="w-1/6 min-w-[120px]">
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                        <label
+                            for="filter-start-date"
+                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
+                        >
                             {t!(StartDate)}
                         </label>
                         <input
+                            id="filter-start-date"
                             type="date"
                             class=CLASS_INPUT
                             prop:value=move || start_str.get()
@@ -339,10 +365,14 @@ pub fn LogsPage() -> impl IntoView {
                         />
                     </div>
                     <div class="w-1/6 min-w-[120px]">
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                        <label
+                            for="filter-end-date"
+                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
+                        >
                             {t!(EndDate)}
                         </label>
                         <input
+                            id="filter-end-date"
                             type="date"
                             class=CLASS_INPUT
                             prop:value=move || end_str.get()
@@ -350,10 +380,14 @@ pub fn LogsPage() -> impl IntoView {
                         />
                     </div>
                     <div class="w-48">
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                        <label
+                            for="filter-endpoint"
+                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
+                        >
                             {t!(LogEndpoint)}
                         </label>
                         <select
+                            id="filter-endpoint"
                             class=select_cls
                             on:change=move |ev| {
                                 let v = event_target_value(&ev);
@@ -369,10 +403,14 @@ pub fn LogsPage() -> impl IntoView {
                         </select>
                     </div>
                     <div class="w-36">
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                        <label
+                            for="filter-streaming"
+                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
+                        >
                             {t!(LogStreaming)}
                         </label>
                         <select
+                            id="filter-streaming"
                             class=select_cls
                             on:change=move |ev| {
                                 let v = event_target_value(&ev);
