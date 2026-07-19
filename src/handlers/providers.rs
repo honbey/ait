@@ -131,8 +131,6 @@ pub async fn create_provider(
         .map_err(internal_error)?
         .map_err(internal_error)?;
 
-    state.model_cache.clear();
-    state.provider_cache.clear();
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         username: session.username.clone(),
@@ -221,8 +219,10 @@ pub async fn update_provider(
         .map_err(internal_error)?
         .map_err(internal_error)?;
 
-    state.model_cache.clear();
-    state.provider_cache.clear();
+    state.provider_cache.remove(&id);
+    state
+        .model_cache
+        .retain(|_, v| v.0.as_ref().is_none_or(|(_, p)| p.id != id));
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         username: session.username.clone(),
@@ -250,8 +250,10 @@ pub async fn delete_provider(
         return Err(not_found(format!("Provider '{}' not found", id)));
     }
 
-    state.model_cache.clear();
-    state.provider_cache.clear();
+    state.provider_cache.remove(&id);
+    state
+        .model_cache
+        .retain(|_, v| v.0.as_ref().is_none_or(|(_, p)| p.id != id));
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         username: session.username.clone(),

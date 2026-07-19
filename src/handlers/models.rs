@@ -95,7 +95,6 @@ pub async fn create_model(
         .map_err(internal_error)?
         .map_err(|e| AitError::from_db_error(e).into_response())?;
 
-    state.model_cache.clear();
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         username: session.username.clone(),
@@ -151,7 +150,7 @@ pub async fn delete_model(
         return Err(not_found(format!("Model '{}' not found", name)));
     }
 
-    state.model_cache.clear();
+    state.model_cache.remove(&name);
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         username: session.username.clone(),
@@ -178,7 +177,7 @@ pub async fn update_model(
         .map_err(internal_error)?
         .map_err(internal_error)?;
 
-    state.model_cache.clear();
+    state.model_cache.remove(&name);
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         username: session.username.clone(),
