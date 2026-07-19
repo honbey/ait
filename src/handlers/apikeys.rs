@@ -32,7 +32,7 @@ pub async fn create_api_key(
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,
     Json(input): Json<CreateApiKeyRequest>,
-) -> Result<Json<ApiKeyResponse>, (StatusCode, Json<AitError>)> {
+) -> Result<(StatusCode, Json<ApiKeyResponse>), (StatusCode, Json<AitError>)> {
     if session.username != username {
         return Err(forbidden("You can only manage your own API keys"));
     }
@@ -63,15 +63,18 @@ pub async fn create_api_key(
         detail: None,
     });
 
-    Ok(Json(ApiKeyResponse {
-        id: stored.id.clone(),
-        key: raw_key,
-        name: stored.name,
-        created_at: stored.created_at.timestamp(),
-        updated_at: stored.updated_at.timestamp(),
-        enabled: stored.enabled,
-        expires_at: stored.expires_at.map(|dt| dt.timestamp()),
-    }))
+    Ok((
+        StatusCode::CREATED,
+        Json(ApiKeyResponse {
+            id: stored.id.clone(),
+            key: raw_key,
+            name: stored.name,
+            created_at: stored.created_at.timestamp(),
+            updated_at: stored.updated_at.timestamp(),
+            enabled: stored.enabled,
+            expires_at: stored.expires_at.map(|dt| dt.timestamp()),
+        }),
+    ))
 }
 
 pub async fn list_api_keys(
