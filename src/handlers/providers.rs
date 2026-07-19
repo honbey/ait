@@ -129,7 +129,7 @@ pub async fn create_provider(
     let inserted = crate::run_blocking(move || db.insert_provider(provider))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
@@ -151,7 +151,7 @@ pub async fn list_providers(
     let providers = crate::run_blocking(move || db.list_providers())
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
     Ok(Json(
         providers.into_iter().map(ProviderResponse::from).collect(),
     ))
@@ -167,7 +167,7 @@ pub async fn get_provider(
     let provider = crate::run_blocking(move || db.get_provider(&id_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?
+        .map_err(|e| AitError::from_db_error(e).into_response())?
         .ok_or_else(|| not_found(format!("Provider '{}' not found", id)))?;
 
     Ok(Json(ProviderResponse::from(provider)))
@@ -183,7 +183,7 @@ pub async fn get_provider_api_key(
     let provider = crate::run_blocking(move || db.get_provider(&id_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?
+        .map_err(|e| AitError::from_db_error(e).into_response())?
         .ok_or_else(|| not_found(format!("Provider '{}' not found", id)))?;
 
     state.log_manager.log_audit(AuditEvent {
@@ -217,7 +217,7 @@ pub async fn update_provider(
     let provider = crate::run_blocking(move || db.update_provider(&updates))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
 
     state.provider_cache.remove(&id);
     state
@@ -245,7 +245,7 @@ pub async fn delete_provider(
     if !crate::run_blocking(move || db.delete_provider(&id_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?
+        .map_err(|e| AitError::from_db_error(e).into_response())?
     {
         return Err(not_found(format!("Provider '{}' not found", id)));
     }

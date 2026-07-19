@@ -91,7 +91,7 @@ pub async fn list_api_keys(
     let user = crate::run_blocking(move || db.get_user(&username_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?
+        .map_err(|e| AitError::from_db_error(e).into_response())?
         .ok_or_else(|| not_found(format!("User '{}' not found", username)))?;
 
     let items: Vec<ApiKeyResponse> = user
@@ -125,7 +125,7 @@ pub async fn delete_api_key(
     let hash = crate::run_blocking(move || db.delete_api_key(&username_clone, &key_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
     state.api_key_cache.remove(&hash);
 
     state.log_manager.log_audit(AuditEvent {
@@ -177,7 +177,7 @@ pub async fn update_api_key(
     let (updated, hash) = crate::run_blocking(move || db.update_api_key(&username_clone, &updates))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
     state.api_key_cache.remove(&hash);
 
     state.log_manager.log_audit(AuditEvent {

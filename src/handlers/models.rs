@@ -115,7 +115,7 @@ pub async fn list_models(
     let models = crate::run_blocking(move || db.list_models())
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
     Ok(Json(models.into_iter().map(ModelResponse::from).collect()))
 }
 
@@ -129,7 +129,7 @@ pub async fn get_model(
     let model = crate::run_blocking(move || db.get_model(&name_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?
+        .map_err(|e| AitError::from_db_error(e).into_response())?
         .ok_or_else(|| not_found(format!("Model '{}' not found", name)))?;
 
     Ok(Json(ModelResponse::from(model)))
@@ -145,7 +145,7 @@ pub async fn delete_model(
     if !crate::run_blocking(move || db.delete_model(&name_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?
+        .map_err(|e| AitError::from_db_error(e).into_response())?
     {
         return Err(not_found(format!("Model '{}' not found", name)));
     }
@@ -175,7 +175,7 @@ pub async fn update_model(
     let model = crate::run_blocking(move || db.update_model(&updates))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
 
     state.model_cache.remove(&name);
     state.log_manager.log_audit(AuditEvent {

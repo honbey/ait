@@ -90,7 +90,7 @@ pub async fn login(
     let session_key = crate::run_blocking(move || db.insert_session(&username, expires_at))
         .await
         .map_err(internal_error)?
-        .map_err(|_| internal_error("Failed to create session"))?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
 
     let mut headers = HeaderMap::new();
     headers.insert(
