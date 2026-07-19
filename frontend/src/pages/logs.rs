@@ -327,7 +327,7 @@ pub fn LogsPage() -> impl IntoView {
                 </div>
 
                 <div class="flex items-center gap-3 flex-wrap">
-                    <div class="w-1/4 min-w-[140px]">
+                    <div class="w-1/6 min-w-[120px]">
                         <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                             {t!(StartDate)}
                         </label>
@@ -338,7 +338,7 @@ pub fn LogsPage() -> impl IntoView {
                             on:change=on_start_date
                         />
                     </div>
-                    <div class="w-1/4 min-w-[140px]">
+                    <div class="w-1/6 min-w-[120px]">
                         <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                             {t!(EndDate)}
                         </label>
