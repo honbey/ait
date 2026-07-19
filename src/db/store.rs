@@ -424,11 +424,12 @@ impl Database {
         Ok(model)
     }
 
-    pub fn delete_model(&self, name: &str) -> Result<(), DbError> {
+    pub fn delete_model(&self, name: &str) -> Result<bool, DbError> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM models WHERE name = ?1", params![name])
+        let rows = conn
+            .execute("DELETE FROM models WHERE name = ?1", params![name])
             .map_err(to_storage)?;
-        Ok(())
+        Ok(rows > 0)
     }
 
     pub fn get_model(&self, name: &str) -> Result<Option<Model>, DbError> {

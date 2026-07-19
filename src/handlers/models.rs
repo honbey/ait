@@ -143,10 +143,13 @@ pub async fn delete_model(
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
     let db = state.db.clone();
     let name_clone = name.clone();
-    crate::run_blocking(move || db.delete_model(&name_clone))
+    if !crate::run_blocking(move || db.delete_model(&name_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(internal_error)?
+    {
+        return Err(not_found(format!("Model '{}' not found", name)));
+    }
 
     state.model_cache.clear();
     state.log_manager.log_audit(AuditEvent {
