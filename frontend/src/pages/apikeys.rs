@@ -421,7 +421,10 @@ fn ApiKeyFormModal(
                 field.patch(api_key);
             } else {
                 created_raw_key.set(Some((api_key.key.clone(), api_key.name.clone())));
-                state.items().write().push(api_key);
+                let mut masked = api_key;
+                let k = masked.key.clone();
+                masked.key = format!("{}...{}", &k[..6], &k[k.len() - 3..]);
+                state.items().write().push(masked);
             }
             let action_label = if is_edit {
                 ts!(ActionUpdated)
