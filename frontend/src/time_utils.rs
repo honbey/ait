@@ -24,8 +24,34 @@ pub fn clamp_range(start: i64, end: i64, now: i64) -> (i64, i64) {
 }
 
 pub fn date_str_to_ts(s: &str) -> Option<i64> {
-    let d = js_sys::Date::new(&s.into());
-    let ts = d.get_time() / 1000.0;
+    let (date_part, time_part) = s.split_once('T').unzip();
+    let date_part = date_part.unwrap_or(s);
+    let parts: Vec<&str> = date_part.split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let y = parts[0].parse::<i32>().ok()?;
+    let m = parts[1].parse::<i32>().ok()?;
+    let d = parts[2].parse::<i32>().ok()?;
+    let month = m - 1;
+
+    let date = if let Some(t) = time_part {
+        let h = t
+            .split(':')
+            .next()
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(0);
+        let min = t
+            .split(':')
+            .nth(1)
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(0);
+        js_sys::Date::new_with_year_month_day_hr_min_sec(y as u32, month, d, h, min, 0)
+    } else {
+        js_sys::Date::new_with_year_month_day(y as u32, m - 1, d)
+    };
+
+    let ts = date.get_time() / 1000.0;
     if ts.is_nan() { None } else { Some(ts as i64) }
 }
 
