@@ -31,6 +31,8 @@ fn latency_s(ms: i64) -> f64 {
 
 #[component]
 fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) -> impl IntoView {
+    let input_ref = NodeRef::<leptos::html::Input>::new();
+
     let go = move |p: u64| {
         let t = total_signal.get_untracked();
         if p >= 1 && p <= t.div_ceil(per_page).max(1) {
@@ -38,39 +40,33 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
         }
     };
 
+    let on_keydown = move |ev: leptos::ev::KeyboardEvent| {
+        if ev.key() == "Enter" {
+            if let Ok(p) = event_target_value(&ev).parse::<u64>() {
+                go(p);
+            }
+            let _ = input_ref
+                .get_untracked()
+                .map(|el| el.set_value(&page.get_untracked().to_string()));
+        }
+    };
+
+    let on_blur = move |ev: leptos::ev::FocusEvent| {
+        if let Ok(p) = event_target_value(&ev).parse::<u64>() {
+            go(p);
+        }
+        let cur = page.get_untracked();
+        let _ = input_ref
+            .get_untracked()
+            .map(|el| el.set_value(&cur.to_string()));
+    };
+
     move || {
         let t = total_signal.get();
         let total_pages = t.div_ceil(per_page).max(1);
         let cur = page.get();
-
-        let mut items: Vec<u64> = Vec::new();
-        if total_pages <= 7 {
-            for i in 1..=total_pages {
-                items.push(i);
-            }
-        } else {
-            items.push(1);
-            if cur > 3 {
-                items.push(u64::MAX);
-            }
-            let start = if cur > 3 {
-                cur.saturating_sub(1).max(2)
-            } else {
-                2
-            };
-            let end = if cur < total_pages - 2 {
-                (cur + 1).min(total_pages - 1)
-            } else {
-                total_pages - 1
-            };
-            for i in start..=end {
-                items.push(i);
-            }
-            if cur < total_pages - 2 {
-                items.push(u64::MAX);
-            }
-            items.push(total_pages);
-        }
+        let is_first = cur == 1;
+        let is_last = cur == total_pages;
 
         view! {
             <div class="flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-700 text-sm text-gray-500 dark:text-gray-400">
@@ -95,45 +91,60 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
                     }}
                 </div>
                 <div class="flex items-center gap-1">
-                    <span class="mr-2">
-                        {move || {
-                            crate::i18n::use_i18n()
-                                .t_replace(
-                                    crate::i18n::K::PaginationTotalPages,
-                                    &[
-                                        (
-                                            "pages",
-                                            &total_signal.get().div_ceil(per_page).max(1).to_string(),
-                                        ),
-                                    ],
-                                )
-                        }}
+                    <button
+                        class=if is_first {
+                            "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                        } else {
+                            "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                        }
+                        disabled=is_first
+                        on:click=move |_| go(1)
+                    >
+                        <i class="fas fa-angles-left"></i>
+                    </button>
+                    <button
+                        class=if is_first {
+                            "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                        } else {
+                            "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                        }
+                        disabled=is_first
+                        on:click=move |_| go(cur - 1)
+                    >
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                    <input
+                        node_ref=input_ref
+                        class="w-10 text-center px-1 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 outline-none"
+                        prop:value=move || page.get().to_string()
+                        on:keydown=on_keydown
+                        on:blur=on_blur
+                    />
+                    <span class="text-sm text-gray-500 dark:text-gray-400">
+                        {" / "}{total_pages}
                     </span>
-                    {move || {
-                        items
-                            .iter()
-                            .map(|&p| {
-                                if p == u64::MAX {
-                                    view! { <span class="px-1">...</span> }.into_any()
-                                } else {
-                                    let is_active = p == cur;
-                                    let cls = if is_active {
-                                        "px-2 py-0.5 text-sm font-medium rounded bg-indigo-600 text-white cursor-pointer"
-                                    } else {
-                                        "px-2 py-0.5 text-sm rounded text-gray-600 dark:text-gray-300 \
-                                 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
-                                    };
-                                    let on_click = move |_| go(p);
-                                    view! {
-                                        <button class=cls on:click=on_click>
-                                            {p}
-                                        </button>
-                                    }
-                                        .into_any()
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                    }}
+                    <button
+                        class=if is_last {
+                            "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                        } else {
+                            "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                        }
+                        disabled=is_last
+                        on:click=move |_| go(cur + 1)
+                    >
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                    <button
+                        class=if is_last {
+                            "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                        } else {
+                            "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                        }
+                        disabled=is_last
+                        on:click=move |_| go(total_pages)
+                    >
+                        <i class="fas fa-angles-right"></i>
+                    </button>
                 </div>
             </div>
         }
@@ -153,7 +164,6 @@ pub fn LogsPage() -> impl IntoView {
     let (start_ts, set_start_ts) = signal::<Option<i64>>(None);
     let (end_ts, set_end_ts) = signal::<Option<i64>>(None);
     let (provider_name, set_provider_name) = signal(String::new());
-    let (provider_type, set_provider_type) = signal(String::new());
     let (model_name, set_model_name) = signal(String::new());
     let (api_key_name, set_api_key_name) = signal(String::new());
     let (client_ip, set_client_ip) = signal(String::new());
@@ -174,7 +184,6 @@ pub fn LogsPage() -> impl IntoView {
             let s = start_ts.get_untracked();
             let e = end_ts.get_untracked();
             let pn = provider_name.get_untracked();
-            let pt = provider_type.get_untracked();
             let mn = model_name.get_untracked();
             let ak = api_key_name.get_untracked();
             let ci = client_ip.get_untracked();
@@ -189,7 +198,6 @@ pub fn LogsPage() -> impl IntoView {
                     s,
                     e,
                     if pn.is_empty() { None } else { Some(pn) },
-                    if pt.is_empty() { None } else { Some(pt) },
                     if mn.is_empty() { None } else { Some(mn) },
                     if ak.is_empty() { None } else { Some(ak) },
                     if ci.is_empty() { None } else { Some(ci) },
@@ -214,7 +222,6 @@ pub fn LogsPage() -> impl IntoView {
         set_start_ts.set(None);
         set_end_ts.set(None);
         set_provider_name.set(String::new());
-        set_provider_type.set(String::new());
         set_model_name.set(String::new());
         set_api_key_name.set(String::new());
         set_client_ip.set(String::new());
@@ -261,30 +268,8 @@ pub fn LogsPage() -> impl IntoView {
             </div>
 
             <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-5 space-y-4">
-                <div class="grid grid-cols-4 gap-3 items-end">
-                    <div>
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                            {t!(StartDate)}
-                        </label>
-                        <input
-                            type="date"
-                            class=CLASS_INPUT
-                            prop:value=move || start_str.get()
-                            on:change=on_start_date
-                        />
-                    </div>
-                    <div>
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                            {t!(EndDate)}
-                        </label>
-                        <input
-                            type="date"
-                            class=CLASS_INPUT
-                            prop:value=move || end_str.get()
-                            on:change=on_end_date
-                        />
-                    </div>
-                    <div>
+                <div class="grid grid-cols-8 gap-3 items-end">
+                    <div class="col-span-2">
                         <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                             {t!(Providers)}
                         </label>
@@ -295,21 +280,7 @@ pub fn LogsPage() -> impl IntoView {
                             on:input=move |ev| set_provider_name.set(event_target_value(&ev))
                         />
                     </div>
-                    <div>
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                            {t!(LogProviderType)}
-                        </label>
-                        <input
-                            type="text"
-                            class=CLASS_INPUT
-                            prop:value=move || provider_type.get()
-                            on:input=move |ev| set_provider_type.set(event_target_value(&ev))
-                        />
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-4 gap-3 items-end">
-                    <div>
+                    <div class="col-span-2">
                         <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                             {t!(Models)}
                         </label>
@@ -320,7 +291,7 @@ pub fn LogsPage() -> impl IntoView {
                             on:input=move |ev| set_model_name.set(event_target_value(&ev))
                         />
                     </div>
-                    <div>
+                    <div class="col-span-2">
                         <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                             {t!(LogApiKeyName)}
                         </label>
@@ -331,7 +302,7 @@ pub fn LogsPage() -> impl IntoView {
                             on:input=move |ev| set_api_key_name.set(event_target_value(&ev))
                         />
                     </div>
-                    <div>
+                    <div class="col-span-1">
                         <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                             {t!(LogClientIp)}
                         </label>
@@ -342,7 +313,7 @@ pub fn LogsPage() -> impl IntoView {
                             on:input=move |ev| set_client_ip.set(event_target_value(&ev))
                         />
                     </div>
-                    <div>
+                    <div class="col-span-1">
                         <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                             {t!(TableStatus)}
                         </label>
@@ -355,7 +326,29 @@ pub fn LogsPage() -> impl IntoView {
                     </div>
                 </div>
 
-                <div class="flex items-center gap-3">
+                <div class="flex items-center gap-3 flex-wrap">
+                    <div class="w-1/4 min-w-[140px]">
+                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                            {t!(StartDate)}
+                        </label>
+                        <input
+                            type="date"
+                            class=CLASS_INPUT
+                            prop:value=move || start_str.get()
+                            on:change=on_start_date
+                        />
+                    </div>
+                    <div class="w-1/4 min-w-[140px]">
+                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                            {t!(EndDate)}
+                        </label>
+                        <input
+                            type="date"
+                            class=CLASS_INPUT
+                            prop:value=move || end_str.get()
+                            on:change=on_end_date
+                        />
+                    </div>
                     <div class="w-48">
                         <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                             {t!(LogEndpoint)}

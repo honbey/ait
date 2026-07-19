@@ -537,7 +537,6 @@ pub async fn fetch_proxy_logs(
     start_ts: Option<i64>,
     end_ts: Option<i64>,
     provider_name: Option<String>,
-    provider_type: Option<String>,
     model_name: Option<String>,
     api_key_name: Option<String>,
     client_ip: Option<String>,
@@ -549,7 +548,6 @@ pub async fn fetch_proxy_logs(
     push_qs(&mut parts, "start_ts", start_ts);
     push_qs(&mut parts, "end_ts", end_ts);
     push_qs(&mut parts, "provider_name", provider_name);
-    push_qs(&mut parts, "provider_type", provider_type);
     push_qs(&mut parts, "model_name", model_name);
     push_qs(&mut parts, "api_key_name", api_key_name);
     push_qs(&mut parts, "client_ip", client_ip);
