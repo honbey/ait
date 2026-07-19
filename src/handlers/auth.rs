@@ -10,7 +10,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, Session, hash_key};
+use crate::db::{AuditEvent, hash_key};
 use crate::error::{AitError, internal_error, unauthorized};
 use crate::middleware::{CACHE_TTL, extract_session_key};
 
@@ -82,17 +82,12 @@ pub async fn login(
         Err(join_err) => return Err(internal_error(join_err)),
     };
 
-    let session_key = generate_session_key();
     let ttl = state.config.auth.session_ttl_secs;
-    let session = Session {
-        session_key: session_key.clone(),
-        username: input.username.clone(),
-        created_at: Utc::now(),
-        expires_at: Utc::now() + chrono::Duration::seconds(ttl as i64),
-    };
+    let expires_at = Utc::now() + chrono::Duration::seconds(ttl as i64);
 
     let db = state.db.clone();
-    crate::run_blocking(move || db.insert_session(session))
+    let username = input.username.clone();
+    let session_key = crate::run_blocking(move || db.insert_session(&username, expires_at))
         .await
         .map_err(internal_error)?
         .map_err(|_| internal_error("Failed to create session"))?;
@@ -195,15 +190,6 @@ pub async fn session_check(
         authenticated: true,
         username: Some(session.username),
     })
-}
-
-fn generate_session_key() -> String {
-    use rand::RngExt;
-    const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let mut rng = rand::rng();
-    (0..32)
-        .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
-        .collect()
 }
 
 fn dummy_hash() -> &'static str {

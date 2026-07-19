@@ -616,25 +616,24 @@ impl Database {
 
     // --- Session CRUD ---
 
-    pub fn insert_session(&self, mut session: Session) -> Result<Session, DbError> {
-        session.created_at = Utc::now();
-        let hash = hash_key(&session.session_key);
-        session.session_key = hash.clone();
+    pub fn insert_session(
+        &self,
+        username: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<String, DbError> {
+        let raw_key = Self::generate_session_key();
+        let hash = hash_key(&raw_key);
+        let now = Utc::now();
 
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO sessions (session_key_hash, username, created_at, expires_at)
              VALUES (?1, ?2, ?3, ?4)",
-            params![
-                hash,
-                session.username,
-                session.created_at.timestamp(),
-                session.expires_at.timestamp(),
-            ],
+            params![hash, username, now.timestamp(), expires_at.timestamp(),],
         )
         .map_err(to_storage)?;
 
-        Ok(session)
+        Ok(raw_key)
     }
 
     pub fn get_session(&self, session_key: &str) -> Result<Option<Session>, DbError> {
@@ -676,14 +675,21 @@ impl Database {
 
     // --- API Key CRUD ---
 
-    fn generate_api_key() -> String {
+    fn generate_random_string(len: usize) -> String {
         use rand::RngExt;
         const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         let mut rng = rand::rng();
-        let random: String = (0..32)
+        (0..len)
             .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
-            .collect();
-        format!("sk-{}", random)
+            .collect()
+    }
+
+    fn generate_api_key() -> String {
+        format!("sk-{}", Self::generate_random_string(32))
+    }
+
+    fn generate_session_key() -> String {
+        Self::generate_random_string(32)
     }
 
     pub fn insert_api_key(
@@ -1179,23 +1185,20 @@ mod tests {
     #[test]
     fn session_insert_hashes_key() {
         let (db, _dir) = setup();
-        let raw_key = "my-raw-session-key";
-        let mut session = crate::test_utils::create_test_session("alice", 3600);
-        session.session_key = raw_key.to_string();
-        let stored = db.insert_session(session).unwrap();
+        let expires_at = Utc::now() + chrono::Duration::hours(1);
+        let raw_key = db.insert_session("alice", expires_at).unwrap();
+        assert_eq!(raw_key.len(), 32);
+        let stored = db.get_session(&raw_key).unwrap().expect("should find");
         assert_ne!(stored.session_key, raw_key);
-        let found = db.get_session(raw_key).unwrap().expect("should find");
-        assert_eq!(found.username, "alice");
+        assert_eq!(stored.username, "alice");
     }
 
     #[test]
     fn session_get() {
         let (db, _dir) = setup();
-        let raw_key = "bob-session-key";
-        let mut session = crate::test_utils::create_test_session("bob", 3600);
-        session.session_key = raw_key.to_string();
-        db.insert_session(session).unwrap();
-        let found = db.get_session(raw_key).unwrap().expect("should find");
+        let expires_at = Utc::now() + chrono::Duration::hours(1);
+        let raw_key = db.insert_session("bob", expires_at).unwrap();
+        let found = db.get_session(&raw_key).unwrap().expect("should find");
         assert_eq!(found.username, "bob");
     }
 
@@ -1208,24 +1211,22 @@ mod tests {
     #[test]
     fn session_delete() {
         let (db, _dir) = setup();
-        let raw_key = "alice-session-key";
-        let mut session = crate::test_utils::create_test_session("alice", 3600);
-        session.session_key = raw_key.to_string();
-        let s = db.insert_session(session).unwrap();
-        assert!(db.delete_session(raw_key).unwrap());
-        assert!(db.get_session(raw_key).unwrap().is_none());
-        assert!(!db.delete_session(&s.session_key).unwrap());
+        let expires_at = Utc::now() + chrono::Duration::hours(1);
+        let raw_key = db.insert_session("alice", expires_at).unwrap();
+        let stored = db.get_session(&raw_key).unwrap().expect("should find");
+        assert!(db.delete_session(&raw_key).unwrap());
+        assert!(db.get_session(&raw_key).unwrap().is_none());
+        assert!(!db.delete_session(&stored.session_key).unwrap());
     }
 
     #[test]
     fn cleanup_expired_sessions() {
         let (db, _dir) = setup();
-        db.insert_session(crate::test_utils::create_test_session("alice", 3600))
-            .unwrap();
-        db.insert_session(crate::test_utils::create_expired_session("bob"))
-            .unwrap();
-        db.insert_session(crate::test_utils::create_expired_session("charlie"))
-            .unwrap();
+        let future = Utc::now() + chrono::Duration::hours(1);
+        let past = Utc::now() - chrono::Duration::hours(1);
+        db.insert_session("alice", future).unwrap();
+        db.insert_session("bob", past).unwrap();
+        db.insert_session("charlie", past).unwrap();
         let cleaned = db.cleanup_expired_sessions().unwrap();
         assert_eq!(cleaned, 2);
         let all = db.list_sessions().unwrap();
