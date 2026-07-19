@@ -4,7 +4,7 @@ use std::time::Instant;
 use axum::{
     Json,
     body::Body,
-    http::{HeaderMap, HeaderName, StatusCode},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
@@ -19,6 +19,32 @@ use crate::providers::UpstreamProvider;
 
 use super::guard::{ProxyLogGuard, UsageTokens, parse_usage};
 use super::sse::SseTransformStream;
+
+/// Collect `x-*` and `retry-after` headers from an upstream response.
+fn collect_x_headers(headers: &HeaderMap) -> Vec<(HeaderName, HeaderValue)> {
+    let mut filtered = Vec::new();
+    for (name, value) in headers {
+        let lower = name.as_str().to_ascii_lowercase();
+        if lower.starts_with("x-") || lower == "retry-after" {
+            filtered.push((name.clone(), value.clone()));
+        }
+    }
+    filtered
+}
+
+/// Build a 502 error for upstream redirect responses.
+fn redirect_error(status: StatusCode, provider_name: &str) -> (StatusCode, Json<AitError>) {
+    warn!(
+        "[proxy] upstream returned redirect {} for '{}'",
+        status, provider_name
+    );
+    AitError::upstream_error(
+        502,
+        "Ait does not support redirect policy. If the provider's base_url \
+         has changed, please update the provider configuration.",
+    )
+    .into_response()
+}
 
 pub(crate) async fn proxy_non_streamed(
     state: AppState,
@@ -47,16 +73,7 @@ pub(crate) async fn proxy_non_streamed(
     let status = response.status();
 
     if status.is_redirection() {
-        warn!(
-            "[proxy] upstream returned redirect {} for '{}'",
-            status, provider.name
-        );
-        return Err(AitError::upstream_error(
-            502,
-            "Ait does not support redirect policy. If the provider's base_url \
-             has changed, please update the provider configuration.",
-        )
-        .into_response());
+        return Err(redirect_error(status, &provider.name));
     }
 
     let mut headers = HeaderMap::new();
@@ -64,11 +81,8 @@ pub(crate) async fn proxy_non_streamed(
         HeaderName::from_static("content-type"),
         "application/json".parse().unwrap(),
     );
-    for (name, value) in response.headers() {
-        let lower = name.as_str().to_ascii_lowercase();
-        if lower.starts_with("x-") || lower == "retry-after" {
-            headers.insert(name.clone(), value.clone());
-        }
+    for (name, value) in collect_x_headers(response.headers()) {
+        headers.insert(name, value);
     }
 
     trace!(
@@ -165,12 +179,7 @@ pub(crate) async fn proxy_streamed(
     if status.is_redirection() {
         guard.event.error_message = Some(format!("upstream returned redirect {}", status));
         guard.finalize(&UsageTokens::default(), "502");
-        return Err(AitError::upstream_error(
-            502,
-            "Ait does not support redirect policy. If the provider's base_url \
-             has changed, please update the provider configuration.",
-        )
-        .into_response());
+        return Err(redirect_error(status, &base_event.provider_name));
     }
 
     if !status.is_success() {
@@ -196,11 +205,8 @@ pub(crate) async fn proxy_streamed(
         .header("content-type", "text/event-stream")
         .header("cache-control", "no-cache");
 
-    for (name, value) in response.headers() {
-        let lower = name.as_str().to_ascii_lowercase();
-        if lower.starts_with("x-") || lower == "retry-after" {
-            stream_builder = stream_builder.header(name.clone(), value.clone());
-        }
+    for (name, value) in collect_x_headers(response.headers()) {
+        stream_builder = stream_builder.header(name, value);
     }
 
     let raw_stream = response.bytes_stream().map(|result| {
