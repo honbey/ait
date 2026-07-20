@@ -104,7 +104,8 @@ pub(crate) async fn proxy_non_streamed(
     if !status.is_success() {
         let body_str = String::from_utf8_lossy(&bytes);
         let truncated = if body_str.len() > 512 {
-            format!("{}...", &body_str[..512])
+            let end = body_str.floor_char_boundary(512);
+            format!("{}...", &body_str[..end])
         } else {
             body_str.to_string()
         };
@@ -186,7 +187,8 @@ pub(crate) async fn proxy_streamed(
         let body = response.text().await.unwrap_or_default();
         warn!("[proxy] upstream error {}: {}", status, body);
         let truncated = if body.len() > 512 {
-            format!("{}...", &body[..512])
+            let end = body.floor_char_boundary(512);
+            format!("{}...", &body[..end])
         } else {
             body
         };
