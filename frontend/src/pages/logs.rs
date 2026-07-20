@@ -323,8 +323,8 @@ pub fn LogsPage() -> impl IntoView {
                     </div>
                 </div>
 
-                <div class="flex items-center gap-3 flex-wrap">
-                    <div class="w-1/6 min-w-[120px]">
+                <div class="grid grid-cols-6 gap-3 items-end">
+                    <div>
                         <input
                             id="filter-start-date"
                             type="date"
@@ -333,7 +333,7 @@ pub fn LogsPage() -> impl IntoView {
                             on:change=on_start_date
                         />
                     </div>
-                    <div class="w-1/6 min-w-[120px]">
+                    <div>
                         <input
                             id="filter-end-date"
                             type="date"
@@ -342,7 +342,7 @@ pub fn LogsPage() -> impl IntoView {
                             on:change=on_end_date
                         />
                     </div>
-                    <div class="w-48">
+                    <div>
                         <select
                             id="filter-endpoint"
                             class=select_cls
@@ -359,7 +359,7 @@ pub fn LogsPage() -> impl IntoView {
                             <option value="/v1/embeddings">{"/v1/embeddings"}</option>
                         </select>
                     </div>
-                    <div class="w-36">
+                    <div>
                         <select
                             id="filter-streaming"
                             class=select_cls
@@ -378,24 +378,25 @@ pub fn LogsPage() -> impl IntoView {
                             <option value="" selected>
                                 {move || t!(LogStreamingAll)}
                             </option>
-                            <option value="true">{ts!(LogStreaming)}</option>
-                            <option value="false">{ts!(LogStreamingN)}</option>
+                            <option value="true">{"Streaming"}</option>
+                            <option value="false">{"Non-streaming"}</option>
                         </select>
                     </div>
-                    <div class="flex-1"></div>
-                    <button
-                        class="px-4 py-2 text-sm font-medium rounded-lg \
-                        bg-gray-100 dark:bg-gray-700 \
-                        text-gray-600 dark:text-gray-300 \
-                        hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
-                        on:click=do_reset
-                    >
-                        {t!(LogReset)}
-                    </button>
-                    <button class=CLASS_BTN_PRIMARY on:click=do_query>
-                        <i class="fas fa-search"></i>
-                        {t!(LogQueryBtn)}
-                    </button>
+                    <div class="col-span-2 flex justify-end gap-3">
+                        <button
+                            class="px-4 py-2 text-sm font-medium rounded-lg \
+                            bg-gray-100 dark:bg-gray-700 \
+                            text-gray-600 dark:text-gray-300 \
+                            hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                            on:click=do_reset
+                        >
+                            {t!(LogReset)}
+                        </button>
+                        <button class=CLASS_BTN_PRIMARY on:click=do_query>
+                            <i class="fas fa-search"></i>
+                            {t!(LogQueryBtn)}
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -596,12 +597,12 @@ pub fn LogsPage() -> impl IntoView {
                                         {item.api_key_name.unwrap_or_default()}
                                     </span>
                                 </DetailRow>
-                                <DetailRow label=ts!(LogStreaming)>
+                                <DetailRow label=ts!(LogTransportType)>
                                     <span class=CLASS_DETAIL_VALUE>
                                         {if item.is_streaming {
-                                            ts!(LogStreaming)
+                                            "Streaming".to_string()
                                         } else {
-                                            ts!(LogStreamingN)
+                                            "Non-streaming".to_string()
                                         }}
                                     </span>
                                 </DetailRow>
