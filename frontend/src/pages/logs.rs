@@ -5,8 +5,9 @@ use crate::components::error_display::ErrorCard;
 use crate::components::modal::ModalShell;
 use crate::components::skeleton::table_skeleton;
 use crate::components::style::{
-    CLASS_BTN_PRIMARY, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE, CLASS_DETAIL_VALUE_MONO,
-    CLASS_DETAIL_VALUE_PLAIN, CLASS_INPUT, CLASS_PAGE_TITLE,
+    CLASS_BORDER_B, CLASS_BTN_PRIMARY, CLASS_CARD, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE,
+    CLASS_DETAIL_VALUE_MONO, CLASS_DETAIL_VALUE_PLAIN, CLASS_INPUT, CLASS_PAGE_TITLE,
+    CLASS_PILL_GREEN, CLASS_PILL_RED, CLASS_TEXT_MUTED,
 };
 use crate::components::table::DetailRow;
 use crate::components::table::timestamp_str;
@@ -15,9 +16,9 @@ use crate::{t, ts};
 
 fn latency_pill(latency_s: f64) -> &'static str {
     if latency_s < 3.0 {
-        "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+        CLASS_PILL_GREEN
     } else {
-        "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
+        CLASS_PILL_RED
     }
 }
 
@@ -69,7 +70,10 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
         let is_last = cur == total_pages;
 
         view! {
-            <div class="flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-700 text-sm text-gray-500 dark:text-gray-400">
+            <div class=format!(
+                "flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-700 text-sm {}",
+                CLASS_TEXT_MUTED,
+            )>
                 <div>
                     {move || {
                         let t = total_signal.get();
@@ -121,9 +125,7 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
                         on:keydown=on_keydown
                         on:blur=on_blur
                     />
-                    <span class="text-sm text-gray-500 dark:text-gray-400">
-                        {" / "}{total_pages}
-                    </span>
+                    <span class=format!("text-sm {}", CLASS_TEXT_MUTED)>{" / "}{total_pages}</span>
                     <button
                         class=if is_last {
                             "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
@@ -269,7 +271,7 @@ pub fn LogsPage() -> impl IntoView {
                 </div>
             </div>
 
-            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-5 space-y-4">
+            <div class=format!("{} p-5 space-y-4", CLASS_CARD)>
                 <div class="grid grid-cols-8 gap-3 items-end">
                     <div class="col-span-2">
                         <input
@@ -400,7 +402,7 @@ pub fn LogsPage() -> impl IntoView {
                 </div>
             </div>
 
-            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm">
+            <div class=CLASS_CARD>
                 <Transition fallback=move || table_skeleton()>
                     {move || match rsc.get() {
                         Some(Ok(ref data)) => {
@@ -419,31 +421,39 @@ pub fn LogsPage() -> impl IntoView {
                                         <div class="overflow-x-auto">
                                             <table class="w-full text-sm">
                                                 <thead>
-                                                    <tr class="border-b border-gray-100 dark:border-gray-700">
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(CreatedAt)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(Providers)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(Models)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(LogLatency)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(LogInput)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(LogOutput)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(LogClientIp)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-center text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(TableStatus)}
-                                                        </th>
+                                                    <tr class=CLASS_BORDER_B>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(CreatedAt)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(Providers)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(Models)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(LogLatency)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(LogInput)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(LogOutput)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(LogClientIp)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-center {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(TableStatus)}</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -468,9 +478,10 @@ pub fn LogsPage() -> impl IntoView {
                                                                     </td>
                                                                     <td class="px-6 py-4 whitespace-nowrap">
                                                                         <div class="flex items-center gap-1">
-                                                                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400">
-                                                                                {format!("{:.2}s", latency_s(e.latency_ms))}
-                                                                            </span>
+                                                                            <span class=format!(
+                                                                                "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium {}",
+                                                                                CLASS_PILL_GREEN,
+                                                                            )>{format!("{:.2}s", latency_s(e.latency_ms))}</span>
                                                                             <Show
                                                                                 when=move || e.is_streaming
                                                                                 fallback=move || {
@@ -521,9 +532,9 @@ pub fn LogsPage() -> impl IntoView {
                                                                         {{
                                                                             let code: u16 = e.status.parse().unwrap_or(0);
                                                                             let cls = if code >= 400 {
-                                                                                "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
+                                                                                CLASS_PILL_RED
                                                                             } else {
-                                                                                "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+                                                                                CLASS_PILL_GREEN
                                                                             };
                                                                             view! {
                                                                                 <span class=format!(

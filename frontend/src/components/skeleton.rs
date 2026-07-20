@@ -1,5 +1,7 @@
 use leptos::prelude::*;
 
+use crate::components::style::{CLASS_BORDER_B, CLASS_CARD};
+
 fn sk(extra: &str) -> impl IntoView {
     view! { <div class=format!("skeleton bg-gray-200 dark:bg-gray-600 {}", extra)></div> }
 }
@@ -19,9 +21,10 @@ fn stat_card() -> impl IntoView {
 
 fn chart_card() -> impl IntoView {
     view! {
-        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
-            {sk("h-5 w-48 rounded mb-4")} {sk("h-48 rounded-lg w-full")}
-        </div>
+        <div class=format!(
+            "{} p-6",
+            CLASS_CARD,
+        )>{sk("h-5 w-48 rounded mb-4")} {sk("h-48 rounded-lg w-full")}</div>
     }
 }
 
@@ -69,7 +72,7 @@ fn table_rows() -> Vec<impl IntoView> {
     (0..5)
         .map(|_| {
             view! {
-                <tr class="border-b border-gray-100 dark:border-gray-700 last:border-b-0">
+                <tr class=format!("{} last:border-b-0", CLASS_BORDER_B)>
                     <td class="px-6 py-4">{sk("h-4 w-28 rounded")}</td>
                     <td class="px-6 py-4">{sk("h-4 w-24 rounded")}</td>
                     <td class="px-6 py-4">{sk("h-4 w-36 rounded")}</td>
@@ -84,8 +87,8 @@ fn table_rows() -> Vec<impl IntoView> {
 
 pub fn table_skeleton() -> impl IntoView {
     view! {
-        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm">
-            <div class="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
+        <div class=CLASS_CARD>
+            <div class=format!("p-6 {} flex items-center justify-between", CLASS_BORDER_B)>
                 <div class="flex items-center gap-3">
                     {sk("h-6 w-15 rounded-full")} {sk("h-5 w-5 rounded")}
                 </div>
@@ -94,7 +97,7 @@ pub fn table_skeleton() -> impl IntoView {
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
-                        <tr class="border-b border-gray-100 dark:border-gray-700">
+                        <tr class=CLASS_BORDER_B>
                             <th class="px-6 py-3">{sk("h-4 w-10 rounded")}</th>
                             <th class="px-6 py-3">{sk("h-4 w-16 rounded")}</th>
                             <th class="px-6 py-3">{sk("h-4 w-14 rounded")}</th>

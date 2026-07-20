@@ -4,6 +4,7 @@ use leptos_router::components::A;
 use crate::api;
 use crate::auth::AuthContext;
 use crate::components::style::CLASS_NAV_LINK;
+use crate::components::style::CLASS_TEXT_MUTED;
 use crate::i18n::I18n;
 use crate::t;
 
@@ -110,7 +111,10 @@ pub fn Topbar(dark: RwSignal<bool>) -> impl IntoView {
             </div>
             <div class="flex items-center gap-2">
                 <button
-                    class="flex items-center gap-2 px-2 py-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm active:scale-95"
+                    class=format!(
+                        "flex items-center gap-2 px-2 py-2 {} hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors text-sm active:scale-95",
+                        CLASS_TEXT_MUTED,
+                    )
                     on:click=move |_| {
                         let current = i18n.lang_untracked();
                         let new_lang = if current == "zh" { "en" } else { "zh" };
@@ -121,7 +125,10 @@ pub fn Topbar(dark: RwSignal<bool>) -> impl IntoView {
                     <span>{t!(Language)}</span>
                 </button>
                 <button
-                    class="px-2 py-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors active:scale-95"
+                    class=format!(
+                        "px-2 py-2 {} hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors active:scale-95",
+                        CLASS_TEXT_MUTED,
+                    )
                     on:click=move |_| dark.set(!dark.get_untracked())
                 >
                     <i class=move || {

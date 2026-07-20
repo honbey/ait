@@ -5,7 +5,7 @@ use leptos_router::hooks::use_navigate;
 use crate::api;
 use crate::auth::AuthContext;
 use crate::components::error_display::ErrorText;
-use crate::components::style::{CLASS_INPUT, CLASS_LABEL};
+use crate::components::style::{CLASS_CARD, CLASS_INPUT, CLASS_LABEL};
 use crate::{t, trs, ts};
 
 #[component]
@@ -66,10 +66,7 @@ pub fn LoginPage() -> impl IntoView {
         </Show>
         <main>
             <div class="min-h-[calc(100vh-3.5rem)] flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-                <form
-                    on:submit=on_submit
-                    class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-8 w-full max-w-md mx-4"
-                >
+                <form on:submit=on_submit class=format!("{} p-8 w-full max-w-md mx-4", CLASS_CARD)>
                     <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6 text-center">
                         {t!(Login)}
                     </h2>

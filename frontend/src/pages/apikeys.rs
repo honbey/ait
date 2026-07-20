@@ -10,9 +10,9 @@ use crate::components::error_display::{ErrorCard, ErrorText};
 use crate::components::modal::{DeleteConfirmModal, ModalShell};
 use crate::components::skeleton::table_skeleton;
 use crate::components::style::{
-    CLASS_BTN_CANCEL, CLASS_BTN_PRIMARY, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE_MONO,
-    CLASS_DETAIL_VALUE_PLAIN, CLASS_DETAIL_VALUE_TAG, CLASS_FORM_FOOTER, CLASS_ICON_BTN,
-    CLASS_INPUT, CLASS_LABEL, CLASS_PAGE_TITLE,
+    CLASS_BORDER_B, CLASS_BTN_CANCEL, CLASS_BTN_PRIMARY, CLASS_DETAIL_DIVIDER,
+    CLASS_DETAIL_VALUE_MONO, CLASS_DETAIL_VALUE_PLAIN, CLASS_DETAIL_VALUE_TAG, CLASS_FORM_FOOTER,
+    CLASS_ICON_BTN, CLASS_INPUT, CLASS_LABEL, CLASS_PAGE_TITLE, CLASS_TEXT_MUTED,
 };
 use crate::components::table::{
     DataTableCard, DetailCloseButton, DetailRow, EntityModal, SubmitButton, ToggleField,
@@ -101,25 +101,31 @@ pub fn ApiKeyPage() -> impl IntoView {
                             <div class="overflow-x-auto">
                                 <table class="w-full text-sm">
                                     <thead>
-                                        <tr class="border-b border-gray-100 dark:border-gray-700">
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(Name)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(ApiKey)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(ExpiresAt)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(TableStatus)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(UpdatedAt)}
-                                            </th>
-                                            <th class="px-6 py-3 text-center text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(Actions)}
-                                            </th>
+                                        <tr class=CLASS_BORDER_B>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(Name)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(ApiKey)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(ExpiresAt)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(TableStatus)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(UpdatedAt)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-center {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(Actions)}</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -136,9 +142,10 @@ pub fn ApiKeyPage() -> impl IntoView {
                                                             {move || k.name().get()}
                                                         </td>
                                                         <td class="px-6 py-4">
-                                                            <span class="font-mono text-xs text-gray-500 dark:text-gray-400">
-                                                                {k.key().get()}
-                                                            </span>
+                                                            <span class=format!(
+                                                                "font-mono text-xs {}",
+                                                                CLASS_TEXT_MUTED,
+                                                            )>{k.key().get()}</span>
                                                         </td>
                                                         <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
                                                             {move || expires_at_display(k.expires_at().get())}
@@ -233,17 +240,19 @@ pub fn ApiKeyPage() -> impl IntoView {
                                 {t!(ApiKeyRawKeyHint)}
                             </p>
                             <div>
-                                <label class="text-sm text-gray-500 dark:text-gray-400">
-                                    {t!(ApiKeyName)}
-                                </label>
+                                <label class=format!(
+                                    "text-sm {}",
+                                    CLASS_TEXT_MUTED,
+                                )>{t!(ApiKeyName)}</label>
                                 <p class="text-gray-900 dark:text-gray-100 font-medium mt-0.5">
                                     {raw_name.clone()}
                                 </p>
                             </div>
                             <div>
-                                <label class="text-sm text-gray-500 dark:text-gray-400">
-                                    {t!(ApiKeyKey)}
-                                </label>
+                                <label class=format!(
+                                    "text-sm {}",
+                                    CLASS_TEXT_MUTED,
+                                )>{t!(ApiKeyKey)}</label>
                                 <div class="flex items-center gap-2 mt-0.5">
                                     <div class="flex-1 bg-gray-100 dark:bg-gray-700 px-3 py-2 rounded-lg text-sm font-mono break-all text-gray-800 dark:text-gray-200 select-all">
                                         {raw.clone()}

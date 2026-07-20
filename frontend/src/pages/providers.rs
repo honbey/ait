@@ -9,9 +9,9 @@ use crate::components::error_display::{ErrorCard, ErrorText};
 use crate::components::modal::{DeleteConfirmModal, ModalShell};
 use crate::components::skeleton::table_skeleton;
 use crate::components::style::{
-    CLASS_BTN_CANCEL, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE_MONO, CLASS_DETAIL_VALUE_PLAIN,
-    CLASS_DETAIL_VALUE_TAG, CLASS_FORM_FOOTER, CLASS_ICON_BTN, CLASS_INPUT, CLASS_LABEL,
-    CLASS_PAGE_TITLE,
+    CLASS_BORDER_B, CLASS_BTN_CANCEL, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE_MONO,
+    CLASS_DETAIL_VALUE_PLAIN, CLASS_DETAIL_VALUE_TAG, CLASS_FORM_FOOTER, CLASS_ICON_BTN,
+    CLASS_INPUT, CLASS_LABEL, CLASS_PAGE_TITLE, CLASS_TEXT_MUTED,
 };
 use crate::components::table::{
     DataTableCard, DetailCloseButton, DetailRow, EntityModal, SubmitButton, ToggleField,
@@ -107,25 +107,31 @@ pub fn ProvidersPage() -> impl IntoView {
                             <div class="overflow-x-auto">
                                 <table class="w-full text-sm">
                                     <thead>
-                                        <tr class="border-b border-gray-100 dark:border-gray-700">
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(Name)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(ProviderType)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(ProviderBaseUrl)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(TableStatus)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(UpdatedAt)}
-                                            </th>
-                                            <th class="px-6 py-3 text-center text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(Actions)}
-                                            </th>
+                                        <tr class=CLASS_BORDER_B>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(Name)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(ProviderType)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(ProviderBaseUrl)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(TableStatus)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(UpdatedAt)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-center {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(Actions)}</th>
                                         </tr>
                                     </thead>
                                     <tbody>

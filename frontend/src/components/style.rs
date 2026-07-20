@@ -41,6 +41,13 @@ pub const CLASS_DETAIL_VALUE_TAG: &str = "text-sm text-right ml-4";
 // --- Form ---
 pub const CLASS_FORM_FOOTER: &str = "flex items-center justify-end gap-3";
 pub const CLASS_TOGGLE_LABEL: &str = "text-sm text-gray-700 dark:text-gray-300";
+pub const CLASS_TEXT_MUTED: &str = "text-gray-500 dark:text-gray-400";
+pub const CLASS_CARD: &str = "bg-white dark:bg-gray-800 rounded-xl shadow-sm";
+pub const CLASS_BORDER_B: &str = "border-b border-gray-100 dark:border-gray-700";
+pub const CLASS_BG_MUTED: &str = "bg-gray-100 dark:bg-gray-700";
+pub const CLASS_PILL_GREEN: &str =
+    "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400";
+pub const CLASS_PILL_RED: &str = "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400";
 pub const CLASS_FORM_ERROR: &str = "text-red-500 text-sm";
 pub const CLASS_DISABLED_INPUT: &str = "w-full px-3 py-2 border border-gray-300 \
     dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-600 \

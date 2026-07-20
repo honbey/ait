@@ -3,6 +3,7 @@ use leptos_router::components::A;
 
 use crate::auth::AuthContext;
 use crate::components::skeleton::render_loading;
+use crate::components::style::CLASS_TEXT_MUTED;
 use crate::t;
 
 #[component]
@@ -21,9 +22,10 @@ pub fn Home() -> impl IntoView {
                     <h1 class="text-6xl font-bold text-gray-900 dark:text-gray-100 mb-6">
                         {t!(IndexTitle)}
                     </h1>
-                    <p class="text-xl text-gray-500 dark:text-gray-400 max-w-2xl mx-auto">
-                        {t!(IndexSubtitle)}
-                    </p>
+                    <p class=format!(
+                        "text-xl {} max-w-2xl mx-auto",
+                        CLASS_TEXT_MUTED,
+                    )>{t!(IndexSubtitle)}</p>
                     <div class="mt-8 flex items-center justify-center gap-4">
                         <Show
                             when=move || auth.authenticated.get() == Some(true)

@@ -6,6 +6,7 @@ use crate::components::error_display::ErrorCard;
 use crate::components::line_chart::{ChartSeries, LineChart};
 use crate::components::pie_chart::{PieChart, PieData};
 use crate::components::skeleton::overview_skeleton;
+use crate::components::style::{CLASS_CARD, CLASS_TEXT_MUTED};
 use crate::time_utils::{clamp_range, date_str_to_ts, midnight_ts, now_timestamp, ts_to_date_str};
 use crate::{t, tr, ts};
 
@@ -99,7 +100,7 @@ fn StatCard(
             </div>
             <div>
                 <div class="text-3xl font-bold text-gray-800 dark:text-gray-100">{value}</div>
-                <div class="text-sm text-gray-500 dark:text-gray-400">{label}</div>
+                <div class=format!("text-sm {}", CLASS_TEXT_MUTED)>{label}</div>
             </div>
         </div>
     }
@@ -306,7 +307,7 @@ pub fn Overview() -> impl IntoView {
                     </div>
 
                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
+                        <div class=format!("{} p-6", CLASS_CARD)>
                             <div class="flex items-center gap-2 mb-4">
                                 <TabButton
                                     active=left_tab.get() == 0
@@ -340,7 +341,7 @@ pub fn Overview() -> impl IntoView {
                                 <PieChart id="chart-left-pie" data=model_pie_data.clone() />
                             </div>
                         </div>
-                        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
+                        <div class=format!("{} p-6", CLASS_CARD)>
                             <div class="flex items-center gap-2 mb-4">
                                 <TabButton
                                     active=right_tab.get() == 0

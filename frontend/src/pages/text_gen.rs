@@ -11,7 +11,7 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::api;
 use crate::components::error_display::{ErrorCard, ErrorText};
-use crate::components::style::{CLASS_INPUT, CLASS_LABEL};
+use crate::components::style::{CLASS_INPUT, CLASS_LABEL, CLASS_TEXT_MUTED};
 use crate::{t, trs, ts};
 use gloo_net::http::Request;
 
@@ -280,9 +280,10 @@ pub fn TextGenPage() -> impl IntoView {
                             </div>
 
                             <div class="w-2/3 border-l border-gray-200 dark:border-gray-700 pl-6">
-                                <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
-                                    {t!(TextGenResponse)}
-                                </h3>
+                                <h3 class=format!(
+                                    "text-sm font-medium {} mb-2",
+                                    CLASS_TEXT_MUTED,
+                                )>{t!(TextGenResponse)}</h3>
                                 <Show when=move || response.get().is_some()>
                                     <div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-gray-100 text-sm leading-relaxed whitespace-pre-wrap font-sans overflow-y-auto max-h-[70vh]">
                                         {move || response.get().unwrap_or_default()}
