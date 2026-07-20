@@ -272,76 +272,51 @@ pub fn LogsPage() -> impl IntoView {
             <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-5 space-y-4">
                 <div class="grid grid-cols-8 gap-3 items-end">
                     <div class="col-span-2">
-                        <label
-                            for="filter-provider-name"
-                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
-                        >
-                            {t!(Providers)}
-                        </label>
                         <input
                             id="filter-provider-name"
                             type="text"
                             class=CLASS_INPUT
+                            placeholder=ts!(Providers)
                             prop:value=move || provider_name.get()
                             on:input=move |ev| set_provider_name.set(event_target_value(&ev))
                         />
                     </div>
                     <div class="col-span-2">
-                        <label
-                            for="filter-model-name"
-                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
-                        >
-                            {t!(Models)}
-                        </label>
                         <input
                             id="filter-model-name"
                             type="text"
                             class=CLASS_INPUT
+                            placeholder=t!(Models)
                             prop:value=move || model_name.get()
                             on:input=move |ev| set_model_name.set(event_target_value(&ev))
                         />
                     </div>
                     <div class="col-span-2">
-                        <label
-                            for="filter-api-key-name"
-                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
-                        >
-                            {t!(LogApiKeyName)}
-                        </label>
                         <input
                             id="filter-api-key-name"
                             type="text"
                             class=CLASS_INPUT
+                            placeholder=t!(LogApiKeyName)
                             prop:value=move || api_key_name.get()
                             on:input=move |ev| set_api_key_name.set(event_target_value(&ev))
                         />
                     </div>
                     <div class="col-span-1">
-                        <label
-                            for="filter-client-ip"
-                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
-                        >
-                            {t!(LogClientIp)}
-                        </label>
                         <input
                             id="filter-client-ip"
                             type="text"
                             class=CLASS_INPUT
+                            placeholder=t!(LogClientIp)
                             prop:value=move || client_ip.get()
                             on:input=move |ev| set_client_ip.set(event_target_value(&ev))
                         />
                     </div>
                     <div class="col-span-1">
-                        <label
-                            for="filter-status"
-                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
-                        >
-                            {t!(TableStatus)}
-                        </label>
                         <input
                             id="filter-status"
                             type="text"
                             class=CLASS_INPUT
+                            placeholder=t!(LogStatusCode)
                             prop:value=move || status.get()
                             on:input=move |ev| set_status.set(event_target_value(&ev))
                         />
@@ -350,12 +325,6 @@ pub fn LogsPage() -> impl IntoView {
 
                 <div class="flex items-center gap-3 flex-wrap">
                     <div class="w-1/6 min-w-[120px]">
-                        <label
-                            for="filter-start-date"
-                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
-                        >
-                            {t!(StartDate)}
-                        </label>
                         <input
                             id="filter-start-date"
                             type="date"
@@ -365,12 +334,6 @@ pub fn LogsPage() -> impl IntoView {
                         />
                     </div>
                     <div class="w-1/6 min-w-[120px]">
-                        <label
-                            for="filter-end-date"
-                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
-                        >
-                            {t!(EndDate)}
-                        </label>
                         <input
                             id="filter-end-date"
                             type="date"
@@ -380,12 +343,6 @@ pub fn LogsPage() -> impl IntoView {
                         />
                     </div>
                     <div class="w-48">
-                        <label
-                            for="filter-endpoint"
-                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
-                        >
-                            {t!(LogEndpoint)}
-                        </label>
                         <select
                             id="filter-endpoint"
                             class=select_cls
@@ -395,7 +352,7 @@ pub fn LogsPage() -> impl IntoView {
                             }
                         >
                             <option value="" selected>
-                                {t!(LogAll)}
+                                {move || t!(LogEndpointAll)}
                             </option>
                             <option value="/v1/chat/completions">{"/v1/chat/completions"}</option>
                             <option value="/v1/completions">{"/v1/completions"}</option>
@@ -403,12 +360,6 @@ pub fn LogsPage() -> impl IntoView {
                         </select>
                     </div>
                     <div class="w-36">
-                        <label
-                            for="filter-streaming"
-                            class="block text-xs text-gray-500 dark:text-gray-400 mb-1"
-                        >
-                            {t!(LogStreaming)}
-                        </label>
                         <select
                             id="filter-streaming"
                             class=select_cls
@@ -425,10 +376,10 @@ pub fn LogsPage() -> impl IntoView {
                             }
                         >
                             <option value="" selected>
-                                {t!(LogAll)}
+                                {move || t!(LogStreamingAll)}
                             </option>
-                            <option value="true">{t!(LogYes)}</option>
-                            <option value="false">{t!(LogNo)}</option>
+                            <option value="true">{ts!(LogStreamingY)}</option>
+                            <option value="false">{ts!(LogStreamingN)}</option>
                         </select>
                     </div>
                     <div class="flex-1"></div>

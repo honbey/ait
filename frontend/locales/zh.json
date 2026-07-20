@@ -98,6 +98,8 @@
   "log_source": "日志源",
   "log_endpoint": "端点",
   "log_streaming": "流式",
+  "log_endpoint_all": "端点（全部）",
+  "log_streaming_all": "流式（全部）",
   "log_all": "全部",
   "log_yes": "是",
   "log_no": "否",

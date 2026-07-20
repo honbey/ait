@@ -98,6 +98,8 @@
   "log_source": "Log Source",
   "log_endpoint": "Endpoint",
   "log_streaming": "Streaming",
+  "log_endpoint_all": "Endpoint(All)",
+  "log_streaming_all": "Streaming(All)",
   "log_all": "All",
   "log_yes": "Yes",
   "log_no": "No",
