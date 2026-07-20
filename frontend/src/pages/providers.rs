@@ -18,6 +18,7 @@ use crate::components::table::{
     attach_save_effect, provider_display_name, status_badge, timestamp_str,
 };
 use crate::components::toast::use_toast;
+use crate::components::use_page_title;
 use crate::storage;
 use crate::{t, tr, trs, ts};
 use leptos::logging;
@@ -37,9 +38,7 @@ struct ProvidersStore {
 
 #[component]
 pub fn ProvidersPage() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(Providers)));
-    }
+    use_page_title(&format!("Ait - {}", ts!(Providers)));
     let modal = RwSignal::new(ProviderModal::Closed);
     let state = Store::new(ProvidersStore::default());
 

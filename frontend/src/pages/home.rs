@@ -4,14 +4,13 @@ use leptos_router::components::A;
 use crate::auth::AuthContext;
 use crate::components::skeleton::render_loading;
 use crate::components::style::CLASS_TEXT_MUTED;
+use crate::components::use_page_title;
 use crate::t;
 
 #[component]
 pub fn Home() -> impl IntoView {
     let auth = use_context::<AuthContext>().expect("AuthContext not provided");
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title("Ait");
-    }
+    use_page_title("Ait");
 
     move || {
         match auth.authenticated.get() {

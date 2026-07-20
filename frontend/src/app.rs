@@ -10,7 +10,7 @@ use crate::components::console_layout::ConsoleShell;
 use crate::components::toast::{ToastContainer, ToastManager};
 use crate::components::topbar::Topbar;
 use crate::i18n::I18n;
-use crate::pages::apikeys::ApiKeyPage;
+use crate::pages::apikeys::ApiKeysPage;
 use crate::pages::home::Home;
 use crate::pages::login::LoginPage;
 use crate::pages::logs::LogsPage;
@@ -77,7 +77,7 @@ pub fn App() -> impl IntoView {
                             <Route path=StaticSegment("") view=Overview />
                             <Route path=StaticSegment("overview") view=Overview />
                             <Route path=StaticSegment("providers") view=ProvidersPage />
-                            <Route path=StaticSegment("apikeys") view=ApiKeyPage />
+                            <Route path=StaticSegment("apikeys") view=ApiKeysPage />
                             <Route path=StaticSegment("logs") view=LogsPage />
                             <Route path=StaticSegment("models") view=ModelsPage />
                             <Route path=StaticSegment("text-generation") view=TextGenPage />

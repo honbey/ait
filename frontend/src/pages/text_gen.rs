@@ -12,14 +12,13 @@ use wasm_bindgen_futures::JsFuture;
 use crate::api;
 use crate::components::error_display::{ErrorCard, ErrorText};
 use crate::components::style::{CLASS_INPUT, CLASS_LABEL, CLASS_TEXT_MUTED};
+use crate::components::use_page_title;
 use crate::{t, trs, ts};
 use gloo_net::http::Request;
 
 #[component]
 pub fn TextGenPage() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(TextGeneration)));
-    }
+    use_page_title(&format!("Ait - {}", ts!(TextGeneration)));
     let models_resource = LocalResource::new(|| async move { api::fetch_models().await });
 
     let api_key: RwSignal<String> = RwSignal::new(String::new());

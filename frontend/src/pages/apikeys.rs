@@ -19,6 +19,7 @@ use crate::components::table::{
     status_badge, timestamp_str,
 };
 use crate::components::toast::use_toast;
+use crate::components::use_page_title;
 use crate::time_utils::{date_str_to_ts, ts_to_datetime_str};
 use crate::{t, tr, trs, ts};
 
@@ -48,10 +49,8 @@ fn expires_at_display(expires_at: Option<i64>) -> String {
 }
 
 #[component]
-pub fn ApiKeyPage() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(ApiKey)));
-    }
+pub fn ApiKeysPage() -> impl IntoView {
+    use_page_title(&format!("Ait - {}", ts!(ApiKey)));
     let modal = RwSignal::new(ApiKeyModal::Closed);
     let state = Store::new(ApiKeysStore::default());
     let auth = use_context::<AuthContext>().expect("AuthContext not provided");

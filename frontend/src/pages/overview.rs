@@ -7,6 +7,7 @@ use crate::components::line_chart::{ChartSeries, LineChart};
 use crate::components::pie_chart::{PieChart, PieData};
 use crate::components::skeleton::overview_skeleton;
 use crate::components::style::{CLASS_CARD, CLASS_TEXT_MUTED};
+use crate::components::use_page_title;
 use crate::time_utils::{clamp_range, date_str_to_ts, midnight_ts, now_timestamp, ts_to_date_str};
 use crate::{t, tr, ts};
 
@@ -126,9 +127,7 @@ fn TabButton(active: bool, on_click: impl Fn() + 'static, label: impl IntoView) 
 
 #[component]
 pub fn Overview() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(Overview)));
-    }
+    use_page_title(&format!("Ait - {}", ts!(Overview)));
 
     let auth = use_context::<AuthContext>().expect("AuthContext");
 

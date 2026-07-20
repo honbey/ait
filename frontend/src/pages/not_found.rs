@@ -2,13 +2,12 @@ use leptos::prelude::*;
 use leptos_router::components::A;
 
 use crate::components::style::{CLASS_HERO_BTN, CLASS_TEXT_MUTED};
+use crate::components::use_page_title;
 use crate::{t, ts};
 
 #[component]
 pub fn NotFoundPage() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(PageNotFound)));
-    }
+    use_page_title(&format!("Ait - {}", ts!(PageNotFound)));
     view! {
         <div class="min-h-[calc(100vh-3.5rem)] flex items-center justify-center bg-gray-50 dark:bg-gray-900">
             <div class="text-center px-4">

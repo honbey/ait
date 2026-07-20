@@ -6,13 +6,12 @@ use crate::api;
 use crate::auth::AuthContext;
 use crate::components::error_display::ErrorText;
 use crate::components::style::{CLASS_CARD, CLASS_INPUT, CLASS_LABEL};
+use crate::components::use_page_title;
 use crate::{t, trs, ts};
 
 #[component]
 pub fn LoginPage() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(Login)));
-    }
+    use_page_title(&format!("Ait - {}", ts!(Login)));
     let auth = use_context::<AuthContext>().expect("AuthContext");
 
     let username = RwSignal::new(String::new());

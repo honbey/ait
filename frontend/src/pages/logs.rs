@@ -11,6 +11,7 @@ use crate::components::style::{
 };
 use crate::components::table::DetailRow;
 use crate::components::table::timestamp_str;
+use crate::components::use_page_title;
 use crate::time_utils::{date_str_to_ts, ts_to_date_str};
 use crate::{t, ts};
 
@@ -156,9 +157,7 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
 
 #[component]
 pub fn LogsPage() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(LogQuery)));
-    }
+    use_page_title(&format!("Ait - {}", ts!(LogQuery)));
 
     let page = RwSignal::new(1u64);
     let query_trigger = RwSignal::new(0u64);
