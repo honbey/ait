@@ -89,7 +89,7 @@ pub fn ModelsPage() -> impl IntoView {
                                                 {t!(Providers)}
                                             </th>
                                             <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(ModelUpstreamModel)}
+                                                {t!(UpstreamModel)}
                                             </th>
                                             <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
                                                 {t!(TableStatus)}
@@ -389,13 +389,13 @@ fn ModelFormModal(
 
                 <div>
                     <label for="form-upstream" class=CLASS_LABEL>
-                        {t!(ModelUpstreamModel)}
+                        {t!(UpstreamModel)}
                     </label>
                     <input
                         id="form-upstream"
                         type="text"
                         class=CLASS_INPUT
-                        placeholder=ts!(ModelUpstreamModel)
+                        placeholder=ts!(UpstreamModel)
                         prop:value=upstream_model
                         on:input=move |ev| upstream_model.set(event_target_value(&ev))
                     />
@@ -443,7 +443,7 @@ fn ModelDetailModal(
                 <DetailRow label="ID".to_string()>{model_id}</DetailRow>
                 <DetailRow label=ts!(Name)>{model_name}</DetailRow>
                 <DetailRow label=ts!(Providers)>{provider_name}</DetailRow>
-                <DetailRow label=ts!(ModelUpstreamModel)>{model_upstream}</DetailRow>
+                <DetailRow label=ts!(UpstreamModel)>{model_upstream}</DetailRow>
                 <DetailRow label=ts!(TableStatus) value_class=CLASS_DETAIL_VALUE_TAG>
                     {status_badge(model_enabled)}
                 </DetailRow>

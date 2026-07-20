@@ -55,7 +55,7 @@ pub fn TextGenPage() -> impl IntoView {
         }
         let model = selected_model.get_untracked();
         if model.is_empty() {
-            error.set(ts!(TextGenSelectModel));
+            error.set(ts!(Model));
             return;
         }
 
@@ -192,7 +192,7 @@ pub fn TextGenPage() -> impl IntoView {
 
                                 <div>
                                     <label for="model-select" class=CLASS_LABEL>
-                                        {t!(TextGenSelectModel)}
+                                        {t!(Model)}
                                     </label>
                                     <select
                                         id="model-select"

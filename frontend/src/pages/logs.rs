@@ -378,7 +378,7 @@ pub fn LogsPage() -> impl IntoView {
                             <option value="" selected>
                                 {move || t!(LogStreamingAll)}
                             </option>
-                            <option value="true">{ts!(LogStreamingY)}</option>
+                            <option value="true">{ts!(LogStreaming)}</option>
                             <option value="false">{ts!(LogStreamingN)}</option>
                         </select>
                     </div>
@@ -585,7 +585,7 @@ pub fn LogsPage() -> impl IntoView {
                                 <DetailRow label=ts!(LogEndpoint)>
                                     <span class=CLASS_DETAIL_VALUE_MONO>{item.endpoint}</span>
                                 </DetailRow>
-                                <DetailRow label=ts!(LogUpstreamModel)>
+                                <DetailRow label=ts!(UpstreamModel)>
                                     <span class=CLASS_DETAIL_VALUE>{item.upstream_model}</span>
                                 </DetailRow>
                                 <DetailRow label=ts!(LogProviderType)>
@@ -599,7 +599,7 @@ pub fn LogsPage() -> impl IntoView {
                                 <DetailRow label=ts!(LogStreaming)>
                                     <span class=CLASS_DETAIL_VALUE>
                                         {if item.is_streaming {
-                                            ts!(LogStreamingY)
+                                            ts!(LogStreaming)
                                         } else {
                                             ts!(LogStreamingN)
                                         }}
