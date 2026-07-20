@@ -1,7 +1,11 @@
 use leptos::ev;
 use leptos::prelude::*;
 
-use crate::components::style::{CLASS_BTN_CANCEL, CLASS_BTN_DANGER, CLASS_ICON_BTN};
+use crate::components::error_display::ErrorText;
+use crate::components::style::{
+    CLASS_BTN_CANCEL, CLASS_BTN_DANGER, CLASS_FORM_FOOTER, CLASS_ICON_BTN,
+};
+use crate::components::table::SubmitButton;
 use crate::components::toast::use_toast;
 use crate::{t, tr, trs, ts};
 
@@ -98,6 +102,32 @@ pub fn DeleteConfirmModal(
                     }}
                 </button>
             </div>
+        </ModalShell>
+    }
+}
+
+#[component]
+pub fn FormModalShell(
+    on_close: impl Fn() + 'static + Clone + Send,
+    title: String,
+    on_submit: impl Fn(leptos::ev::SubmitEvent) + 'static + Clone + Send,
+    #[prop(into)] pending: Signal<bool>,
+    is_edit: bool,
+    form_error: RwSignal<String>,
+    children: Children,
+) -> impl IntoView {
+    view! {
+        <ModalShell on_close=on_close.clone() title=title>
+            <form on:submit=on_submit class="space-y-4">
+                {children()}
+                <ErrorText msg=form_error />
+                <div class=CLASS_FORM_FOOTER>
+                    <button type="button" class=CLASS_BTN_CANCEL on:click=move |_| on_close()>
+                        {t!(Cancel)}
+                    </button>
+                    <SubmitButton is_edit=is_edit pending=pending />
+                </div>
+            </form>
         </ModalShell>
     }
 }

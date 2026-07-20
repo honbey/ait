@@ -4,17 +4,17 @@ use reactive_stores::{Field, Patch, Store};
 
 use crate::api;
 use crate::api::{Model, ModelStoreFields};
-use crate::components::error_display::{ErrorCard, ErrorText};
-use crate::components::modal::{DeleteConfirmModal, ModalShell};
+use crate::components::error_display::ErrorCard;
+use crate::components::modal::{DeleteConfirmModal, FormModalShell, ModalShell};
 use crate::components::skeleton::table_skeleton;
 use crate::components::style::{
-    CLASS_BORDER_B, CLASS_BTN_CANCEL, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE_PLAIN,
-    CLASS_DETAIL_VALUE_TAG, CLASS_DISABLED_INPUT, CLASS_FORM_FOOTER, CLASS_ICON_BTN, CLASS_INPUT,
-    CLASS_LABEL, CLASS_PAGE_TITLE, CLASS_TEXT_MUTED,
+    CLASS_BORDER_B, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE_PLAIN, CLASS_DETAIL_VALUE_TAG,
+    CLASS_DISABLED_INPUT, CLASS_ICON_BTN, CLASS_INPUT, CLASS_LABEL, CLASS_PAGE_TITLE,
+    CLASS_TEXT_MUTED,
 };
 use crate::components::table::{
-    DataTableCard, DetailCloseButton, DetailRow, EntityModal, SubmitButton, ToggleField,
-    attach_save_effect, provider_display_name, status_badge, timestamp_str,
+    DataTableCard, DetailCloseButton, DetailRow, EntityModal, ToggleField, attach_save_effect,
+    provider_display_name, status_badge, timestamp_str,
 };
 use crate::components::toast::use_toast;
 use crate::components::use_page_title;
@@ -336,88 +336,84 @@ fn ModelFormModal(
     };
 
     view! {
-        <ModalShell on_close=on_close.clone() title=title>
-            <form on:submit=on_submit class="space-y-4">
+        <FormModalShell
+            on_close=on_close.clone()
+            title=title
+            on_submit
+            pending=save_action.pending()
+            is_edit
+            form_error
+        >
 
-                <div>
-                    <label for="form-name" class=CLASS_LABEL>
-                        {t!(Name)}
-                    </label>
-                    <Show when=move || !is_edit>
-                        <input
-                            id="form-name"
-                            type="text"
-                            class=CLASS_INPUT
-                            placeholder=ts!(Name)
-                            prop:value=name
-                            on:input=move |ev| name.set(event_target_value(&ev))
-                        />
-                    </Show>
-                    <Show when=move || is_edit>
-                        <input
-                            id="form-name"
-                            type="text"
-                            class=CLASS_DISABLED_INPUT
-                            prop:value=name
-                            disabled
-                        />
-                    </Show>
-                </div>
-
-                <div>
-                    <label for="form-provider" class=CLASS_LABEL>
-                        {t!(Providers)}
-                    </label>
-                    <select
-                        id="form-provider"
-                        class=CLASS_INPUT
-                        on:change=move |ev| provider_id.set(event_target_value(&ev))
-                    >
-                        {providers_resource
-                            .get_untracked()
-                            .map(|providers| {
-                                let current = provider_id.get_untracked();
-                                providers
-                                    .iter()
-                                    .map(|(id, name)| {
-                                        view! {
-                                            <option value=id.clone() selected=current == *id>
-                                                {name.clone()}
-                                            </option>
-                                        }
-                                    })
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default()}
-                    </select>
-                </div>
-
-                <div>
-                    <label for="form-upstream" class=CLASS_LABEL>
-                        {t!(UpstreamModel)}
-                    </label>
+            <div>
+                <label for="form-name" class=CLASS_LABEL>
+                    {t!(Name)}
+                </label>
+                <Show when=move || !is_edit>
                     <input
-                        id="form-upstream"
+                        id="form-name"
                         type="text"
                         class=CLASS_INPUT
-                        placeholder=ts!(UpstreamModel)
-                        prop:value=upstream_model
-                        on:input=move |ev| upstream_model.set(event_target_value(&ev))
+                        placeholder=ts!(Name)
+                        prop:value=name
+                        on:input=move |ev| name.set(event_target_value(&ev))
                     />
-                </div>
+                </Show>
+                <Show when=move || is_edit>
+                    <input
+                        id="form-name"
+                        type="text"
+                        class=CLASS_DISABLED_INPUT
+                        prop:value=name
+                        disabled
+                    />
+                </Show>
+            </div>
 
-                <ToggleField id="form-enabled" signal=enabled label=ts!(StatusEnabled) />
+            <div>
+                <label for="form-provider" class=CLASS_LABEL>
+                    {t!(Providers)}
+                </label>
+                <select
+                    id="form-provider"
+                    class=CLASS_INPUT
+                    on:change=move |ev| provider_id.set(event_target_value(&ev))
+                >
+                    {providers_resource
+                        .get_untracked()
+                        .map(|providers| {
+                            let current = provider_id.get_untracked();
+                            providers
+                                .iter()
+                                .map(|(id, name)| {
+                                    view! {
+                                        <option value=id.clone() selected=current == *id>
+                                            {name.clone()}
+                                        </option>
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()}
+                </select>
+            </div>
 
-                <ErrorText msg=form_error />
+            <div>
+                <label for="form-upstream" class=CLASS_LABEL>
+                    {t!(UpstreamModel)}
+                </label>
+                <input
+                    id="form-upstream"
+                    type="text"
+                    class=CLASS_INPUT
+                    placeholder=ts!(UpstreamModel)
+                    prop:value=upstream_model
+                    on:input=move |ev| upstream_model.set(event_target_value(&ev))
+                />
+            </div>
 
-                <div class=CLASS_FORM_FOOTER>
-                    <button type="button" class=CLASS_BTN_CANCEL on:click=move |_| on_close()>
-                        {t!(Cancel)}
-                    </button>
-                    <SubmitButton is_edit=is_edit pending=save_action.pending() />
-                </div>
-            </form>
-        </ModalShell>
+            <ToggleField id="form-enabled" signal=enabled label=ts!(StatusEnabled) />
+        </FormModalShell>
     }
 }
 

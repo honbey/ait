@@ -7,16 +7,16 @@ use crate::api::{ApiKey, ApiKeyStoreFields};
 use crate::auth::AuthContext;
 
 use crate::components::error_display::{ErrorCard, ErrorText};
-use crate::components::modal::{DeleteConfirmModal, ModalShell};
+use crate::components::modal::{DeleteConfirmModal, FormModalShell, ModalShell};
 use crate::components::skeleton::table_skeleton;
 use crate::components::style::{
-    CLASS_BORDER_B, CLASS_BTN_CANCEL, CLASS_BTN_PRIMARY, CLASS_DETAIL_DIVIDER,
-    CLASS_DETAIL_VALUE_MONO, CLASS_DETAIL_VALUE_PLAIN, CLASS_DETAIL_VALUE_TAG, CLASS_FORM_FOOTER,
-    CLASS_ICON_BTN, CLASS_INPUT, CLASS_LABEL, CLASS_PAGE_TITLE, CLASS_TEXT_MUTED,
+    CLASS_BORDER_B, CLASS_BTN_PRIMARY, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE_MONO,
+    CLASS_DETAIL_VALUE_PLAIN, CLASS_DETAIL_VALUE_TAG, CLASS_ICON_BTN, CLASS_INPUT, CLASS_LABEL,
+    CLASS_PAGE_TITLE, CLASS_TEXT_MUTED,
 };
 use crate::components::table::{
-    DataTableCard, DetailCloseButton, DetailRow, EntityModal, SubmitButton, ToggleField,
-    status_badge, timestamp_str,
+    DataTableCard, DetailCloseButton, DetailRow, EntityModal, ToggleField, status_badge,
+    timestamp_str,
 };
 use crate::components::toast::use_toast;
 use crate::components::use_page_title;
@@ -481,51 +481,40 @@ fn ApiKeyFormModal(
     };
 
     view! {
-        <ModalShell on_close=on_close.clone() title=title>
-            <form on:submit=on_submit class="space-y-4">
-                <div>
-                    <label for="form-name" class=CLASS_LABEL>
-                        {t!(ApiKeyName)}
-                    </label>
-                    <input
-                        id="form-name"
-                        type="text"
-                        class=CLASS_INPUT
-                        placeholder=ts!(ApiKeyName)
-                        prop:value=name
-                        on:input=move |ev| name.set(event_target_value(&ev))
-                    />
-                </div>
+        <FormModalShell on_close=on_close.clone() title=title on_submit pending is_edit form_error>
+            <div>
+                <label for="form-name" class=CLASS_LABEL>
+                    {t!(ApiKeyName)}
+                </label>
+                <input
+                    id="form-name"
+                    type="text"
+                    class=CLASS_INPUT
+                    placeholder=ts!(ApiKeyName)
+                    prop:value=name
+                    on:input=move |ev| name.set(event_target_value(&ev))
+                />
+            </div>
 
-                <div>
-                    <label for="form-expires" class=CLASS_LABEL>
-                        {t!(ExpiresAt)}
-                    </label>
-                    <input
-                        id="form-expires"
-                        type="datetime-local"
-                        class=CLASS_INPUT
-                        prop:value=expires_date
-                        disabled=move || clear_expiry.get()
-                        on:input=move |ev| expires_date.set(event_target_value(&ev))
-                    />
-                </div>
+            <div>
+                <label for="form-expires" class=CLASS_LABEL>
+                    {t!(ExpiresAt)}
+                </label>
+                <input
+                    id="form-expires"
+                    type="datetime-local"
+                    class=CLASS_INPUT
+                    prop:value=expires_date
+                    disabled=move || clear_expiry.get()
+                    on:input=move |ev| expires_date.set(event_target_value(&ev))
+                />
+            </div>
 
-                <ToggleField id="form-clear-expiry" signal=clear_expiry label=ts!(NeverExpires) />
-                <Show when=move || is_edit>
-                    <ToggleField id="form-enabled" signal=enabled label=ts!(StatusEnabled) />
-                </Show>
-
-                <ErrorText msg=form_error />
-
-                <div class=CLASS_FORM_FOOTER>
-                    <button type="button" class=CLASS_BTN_CANCEL on:click=move |_| on_close()>
-                        {t!(Cancel)}
-                    </button>
-                    <SubmitButton is_edit=is_edit pending=pending />
-                </div>
-            </form>
-        </ModalShell>
+            <ToggleField id="form-clear-expiry" signal=clear_expiry label=ts!(NeverExpires) />
+            <Show when=move || is_edit>
+                <ToggleField id="form-enabled" signal=enabled label=ts!(StatusEnabled) />
+            </Show>
+        </FormModalShell>
     }
 }
 
