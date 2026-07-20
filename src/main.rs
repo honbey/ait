@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod diagnostics;
 mod error;
+use crate::error::not_found;
 mod handlers;
 mod middleware;
 mod providers;
@@ -187,18 +188,23 @@ fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
 }
 
 fn build_app(state: app::AppState) -> Router {
-    // Auth routes (no admin middleware — they handle their own auth logic)
-    let login_route = Router::new().route("/auth/login", post(login)).layer(
-        axum::middleware::from_fn_with_state(state.clone(), login_rate_limit_middleware),
-    );
-    let auth_route = Router::new()
+    // Auth routes — nested under /auth so unmatched paths return 404
+    let login_route =
+        Router::new()
+            .route("/login", post(login))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                login_rate_limit_middleware,
+            ));
+    let auth_routes = Router::new()
         .merge(login_route)
-        .route("/auth/logout", post(logout))
-        .route("/auth/session", get(session_check))
+        .route("/logout", post(logout))
+        .route("/session", get(session_check))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             access_log_middleware,
-        ));
+        ))
+        .fallback(|| async { not_found("404 not found") });
 
     // Admin API routes (admin auth required)
     let admin_api = Router::new()
@@ -239,18 +245,19 @@ fn build_app(state: app::AppState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             admin_auth_middleware,
-        ));
+        ))
+        .fallback(|| async { not_found("404 not found") });
 
     // Health check (no auth required)
     let health_route = Router::new().route("/health", get(health));
 
-    // OpenAI-compatible proxy routes (auth required)
-    let proxy_api = Router::new()
-        .route("/v1/chat/completions", post(chat_completions))
-        .route("/v1/completions", post(completions))
-        .route("/v1/embeddings", post(embeddings))
-        .route("/v1/responses", post(responses))
-        .route("/v1/models", get(list_models_proxy))
+    // OpenAI-compatible proxy routes — nested under /v1 so unmatched paths return 404
+    let proxy_api_v1 = Router::new()
+        .route("/chat/completions", post(chat_completions))
+        .route("/completions", post(completions))
+        .route("/embeddings", post(embeddings))
+        .route("/responses", post(responses))
+        .route("/models", get(list_models_proxy))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             access_log_middleware,
@@ -258,7 +265,8 @@ fn build_app(state: app::AppState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
-        ));
+        ))
+        .fallback(|| async { not_found("404 not found") });
 
     // Serve frontend static files
     let frontend_root = ServeDir::new("frontend/dist");
@@ -272,8 +280,8 @@ fn build_app(state: app::AppState) -> Router {
     Router::new()
         .nest_service("/static", frontend_root)
         .fallback_service(frontend_spa)
-        .merge(auth_route)
-        .merge(proxy_api)
+        .nest("/auth", auth_routes)
+        .nest("/v1", proxy_api_v1)
         .merge(health_route)
         .nest("/api", Router::new().merge(admin_api))
         .with_state(state)
