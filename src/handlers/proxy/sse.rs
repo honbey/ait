@@ -167,13 +167,14 @@ where
                 Poll::Ready(None) => return this.finalize_stream(),
                 Poll::Pending => {
                     if this.last_data_time.elapsed() >= this.idle_timeout {
+                        this.event.status = "504".to_string();
+                        this.event.error_message = Some("SSE stream idle timeout".to_string());
                         tracing::warn!(
                             model = this.event.model_name,
                             provider = this.event.provider_name,
                             idle_secs = this.last_data_time.elapsed().as_secs(),
                             "SSE stream idle timeout"
                         );
-                        this.event.error_message = Some("SSE stream idle timeout".to_string());
                         return this.finalize_stream();
                     }
                     return Poll::Pending;
