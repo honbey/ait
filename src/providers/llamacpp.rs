@@ -37,24 +37,6 @@ impl UpstreamProvider for LlamacppProvider {
         upstream_model: &str,
         upstream_path: &str,
     ) -> Result<reqwest::Request, String> {
-        let mut body = body;
-
-        match body.get("reasoning_effort").and_then(|v| v.as_str()) {
-            Some("none") => {
-                body.as_object_mut().map(|m| m.remove("reasoning_effort"));
-                body["chat_template_kwargs"] = serde_json::json!({
-                    "enable_thinking": false
-                });
-            }
-            Some("low") | Some("medium") | Some("high") | Some("max") => {
-                body.as_object_mut().map(|m| m.remove("reasoning_effort"));
-                body["chat_template_kwargs"] = serde_json::json!({
-                    "enable_thinking": true
-                });
-            }
-            _ => {}
-        }
-
         self.core
             .finalize_request(body, stream, upstream_model, upstream_path)
     }
