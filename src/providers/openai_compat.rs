@@ -16,12 +16,12 @@ impl UpstreamProvider for OpenAICompatProvider {
     async fn build_request(
         &self,
         _client: &Client,
-        body: &serde_json::Value,
+        body: serde_json::Value,
         stream: bool,
         upstream_model: &str,
         upstream_path: &str,
     ) -> Result<reqwest::Request, String> {
         self.core
-            .finalize_request(body.clone(), stream, upstream_model, upstream_path)
+            .finalize_request(body, stream, upstream_model, upstream_path)
     }
 }

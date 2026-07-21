@@ -244,10 +244,12 @@ pub async fn proxy_request(
         .unwrap_or(false)
         && state.config.proxy.stream;
 
+    let prompt_tokens = count_prompt_tokens(&body);
+
     let request = upstream
         .build_request(
             &state.http_client,
-            &body,
+            body,
             stream,
             &model.upstream_model,
             upstream_path,
@@ -275,7 +277,6 @@ pub async fn proxy_request(
     let upstream_model = model.upstream_model.clone();
     let provider_type = provider.provider_type.as_ref().to_string();
     let client_ip_str = client_ip.map(|ip| ip.to_string());
-    let prompt_tokens = count_prompt_tokens(&body);
 
     if stream {
         trace!(

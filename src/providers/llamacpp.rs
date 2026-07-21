@@ -32,12 +32,12 @@ impl UpstreamProvider for LlamacppProvider {
     async fn build_request(
         &self,
         _client: &Client,
-        body: &serde_json::Value,
+        body: serde_json::Value,
         stream: bool,
         upstream_model: &str,
         upstream_path: &str,
     ) -> Result<reqwest::Request, String> {
-        let mut body = body.clone();
+        let mut body = body;
 
         match body.get("reasoning_effort").and_then(|v| v.as_str()) {
             Some("none") => {
