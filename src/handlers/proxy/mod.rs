@@ -186,22 +186,23 @@ pub async fn proxy_request(
             }
         }
 
-        match state.model_cache.get_mut(model_name) {
-            Some(mut entry) if entry.1.elapsed() < CACHE_TTL => {
+        let cached = state.model_cache.get_mut(model_name).and_then(|mut entry| {
+            if entry.1.elapsed() < CACHE_TTL {
                 entry.1 = Instant::now();
-                let data = entry.0.clone();
-                drop(entry);
-                match data {
-                    Some((m, p)) => (m, p),
-                    None => {
-                        return Err(not_found(format!(
-                            "Model '{}' not found or disabled",
-                            model_name
-                        )));
-                    }
-                }
+                Some(entry.0.clone())
+            } else {
+                None
             }
-            _ => resolve(&state, model_name).await?,
+        });
+        match cached {
+            Some(Some((m, p))) => (m, p),
+            Some(None) => {
+                return Err(not_found(format!(
+                    "Model '{}' not found or disabled",
+                    model_name
+                )));
+            }
+            None => resolve(&state, model_name).await?,
         }
     };
 
@@ -212,14 +213,20 @@ pub async fn proxy_request(
         start.elapsed().as_millis()
     );
 
-    let upstream = match state.provider_cache.get_mut(&provider.id) {
-        Some(mut entry) if entry.1.elapsed() < CACHE_TTL => {
-            entry.1 = Instant::now();
-            let upstream = entry.0.clone();
-            drop(entry);
-            upstream
-        }
-        _ => {
+    let cached_upstream = state
+        .provider_cache
+        .get_mut(&provider.id)
+        .and_then(|mut entry| {
+            if entry.1.elapsed() < CACHE_TTL {
+                entry.1 = Instant::now();
+                Some(entry.0.clone())
+            } else {
+                None
+            }
+        });
+    let upstream = match cached_upstream {
+        Some(upstream) => upstream,
+        None => {
             let upstream = create_provider(&provider, state.http_client.clone());
             state
                 .provider_cache
