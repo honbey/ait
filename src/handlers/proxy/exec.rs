@@ -141,6 +141,10 @@ pub(crate) async fn proxy_streamed(
     let log_manager = state.log_manager.clone();
     let model_name_for_transform = model_name.clone();
     let base_event = ProxyEvent {
+        // Owned by SseTransformStream in the success path — it writes the log
+        // on stream completion via Drop.  The guard below holds a clone for
+        // error coverage (before the stream is set up); it is suppressed once
+        // execution succeeds so only the stream writes the final record.
         timestamp: Utc::now(),
         username: Some(session.username),
         api_key_name: session.api_key_name,
@@ -162,6 +166,9 @@ pub(crate) async fn proxy_streamed(
         client_ip,
     };
 
+    // Clone: covers execute / redirect / non-2xx errors before the stream
+    // exists.  On success suppress_drop_log prevents the guard's Drop from
+    // writing a duplicate 499 — only SseTransformStream::Drop logs the event.
     let mut guard = ProxyLogGuard::new(log_manager.clone(), base_event.clone(), start);
 
     trace!(
@@ -205,6 +212,9 @@ pub(crate) async fn proxy_streamed(
         .into_response());
     }
 
+    // Success path: suppress the guard so only SseTransformStream::Drop
+    // writes the log record.  Without this the guard's Drop would emit a 499
+    // while the stream still holds the original (this clone) and logs it too.
     guard.suppress_drop_log();
 
     let mut stream_builder = Response::builder()
