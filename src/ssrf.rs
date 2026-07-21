@@ -64,10 +64,10 @@ pub(crate) async fn check_ssrf_config(
     match resolve_and_check(url, allowed_cidrs, dns_cache, provider_name).await {
         Ok(()) => Ok(()),
         Err(SsrfDeny::NoHost) => Err(AitError::bad_request("base_url must include a host")),
-        Err(SsrfDeny::DnsFailed(e)) => Err(AitError::bad_request(format!(
-            "base_url host could not be resolved: {}",
-            e
-        ))),
+        Err(SsrfDeny::DnsFailed(e)) => {
+            warn!("[ssrf] config check DNS error: {}", e);
+            Err(AitError::bad_request("base_url host could not be resolved"))
+        }
         Err(SsrfDeny::Blocked) => Err(AitError::bad_request(
             "base_url resolves to a blocked address",
         )),

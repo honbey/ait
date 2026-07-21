@@ -144,10 +144,12 @@ pub async fn create_provider(
     Json(input): Json<CreateProviderRequest>,
 ) -> Result<(StatusCode, Json<ProviderResponse>), (StatusCode, Json<AitError>)> {
     let name = validate_string(&input.name, "name", 128, ident_chars)?;
-    let base_url = validate_string(&input.base_url, "base_url", 1024, |_| true)?;
-    let parsed = validate_base_url(&base_url)?;
+    let parsed_url =
+        validate_base_url(&validate_string(&input.base_url, "base_url", 1024, |_| {
+            true
+        })?)?;
     ssrf::check_ssrf_config(
-        &parsed,
+        &parsed_url,
         &state.config.security.ssrf_allowed_cidrs,
         &state.ssrf_dns_cache,
         &input.name,
@@ -169,7 +171,7 @@ pub async fn create_provider(
         id: String::new(),
         name,
         provider_type: input.provider_type,
-        base_url,
+        base_url: parsed_url.to_string(),
         api_key,
         enabled: input.enabled,
         created_at: chrono::DateTime::default(),
