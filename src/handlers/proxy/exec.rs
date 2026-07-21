@@ -90,9 +90,10 @@ pub(crate) async fn proxy_non_streamed(
         "proxy_non_streamed: fetching body, elapsed={}ms",
         start.elapsed().as_millis()
     );
-    let bytes = response
-        .bytes()
+    let timeout = Duration::from_secs(state.config.proxy.timeout_secs);
+    let bytes = tokio::time::timeout(timeout, response.bytes())
         .await
+        .map_err(|_| AitError::upstream_error(408, "upstream read timeout").into_response())?
         .map_err(|e| AitError::upstream_error(502, e.to_string()).into_response())?;
     trace!(
         model = model_name,

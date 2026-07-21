@@ -55,7 +55,10 @@ impl AppState {
 
         let http_client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(std::time::Duration::from_secs(config.proxy.timeout_secs))
+            .connect_timeout(std::time::Duration::from_secs(
+                config.proxy.connect_timeout_secs,
+            ))
+            .tcp_keepalive(Some(std::time::Duration::from_secs(60)))
             .build()
             .map_err(AppInitError::HttpClient)?;
 

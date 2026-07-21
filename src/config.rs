@@ -67,6 +67,7 @@ pub struct ProxyConfig {
     pub timeout_secs: u64,
     pub stream: bool,
     pub sse_idle_timeout_secs: u64,
+    pub connect_timeout_secs: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -113,6 +114,7 @@ impl ConfigApp {
             .set_default("proxy.timeout_secs", 300u64)?
             .set_default("proxy.stream", true)?
             .set_default("proxy.sse_idle_timeout_secs", 60u64)?
+            .set_default("proxy.connect_timeout_secs", 30u64)?
             .set_default("security.ssrf_allowed_cidrs", Vec::<String>::new())?
             .set_default("security.cors_allowed_origins", Vec::<String>::new())?
             .add_source(File::new(config_file, FileFormat::Toml).required(false))
