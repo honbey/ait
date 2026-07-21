@@ -9,6 +9,7 @@ use serde::Deserialize;
 use crate::app::AppState;
 use crate::db::{ApiKey, AuditEvent, SessionUser};
 use crate::error::{AitError, forbidden, internal_error, not_found};
+use crate::handlers::{ident_chars, validate_string};
 
 #[derive(Deserialize)]
 pub struct CreateApiKeyRequest {
@@ -45,9 +46,9 @@ pub async fn create_api_key(
         })
         .transpose()?;
 
+    let name = validate_string(&input.name, "name", 128, ident_chars)?;
     let db = state.db.clone();
     let username_clone = username.clone();
-    let name = input.name.clone();
     let (stored, raw_key) =
         crate::run_blocking(move || db.insert_api_key(&username_clone, &name, expires_at))
             .await
@@ -170,8 +171,26 @@ pub async fn update_api_key(
         return Err(forbidden("You can only manage your own API keys"));
     }
 
-    let mut updates: ApiKey = input.into();
-    updates.id = key_id.clone();
+    let name = match input.name {
+        Some(n) => {
+            let t = n.trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(validate_string(&t, "name", 128, ident_chars)?)
+            }
+        }
+        None => None,
+    };
+    let updates = ApiKey {
+        id: key_id.clone(),
+        name: name.unwrap_or_default(),
+        enabled: input.enabled.unwrap_or(true),
+        expires_at: input
+            .expires_at
+            .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or(DateTime::UNIX_EPOCH)),
+        ..Default::default()
+    };
     let db = state.db.clone();
     let username_clone = username.clone();
     let (updated, hash) = crate::run_blocking(move || db.update_api_key(&username_clone, &updates))

@@ -12,6 +12,7 @@ use strum::{EnumMessage, IntoEnumIterator};
 use crate::app::AppState;
 use crate::db::{AuditEvent, Provider, ProviderType, SessionUser};
 use crate::error::{AitError, internal_error, not_found};
+use crate::handlers::{ident_chars, validate_string};
 
 // ── Provider types ──
 
@@ -123,8 +124,30 @@ pub async fn create_provider(
     Extension(session): Extension<SessionUser>,
     Json(input): Json<CreateProviderRequest>,
 ) -> Result<(StatusCode, Json<ProviderResponse>), (StatusCode, Json<AitError>)> {
-    validate_base_url(&input.base_url)?;
-    let provider: Provider = input.into();
+    let name = validate_string(&input.name, "name", 128, ident_chars)?;
+    let base_url = validate_string(&input.base_url, "base_url", 1024, |_| true)?;
+    validate_base_url(&base_url)?;
+    let api_key = input.api_key.and_then(|k| {
+        let t = k.trim().to_string();
+        if t.is_empty() { None } else { Some(t) }
+    });
+    if let Some(ref k) = api_key
+        && k.len() > 512
+    {
+        return Err(
+            AitError::bad_request("api_key must not exceed 512 characters").into_response(),
+        );
+    }
+    let provider = Provider {
+        id: String::new(),
+        name,
+        provider_type: input.provider_type,
+        base_url,
+        api_key,
+        enabled: input.enabled,
+        created_at: chrono::DateTime::default(),
+        updated_at: chrono::DateTime::default(),
+    };
     let db = state.db.clone();
     let inserted = crate::run_blocking(move || db.insert_provider(provider))
         .await
@@ -208,10 +231,45 @@ pub async fn update_provider(
     Path(id): Path<String>,
     Json(input): Json<UpdateProviderRequest>,
 ) -> Result<Json<ProviderResponse>, (StatusCode, Json<AitError>)> {
-    if let Some(ref url) = input.base_url {
-        validate_base_url(url)?;
-    }
-    let mut updates: Provider = input.into();
+    let name = input
+        .name
+        .map(|n| validate_string(&n, "name", 128, ident_chars))
+        .transpose()?;
+    let base_url = input
+        .base_url
+        .map(|u| -> Result<String, AitError> {
+            let v = validate_string(&u, "base_url", 1024, |_| true)?;
+            validate_base_url(&v)?;
+            Ok(v)
+        })
+        .transpose()?;
+    let api_key = match input.api_key {
+        Some(k) => {
+            let t = k.trim().to_string();
+            if t.is_empty() {
+                Some(String::new())
+            } else {
+                if t.len() > 512 {
+                    return Err(
+                        AitError::bad_request("api_key must not exceed 512 characters")
+                            .into_response(),
+                    );
+                }
+                Some(t)
+            }
+        }
+        None => None,
+    };
+    let mut updates = Provider {
+        id: String::new(),
+        name: name.unwrap_or_default(),
+        provider_type: input.provider_type.unwrap_or_default(),
+        base_url: base_url.unwrap_or_default(),
+        api_key,
+        enabled: input.enabled.unwrap_or(true),
+        created_at: chrono::DateTime::default(),
+        updated_at: chrono::DateTime::default(),
+    };
     updates.id = id.clone();
     let db = state.db.clone();
     let provider = crate::run_blocking(move || db.update_provider(&updates))
