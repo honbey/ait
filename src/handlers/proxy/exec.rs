@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::{
     Json,
@@ -229,6 +229,8 @@ pub(crate) async fn proxy_streamed(
         start,
         done: false,
         shutdown_fut: Box::pin(state.shutdown_token.clone().cancelled_owned()),
+        idle_timeout: Duration::from_secs(state.config.proxy.sse_idle_timeout_secs),
+        last_data_time: Instant::now(),
     };
 
     let body = Body::from_stream(sse_stream);
