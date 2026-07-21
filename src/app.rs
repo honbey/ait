@@ -166,6 +166,9 @@ fn spawn_session_cleanup(db: Arc<Database>, shutdown: CancellationToken, interva
 /// Evict expired in-memory cache entries at a configurable interval.
 /// Applies a shorter TTL when a cache exceeds 90% of max_entries.
 /// Covers session, api_key, model, provider, and SSRF DNS caches in one task.
+///
+/// Runs inside `spawn_blocking` to avoid stalling tokio worker threads.
+/// Each iteration is bounded by a 30-second timeout.
 #[allow(clippy::too_many_arguments)]
 fn spawn_caches_cleanup(
     session_cache: Arc<DashMap<String, SessionCacheEntry>>,
@@ -177,24 +180,44 @@ fn spawn_caches_cleanup(
     interval_secs: u64,
     max_entries: usize,
 ) {
-    let threshold = max_entries.saturating_mul(9) / 10;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
                 _ = interval.tick() => {
-                    let aggressive = |len: usize| if len > threshold { CACHE_TTL / 2 } else { CACHE_TTL };
-                    let ttl = aggressive(session_cache.len());
-                    session_cache.retain(|_, v| v.2.elapsed() < ttl);
-                    let ttl = aggressive(api_key_cache.len());
-                    api_key_cache.retain(|_, v| v.1.elapsed() < ttl);
-                    let ttl = aggressive(model_cache.len());
-                    model_cache.retain(|_, v| v.1.elapsed() < ttl);
-                    let ttl = aggressive(provider_cache.len());
-                    provider_cache.retain(|_, v| v.1.elapsed() < ttl);
-                    let ttl = aggressive(ssrf_dns_cache.len());
-                    ssrf_dns_cache.retain(|_, v| v.1.elapsed() < ttl);
+                    let caches = (
+                        session_cache.clone(),
+                        api_key_cache.clone(),
+                        model_cache.clone(),
+                        provider_cache.clone(),
+                        ssrf_dns_cache.clone(),
+                    );
+                    let handle = tokio::task::spawn_blocking(move || {
+                        let threshold = max_entries.saturating_mul(9) / 10;
+                        let aggressive = |len: usize| if len > threshold { CACHE_TTL / 2 } else { CACHE_TTL };
+                        let ttl = aggressive(caches.0.len());
+                        caches.0.retain(|_, v| v.2.elapsed() < ttl);
+                        let ttl = aggressive(caches.1.len());
+                        caches.1.retain(|_, v| v.1.elapsed() < ttl);
+                        let ttl = aggressive(caches.2.len());
+                        caches.2.retain(|_, v| v.1.elapsed() < ttl);
+                        let ttl = aggressive(caches.3.len());
+                        caches.3.retain(|_, v| v.1.elapsed() < ttl);
+                        let ttl = aggressive(caches.4.len());
+                        caches.4.retain(|_, v| v.1.elapsed() < ttl);
+                    });
+                    tokio::select! {
+                        _ = shutdown.cancelled() => break,
+                        result = handle => {
+                            if let Err(e) = result {
+                                tracing::error!("Cache cleanup task panicked: {}", e);
+                            }
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                            tracing::warn!("Cache cleanup timed out after 30s");
+                        }
+                    }
                 }
             }
         }
@@ -212,7 +235,23 @@ fn spawn_rate_limiter_cleanup(
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
-                _ = interval.tick() => limiter.cleanup(window_secs),
+                _ = interval.tick() => {
+                    let limiter = limiter.clone();
+                    let handle = tokio::task::spawn_blocking(move || {
+                        limiter.cleanup(window_secs);
+                    });
+                    tokio::select! {
+                        _ = shutdown.cancelled() => break,
+                        result = handle => {
+                            if let Err(e) = result {
+                                tracing::error!("Rate limiter cleanup task panicked: {}", e);
+                            }
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                            tracing::warn!("Rate limiter cleanup timed out after 10s");
+                        }
+                    }
+                }
             }
         }
     });
