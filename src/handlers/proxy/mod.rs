@@ -21,46 +21,56 @@ use crate::ssrf;
 mod exec;
 mod guard;
 mod sse;
-mod tokenizer;
 
 use exec::{proxy_non_streamed, proxy_streamed};
 use guard::{ProxyLogGuard, UsageTokens};
-use tokenizer::count_prompt_tokens;
 
 pub async fn chat_completions(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Extension(client_ip): Extension<Option<IpAddr>>,
-    Json(body): Json<serde_json::Value>,
+    body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, client_ip, body, "/chat/completions").await
+    let body_len = body.len();
+    let body = serde_json::from_slice(&body)
+        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    proxy_request(state, session, client_ip, body, body_len, "/chat/completions").await
 }
 
 pub async fn completions(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Extension(client_ip): Extension<Option<IpAddr>>,
-    Json(body): Json<serde_json::Value>,
+    body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, client_ip, body, "/completions").await
+    let body_len = body.len();
+    let body = serde_json::from_slice(&body)
+        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    proxy_request(state, session, client_ip, body, body_len, "/completions").await
 }
 
 pub async fn embeddings(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Extension(client_ip): Extension<Option<IpAddr>>,
-    Json(body): Json<serde_json::Value>,
+    body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, client_ip, body, "/embeddings").await
+    let body_len = body.len();
+    let body = serde_json::from_slice(&body)
+        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    proxy_request(state, session, client_ip, body, body_len, "/embeddings").await
 }
 
 pub async fn responses(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Extension(client_ip): Extension<Option<IpAddr>>,
-    Json(body): Json<serde_json::Value>,
+    body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, client_ip, body, "/responses").await
+    let body_len = body.len();
+    let body = serde_json::from_slice(&body)
+        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    proxy_request(state, session, client_ip, body, body_len, "/responses").await
 }
 
 pub async fn health(State(state): State<AppState>) -> AxumJson<serde_json::Value> {
@@ -143,6 +153,7 @@ pub async fn proxy_request(
     session: SessionUser,
     client_ip: Option<IpAddr>,
     body: serde_json::Value,
+    body_len: usize,
     upstream_path: &str,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     let start = Instant::now();
@@ -244,7 +255,7 @@ pub async fn proxy_request(
         .unwrap_or(false)
         && state.config.proxy.stream;
 
-    let prompt_tokens = count_prompt_tokens(&body);
+    let prompt_tokens = count_prompt_tokens(body_len);
 
     let request = upstream
         .build_request(
@@ -373,4 +384,10 @@ pub async fn proxy_request(
             Err(e)
         }
     }
+}
+
+/// Normal paths will be overwritten by the upstream usage precise value;
+/// this fallback value is only used if the connection is interrupted.
+fn count_prompt_tokens(body_len: usize) -> Option<i64> {
+    if body_len == 0 { None } else { Some(body_len as i64 / 3) }
 }
