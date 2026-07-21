@@ -180,6 +180,14 @@ pub async fn session_check(
         }
     };
 
+    // Fire-and-forget session renewal so active sessions do not expire
+    let db = state.db.clone();
+    let hash_clone = hash.clone();
+    let ttl = state.config.auth.session_ttl_secs;
+    tokio::spawn(async move {
+        let _ = crate::run_blocking(move || db.renew_session(&hash_clone, ttl)).await;
+    });
+
     let user = crate::db::SessionUser {
         username: session.username.clone(),
         api_key_name: None,

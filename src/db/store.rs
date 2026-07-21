@@ -674,6 +674,17 @@ impl Database {
         Ok(rows)
     }
 
+    pub fn renew_session(&self, hash: &str, ttl_secs: u64) -> Result<(), DbError> {
+        let new_expiry = Utc::now() + chrono::Duration::seconds(ttl_secs as i64);
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions SET expires_at = ?1 WHERE session_key_hash = ?2",
+            params![new_expiry.timestamp(), hash],
+        )
+        .map_err(to_storage)?;
+        Ok(())
+    }
+
     // --- API Key CRUD ---
 
     fn generate_random_string(len: usize) -> String {
