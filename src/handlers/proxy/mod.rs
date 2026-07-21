@@ -34,7 +34,15 @@ pub async fn chat_completions(
     let body_len = body.len();
     let body = serde_json::from_slice(&body)
         .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
-    proxy_request(state, session, client_ip, body, body_len, "/chat/completions").await
+    proxy_request(
+        state,
+        session,
+        client_ip,
+        body,
+        body_len,
+        "/chat/completions",
+    )
+    .await
 }
 
 pub async fn completions(
@@ -398,5 +406,9 @@ pub async fn proxy_request(
 /// Normal paths will be overwritten by the upstream usage precise value;
 /// this fallback value is only used if the connection is interrupted.
 fn count_prompt_tokens(body_len: usize) -> Option<i64> {
-    if body_len == 0 { None } else { Some(body_len as i64 / 3) }
+    if body_len == 0 {
+        None
+    } else {
+        Some(body_len as i64 / 3)
+    }
 }

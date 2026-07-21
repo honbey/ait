@@ -14,6 +14,7 @@ use crate::app::AppState;
 use crate::db::{AuditEvent, Provider, ProviderType, SessionUser};
 use crate::error::{AitError, internal_error, not_found};
 use crate::handlers::{ident_chars, validate_string};
+use crate::ssrf;
 
 // ── Provider types ──
 
@@ -103,12 +104,7 @@ impl From<CreateProviderRequest> for Provider {
 
 // ── Validation ──
 
-fn validate_base_url(url: &str) -> Result<(), AitError> {
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(AitError::bad_request(
-            "base_url must start with http:// or https://",
-        ));
-    }
+fn validate_base_url(url: &str) -> Result<reqwest::Url, AitError> {
     if !url
         .chars()
         .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '~' | ':' | '/'))
@@ -117,7 +113,17 @@ fn validate_base_url(url: &str) -> Result<(), AitError> {
             "base_url contains invalid characters",
         ));
     }
-    Ok(())
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| AitError::bad_request("base_url is not a valid URL"))?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err(AitError::bad_request(
+            "base_url must use http:// or https:// scheme",
+        ));
+    }
+    if parsed.host_str().is_none() {
+        return Err(AitError::bad_request("base_url must include a host"));
+    }
+    Ok(parsed)
 }
 
 // ── Handlers ──
@@ -129,7 +135,15 @@ pub async fn create_provider(
 ) -> Result<(StatusCode, Json<ProviderResponse>), (StatusCode, Json<AitError>)> {
     let name = validate_string(&input.name, "name", 128, ident_chars)?;
     let base_url = validate_string(&input.base_url, "base_url", 1024, |_| true)?;
-    validate_base_url(&base_url)?;
+    let parsed = validate_base_url(&base_url)?;
+    ssrf::check_ssrf_config(
+        &parsed,
+        &state.config.security.ssrf_allowed_cidrs,
+        &state.ssrf_dns_cache,
+        &input.name,
+    )
+    .await
+    .map_err(|e| e.into_response())?;
     let api_key = input.api_key.and_then(|k| {
         let t = k.trim().to_string();
         if t.is_empty() { None } else { Some(t) }
@@ -238,12 +252,11 @@ pub async fn update_provider(
         .name
         .map(|n| validate_string(&n, "name", 128, ident_chars))
         .transpose()?;
-    let base_url = input
+    let parsed_url = input
         .base_url
-        .map(|u| -> Result<String, AitError> {
+        .map(|u| -> Result<reqwest::Url, AitError> {
             let v = validate_string(&u, "base_url", 1024, |_| true)?;
-            validate_base_url(&v)?;
-            Ok(v)
+            validate_base_url(&v)
         })
         .transpose()?;
     let api_key = match input.api_key {
@@ -263,11 +276,24 @@ pub async fn update_provider(
         }
         None => None,
     };
+    if let Some(ref parsed) = parsed_url {
+        ssrf::check_ssrf_config(
+            parsed,
+            &state.config.security.ssrf_allowed_cidrs,
+            &state.ssrf_dns_cache,
+            &id,
+        )
+        .await
+        .map_err(|e| e.into_response())?;
+    }
     let mut updates = Provider {
         id: String::new(),
         name: name.unwrap_or_default(),
         provider_type: input.provider_type.unwrap_or_default(),
-        base_url: base_url.unwrap_or_default(),
+        base_url: parsed_url
+            .as_ref()
+            .map(|u| u.to_string())
+            .unwrap_or_default(),
         api_key,
         enabled: input.enabled.unwrap_or(true),
         created_at: chrono::DateTime::default(),
