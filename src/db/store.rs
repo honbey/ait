@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, Row, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
@@ -339,9 +339,12 @@ impl Database {
         model.created_at = now;
         model.updated_at = now;
 
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(to_storage)?;
 
-        let (prov_exists, name_exists): (bool, bool) = conn
+        let (prov_exists, name_exists): (bool, bool) = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM providers WHERE id = ?1),
                         EXISTS(SELECT 1 FROM models WHERE name = ?2)",
@@ -362,7 +365,7 @@ impl Database {
             )));
         }
 
-        conn.execute(
+        tx.execute(
             "INSERT INTO models (id, name, provider_id, upstream_model, enabled, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
@@ -377,6 +380,7 @@ impl Database {
         )
         .map_err(to_storage)?;
 
+        tx.commit().map_err(to_storage)?;
         Ok(model)
     }
 
@@ -717,9 +721,12 @@ impl Database {
         let now_ts = now.timestamp();
         let expires_ts = expires_at.map(|dt| dt.timestamp());
 
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(to_storage)?;
 
-        let user_exists: bool = conn
+        let user_exists: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?1)",
                 params![username],
@@ -730,7 +737,7 @@ impl Database {
             return Err(DbError::NotFound(format!("User '{}' not found", username)));
         }
 
-        let count: i64 = conn
+        let count: i64 = tx
             .query_row(
                 "SELECT COUNT(*) FROM api_keys WHERE username = ?1",
                 params![username],
@@ -744,7 +751,7 @@ impl Database {
             )));
         }
 
-        conn.execute(
+        tx.execute(
             "INSERT INTO api_keys (id, key_hash, display, username, name, enabled, created_at, updated_at, expires_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
@@ -760,6 +767,8 @@ impl Database {
             ],
         )
         .map_err(to_storage)?;
+
+        tx.commit().map_err(to_storage)?;
 
         let stored = ApiKey {
             id: id.clone(),
