@@ -224,6 +224,15 @@ pub async fn proxy_request(
         start.elapsed().as_millis()
     );
 
+    if !provider.provider_type.supports_endpoint(upstream_path) {
+        return Err(AitError::bad_request(format!(
+            "provider type '{}' does not support endpoint '{}'",
+            provider.provider_type.as_ref(),
+            upstream_path
+        ))
+        .into_response());
+    }
+
     let cached_upstream = state
         .provider_cache
         .get_mut(&provider.id)
