@@ -229,14 +229,20 @@ pub fn Overview() -> impl IntoView {
             );
 
             req_x_data.set(
-                req_filled.iter().map(|r| ts_to_date_str(r.timestamp)).collect(),
+                req_filled
+                    .iter()
+                    .map(|r| ts_to_date_str(r.timestamp))
+                    .collect(),
             );
             req_series.set(vec![ChartSeries {
                 name: "Requests".to_string(),
                 data: req_filled.iter().map(|r| r.count as f64).collect(),
             }]);
             tok_x_data.set(
-                tok_filled.iter().map(|r| ts_to_date_str(r.timestamp)).collect(),
+                tok_filled
+                    .iter()
+                    .map(|r| ts_to_date_str(r.timestamp))
+                    .collect(),
             );
             tok_series.set(vec![ChartSeries {
                 name: "Tokens".to_string(),
@@ -314,7 +320,8 @@ pub fn Overview() -> impl IntoView {
                     label="TPM"
                 />
             </div>
-        }.into_any(),
+        }
+        .into_any(),
     };
 
     let greeting = {

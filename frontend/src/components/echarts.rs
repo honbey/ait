@@ -22,9 +22,10 @@ impl Chart {
         let echarts =
             js_sys::Reflect::get(&js_sys::global(), &"echarts".into()).expect("echarts not found");
 
-        let get_instance: js_sys::Function = js_sys::Reflect::get(&echarts, &"getInstanceByDom".into())
-            .expect("echarts.getInstanceByDom not found")
-            .unchecked_into();
+        let get_instance: js_sys::Function =
+            js_sys::Reflect::get(&echarts, &"getInstanceByDom".into())
+                .expect("echarts.getInstanceByDom not found")
+                .unchecked_into();
         if let Some(existing) = get_instance
             .call1(&JsValue::UNDEFINED, dom)
             .ok()
@@ -170,7 +171,10 @@ pub fn use_chart(node: NodeRef<leptos::html::Div>) -> RwSignal<Option<Chart>> {
             observer.set_value(Some(ro));
             cb.forget();
 
-            if el.offset_width() > 0 && chart.get_untracked().is_none() && !loading.load(Ordering::Relaxed) {
+            if el.offset_width() > 0
+                && chart.get_untracked().is_none()
+                && !loading.load(Ordering::Relaxed)
+            {
                 loading.store(true, Ordering::Relaxed);
                 let loading = loading.clone();
                 let alive = alive.clone();
