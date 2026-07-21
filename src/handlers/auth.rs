@@ -156,14 +156,17 @@ pub async fn session_check(
     let session_key = session_key.to_string();
     let hash = hash_key(&session_key);
 
-    if let Some(cached) = state.session_cache.get(&hash) {
-        let (ref user, ref expires_at, ref inserted_at) = *cached;
-        if *expires_at > Utc::now() && inserted_at.elapsed() < CACHE_TTL {
+    if let Some(mut entry) = state.session_cache.get_mut(&hash) {
+        if entry.1 > Utc::now() && entry.2.elapsed() < CACHE_TTL {
+            entry.2 = Instant::now();
+            let user = entry.0.clone();
+            drop(entry);
             return Json(SessionResponse {
                 authenticated: true,
-                username: Some(user.username.clone()),
+                username: Some(user.username),
             });
         }
+        drop(entry);
     }
 
     let db = state.db.clone();

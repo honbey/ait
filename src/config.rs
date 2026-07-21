@@ -20,6 +20,7 @@ pub struct ServerConfig {
     pub session_cleanup_interval_secs: u64,
     pub rate_limiter_cleanup_interval_secs: u64,
     pub cache_cleanup_interval_secs: u64,
+    pub cache_max_entries: u64,
     pub graceful_timeout_secs: u64,
     pub trusted_proxies: Vec<IpAddr>,
 }
@@ -86,6 +87,7 @@ impl ConfigApp {
             .set_default("server.session_cleanup_interval_secs", 3600u64)?
             .set_default("server.rate_limiter_cleanup_interval_secs", 600u64)?
             .set_default("server.cache_cleanup_interval_secs", 300u64)?
+            .set_default("server.cache_max_entries", 1000u64)?
             .set_default("server.graceful_timeout_secs", 10u64)?
             .set_default("server.trusted_proxies", vec!["127.0.0.1", "::1"])?
             .set_default("auth.enabled", true)?

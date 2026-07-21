@@ -186,25 +186,22 @@ pub async fn proxy_request(
             }
         }
 
-        let needs_resolve = state
-            .model_cache
-            .get(model_name)
-            .is_none_or(|cached| cached.1.elapsed() >= CACHE_TTL);
-
-        if needs_resolve {
-            resolve(&state, model_name).await?
-        } else {
-            let cached = state.model_cache.get(model_name).unwrap();
-            let (ref resolved, _) = *cached;
-            match resolved {
-                Some((m, p)) => (m.clone(), p.clone()),
-                None => {
-                    return Err(not_found(format!(
-                        "Model '{}' not found or disabled",
-                        model_name
-                    )));
+        match state.model_cache.get_mut(model_name) {
+            Some(mut entry) if entry.1.elapsed() < CACHE_TTL => {
+                entry.1 = Instant::now();
+                let data = entry.0.clone();
+                drop(entry);
+                match data {
+                    Some((m, p)) => (m, p),
+                    None => {
+                        return Err(not_found(format!(
+                            "Model '{}' not found or disabled",
+                            model_name
+                        )));
+                    }
                 }
             }
+            _ => resolve(&state, model_name).await?,
         }
     };
 
@@ -215,8 +212,13 @@ pub async fn proxy_request(
         start.elapsed().as_millis()
     );
 
-    let upstream = match state.provider_cache.get(&provider.id) {
-        Some(cached) if cached.1.elapsed() < CACHE_TTL => cached.0.clone(),
+    let upstream = match state.provider_cache.get_mut(&provider.id) {
+        Some(mut entry) if entry.1.elapsed() < CACHE_TTL => {
+            entry.1 = Instant::now();
+            let upstream = entry.0.clone();
+            drop(entry);
+            upstream
+        }
         _ => {
             let upstream = create_provider(&provider, state.http_client.clone());
             state

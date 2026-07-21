@@ -99,6 +99,7 @@ impl AppState {
             ssrf_dns_cache.clone(),
             shutdown_token.clone(),
             config.server.cache_cleanup_interval_secs,
+            config.server.cache_max_entries as usize,
         );
 
         Ok(Self {
@@ -163,7 +164,9 @@ fn spawn_session_cleanup(db: Arc<Database>, shutdown: CancellationToken, interva
 }
 
 /// Evict expired in-memory cache entries at a configurable interval.
+/// Applies a shorter TTL when a cache exceeds 90% of max_entries.
 /// Covers session, api_key, model, provider, and SSRF DNS caches in one task.
+#[allow(clippy::too_many_arguments)]
 fn spawn_caches_cleanup(
     session_cache: Arc<DashMap<String, SessionCacheEntry>>,
     api_key_cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>>,
@@ -172,18 +175,26 @@ fn spawn_caches_cleanup(
     ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
     shutdown: CancellationToken,
     interval_secs: u64,
+    max_entries: usize,
 ) {
+    let threshold = max_entries.saturating_mul(9) / 10;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
                 _ = interval.tick() => {
-                    session_cache.retain(|_, v| v.2.elapsed() < CACHE_TTL);
-                    api_key_cache.retain(|_, v| v.1.elapsed() < CACHE_TTL);
-                    model_cache.retain(|_, v| v.1.elapsed() < CACHE_TTL);
-                    provider_cache.retain(|_, v| v.1.elapsed() < CACHE_TTL);
-                    ssrf_dns_cache.retain(|_, v| v.1.elapsed() < CACHE_TTL);
+                    let aggressive = |len: usize| if len > threshold { CACHE_TTL / 2 } else { CACHE_TTL };
+                    let ttl = aggressive(session_cache.len());
+                    session_cache.retain(|_, v| v.2.elapsed() < ttl);
+                    let ttl = aggressive(api_key_cache.len());
+                    api_key_cache.retain(|_, v| v.1.elapsed() < ttl);
+                    let ttl = aggressive(model_cache.len());
+                    model_cache.retain(|_, v| v.1.elapsed() < ttl);
+                    let ttl = aggressive(provider_cache.len());
+                    provider_cache.retain(|_, v| v.1.elapsed() < ttl);
+                    let ttl = aggressive(ssrf_dns_cache.len());
+                    ssrf_dns_cache.retain(|_, v| v.1.elapsed() < ttl);
                 }
             }
         }
