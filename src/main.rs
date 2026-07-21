@@ -15,10 +15,11 @@ pub(crate) use blocking::run_blocking;
 #[cfg(test)]
 mod test_utils;
 
+use axum::http::{HeaderValue, Method, header};
 use axum::routing::{Router, delete, get, post, put};
 use std::net::SocketAddr;
 use std::time::Duration;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::info;
@@ -164,9 +165,28 @@ fn init_logging(cfg: &config::LogConfig) {
 }
 
 fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
+    let methods = [Method::GET, Method::POST, Method::PUT, Method::DELETE];
+    let headers = [
+        header::AUTHORIZATION,
+        header::CONTENT_TYPE,
+        header::ACCEPT,
+        header::COOKIE,
+        header::HeaderName::from_static("x-requested-with"),
+    ];
+
     if allowed_origins.is_empty() {
-        return CorsLayer::permissive();
+        return CorsLayer::new()
+            .allow_origin(AllowOrigin::list(Vec::<HeaderValue>::new()))
+            .allow_methods(methods)
+            .allow_headers(headers);
     }
+
+    if allowed_origins.iter().any(|o| o == "*") {
+        return CorsLayer::permissive()
+            .allow_methods(methods)
+            .allow_headers(headers);
+    }
+
     let origins: Vec<_> = allowed_origins
         .iter()
         .map(|o| {
@@ -176,8 +196,8 @@ fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
         .collect();
     CorsLayer::new()
         .allow_origin(origins)
-        .allow_methods(Any)
-        .allow_headers(Any)
+        .allow_methods(methods)
+        .allow_headers(headers)
 }
 
 fn build_app(state: app::AppState) -> Router {
