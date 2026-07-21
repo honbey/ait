@@ -68,10 +68,15 @@ impl Drop for Suppress401Guard {
     }
 }
 
+pub fn clear_cache() {
+    FETCH_CACHE.with(|c| c.borrow_mut().clear());
+}
+
 fn handle_401(status: u16) {
     if status != 401 || SUPPRESS_401.get() {
         return;
     }
+    clear_cache();
     if let Some(auth) = use_context::<AuthContext>() {
         auth.authenticated.set(Some(false));
         if let (Some(toast), Some(i18n)) = (use_context::<ToastManager>(), use_context::<I18n>()) {

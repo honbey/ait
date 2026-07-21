@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use crate::api;
 
 #[derive(Clone)]
 pub struct AuthContext {
@@ -20,6 +21,7 @@ impl AuthContext {
     }
 
     pub fn set_logged_out(&self) {
+        api::clear_cache();
         self.authenticated.set(Some(false));
         self.username.set(None);
     }
