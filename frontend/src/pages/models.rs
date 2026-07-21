@@ -50,11 +50,8 @@ pub fn ModelsPage() -> impl IntoView {
         LocalResource::new(|| async move { api::fetch_models().await.map_err(|e| e.to_string()) });
 
     let _sync_store = Effect::new(move |_| match models_rsc.get() {
-        Some(Ok(ref items)) => {
-            let items_field = state.items();
-            let mut guard = items_field.write();
-            guard.clone_from(items);
-            drop(guard);
+        Some(Ok(items)) => {
+            state.items().patch(items);
             state.error().set(None);
         }
         Some(Err(ref e)) => state.error().set(Some(e.to_string())),

@@ -76,11 +76,8 @@ pub fn ProvidersPage() -> impl IntoView {
         );
 
     let _sync_store = Effect::new(move |_| match providers_rsc.get() {
-        Some(Ok(ref items)) => {
-            let items_field = state.items();
-            let mut guard = items_field.write();
-            guard.clone_from(items);
-            drop(guard);
+        Some(Ok(items)) => {
+            state.items().patch(items);
             state.error().set(None);
         }
         Some(Err(ref e)) => state.error().set(Some(e.to_string())),
