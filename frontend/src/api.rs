@@ -392,7 +392,8 @@ pub struct BucketEntry {
 #[derive(Debug, Clone, Default, Deserialize, Store, Patch)]
 pub struct ApiKey {
     pub id: String,
-    pub key: String,
+    #[serde(rename = "key")]
+    pub display: String,
     pub name: String,
     #[serde(default)]
     pub created_at: i64,

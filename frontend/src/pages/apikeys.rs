@@ -144,7 +144,7 @@ pub fn ApiKeysPage() -> impl IntoView {
                                                             <span class=format!(
                                                                 "font-mono text-xs {}",
                                                                 CLASS_TEXT_MUTED,
-                                                            )>{k.key().get()}</span>
+                                                            )>{k.display().get()}</span>
                                                         </td>
                                                         <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
                                                             {move || expires_at_display(k.expires_at().get())}
@@ -428,10 +428,10 @@ fn ApiKeyFormModal(
             if let Some(field) = edit_model {
                 field.patch(api_key);
             } else {
-                created_raw_key.set(Some((api_key.key.clone(), api_key.name.clone())));
+                created_raw_key.set(Some((api_key.display.clone(), api_key.name.clone())));
                 let mut masked = api_key;
-                let k = masked.key.clone();
-                masked.key = format!("{}...{}", &k[..6], &k[k.len() - 3..]);
+                let k = masked.display.clone();
+                masked.display = format!("{}******{}", &k[..6], &k[k.len() - 3..]);
                 state.items().write().push(masked);
             }
             let action_label = if is_edit {
@@ -525,7 +525,7 @@ fn ApiKeyDetailModal(
 ) -> impl IntoView {
     let key_id = key.id().get();
     let key_name = key.name().get();
-    let key_value = key.key().get();
+    let key_value = key.display().get();
     let key_enabled = key.enabled().get();
     let key_created = key.created_at().get();
     let key_updated = key.updated_at().get();
