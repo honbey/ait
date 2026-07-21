@@ -2,7 +2,6 @@ mod app;
 mod blocking;
 mod config;
 mod db;
-mod diagnostics;
 mod error;
 use crate::error::not_found;
 mod handlers;
@@ -54,12 +53,6 @@ async fn main() {
     };
 
     init_logging(&config.log);
-
-    diagnostics::install_signal_handler();
-    info!(
-        "SIGUSR1 handler installed — send `kill -USR1 {}` to dump thread stacks",
-        std::process::id()
-    );
 
     let state = match app::AppState::new(config.clone()) {
         Ok(s) => s,
