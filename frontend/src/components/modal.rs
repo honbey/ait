@@ -55,9 +55,18 @@ pub fn DeleteConfirmModal(
     on_success: impl Fn() + 'static + Clone + Send,
 ) -> impl IntoView {
     let toast = use_toast();
+    let consumed = RwSignal::new(false);
 
     Effect::new(move |_| {
+        if action.pending().get() {
+            consumed.set(false);
+            return;
+        }
+        if consumed.get_untracked() {
+            return;
+        }
         if let Some(Ok(_)) = action.value().get() {
+            consumed.set(true);
             let en = entity_name();
             let act = ts!(ActionDeleted);
             toast.success(trs!(EntityAction, &[("entity", &en), ("action", &act)]));

@@ -422,34 +422,44 @@ fn ApiKeyFormModal(
     });
 
     let on_submitted = on_close.clone();
+    let consumed = RwSignal::new(false);
 
     Effect::new(move |_| {
-        if let Some(Ok(api_key)) = save_action.value().get() {
-            if let Some(field) = edit_model {
-                field.patch(api_key);
-            } else {
-                created_raw_key.set(Some((api_key.display.clone(), api_key.name.clone())));
-                let mut masked = api_key;
-                let k = masked.display.clone();
-                masked.display = format!("{}******{}", &k[..6], &k[k.len() - 3..]);
-                state.items().write().push(masked);
-            }
-            let action_label = if is_edit {
-                ts!(ActionUpdated)
-            } else {
-                ts!(ActionCreated)
-            };
-            toast.success(trs!(
-                EntityAction,
-                &[("entity", &ts!(ApiKey)), ("action", &action_label)]
-            ));
-            on_submitted();
+        if save_action.pending().get() {
+            consumed.set(false);
+            return;
         }
-    });
-
-    Effect::new(move |_| {
-        if let Some(Err(e)) = save_action.value().get() {
-            form_error.set(e);
+        if consumed.get_untracked() {
+            return;
+        }
+        match save_action.value().get() {
+            Some(Ok(api_key)) => {
+                consumed.set(true);
+                if let Some(field) = edit_model {
+                    field.patch(api_key);
+                } else {
+                    created_raw_key.set(Some((api_key.display.clone(), api_key.name.clone())));
+                    let mut masked = api_key;
+                    let k = masked.display.clone();
+                    masked.display = format!("{}******{}", &k[..6], &k[k.len() - 3..]);
+                    state.items().write().push(masked);
+                }
+                let action_label = if is_edit {
+                    ts!(ActionUpdated)
+                } else {
+                    ts!(ActionCreated)
+                };
+                toast.success(trs!(
+                    EntityAction,
+                    &[("entity", &ts!(ApiKey)), ("action", &action_label)]
+                ));
+                on_submitted();
+            }
+            Some(Err(e)) => {
+                consumed.set(true);
+                form_error.set(e);
+            }
+            None => {}
         }
     });
 

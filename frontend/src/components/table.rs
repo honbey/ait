@@ -156,19 +156,30 @@ pub fn attach_save_effect<T, A>(
     A: 'static,
 {
     let action = *action;
+    let consumed = RwSignal::new(false);
     Effect::new(move |_| {
-        if let Some(Ok(model)) = action.value().get() {
-            if let Some(field) = edit_field {
-                field.patch(model);
-            } else {
-                store_items.write().push(model);
-            }
-            (on_success)();
+        if action.pending().get() {
+            consumed.set(false);
+            return;
         }
-    });
-    Effect::new(move |_| {
-        if let Some(Err(e)) = action.value().get() {
-            form_error.set(e);
+        if consumed.get_untracked() {
+            return;
+        }
+        match action.value().get() {
+            Some(Ok(model)) => {
+                consumed.set(true);
+                if let Some(field) = edit_field {
+                    field.patch(model);
+                } else {
+                    store_items.write().push(model);
+                }
+                (on_success)();
+            }
+            Some(Err(e)) => {
+                consumed.set(true);
+                form_error.set(e);
+            }
+            None => {}
         }
     });
 }

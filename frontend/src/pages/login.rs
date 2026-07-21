@@ -27,17 +27,28 @@ pub fn LoginPage() -> impl IntoView {
             async move { api::login_api(&u, &p).await.map_err(|e| e.to_string()) }
         });
 
-    Effect::new(move |_| {
-        if let Some(Ok(())) = login_action.value().get() {
-            let u = username.get_untracked();
-            auth.set_logged_in(u);
-            navigate("/console", Default::default());
-        }
-    });
+    let consumed = RwSignal::new(false);
 
     Effect::new(move |_| {
-        if let Some(Err(e)) = login_action.value().get() {
-            error.set(trs!(LoginError, &[("msg", &e)]));
+        if login_action.pending().get() {
+            consumed.set(false);
+            return;
+        }
+        if consumed.get_untracked() {
+            return;
+        }
+        match login_action.value().get() {
+            Some(Ok(())) => {
+                consumed.set(true);
+                let u = username.get_untracked();
+                auth.set_logged_in(u);
+                navigate("/console", Default::default());
+            }
+            Some(Err(e)) => {
+                consumed.set(true);
+                error.set(trs!(LoginError, &[("msg", &e)]));
+            }
+            None => {}
         }
     });
 
