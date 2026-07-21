@@ -3,7 +3,8 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use chrono::Utc;
+use chrono::serde::ts_seconds;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
@@ -21,8 +22,10 @@ pub struct ModelResponse {
     provider_id: String,
     upstream_model: String,
     enabled: bool,
-    created_at: i64,
-    updated_at: i64,
+    #[serde(with = "ts_seconds")]
+    created_at: DateTime<Utc>,
+    #[serde(with = "ts_seconds")]
+    updated_at: DateTime<Utc>,
 }
 
 impl From<Model> for ModelResponse {
@@ -33,8 +36,8 @@ impl From<Model> for ModelResponse {
             provider_id: m.provider_id,
             upstream_model: m.upstream_model,
             enabled: m.enabled,
-            created_at: m.created_at.timestamp(),
-            updated_at: m.updated_at.timestamp(),
+            created_at: m.created_at,
+            updated_at: m.updated_at,
         }
     }
 }

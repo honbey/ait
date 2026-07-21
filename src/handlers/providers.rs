@@ -5,7 +5,8 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use chrono::Utc;
+use chrono::serde::ts_seconds;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use strum::{EnumMessage, IntoEnumIterator};
 
@@ -26,8 +27,10 @@ pub struct ProviderResponse {
     base_url: String,
     api_key: Option<String>,
     enabled: bool,
-    created_at: i64,
-    updated_at: i64,
+    #[serde(with = "ts_seconds")]
+    created_at: DateTime<Utc>,
+    #[serde(with = "ts_seconds")]
+    updated_at: DateTime<Utc>,
 }
 
 impl From<Provider> for ProviderResponse {
@@ -42,8 +45,8 @@ impl From<Provider> for ProviderResponse {
                 .as_ref()
                 .map(|k| crate::db::models::mask_api_key(k)),
             enabled: p.enabled,
-            created_at: p.created_at.timestamp(),
-            updated_at: p.updated_at.timestamp(),
+            created_at: p.created_at,
+            updated_at: p.updated_at,
         }
     }
 }
