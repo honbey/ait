@@ -60,8 +60,8 @@ pub(crate) async fn proxy_non_streamed(
         start.elapsed().as_millis()
     );
     let response = state.http_client.execute(request).await.map_err(|e| {
-        let msg = format!("Failed to connect to provider '{}': {}", provider.name, e);
-        AitError::upstream_error(502, msg).into_response()
+        tracing::warn!("Failed to connect to provider '{}': {}", provider.name, e);
+        AitError::upstream_error(502, "upstream request failed").into_response()
     })?;
     trace!(
         model = model_name,
@@ -94,7 +94,10 @@ pub(crate) async fn proxy_non_streamed(
     let bytes = tokio::time::timeout(timeout, response.bytes())
         .await
         .map_err(|_| AitError::upstream_error(408, "upstream read timeout").into_response())?
-        .map_err(|e| AitError::upstream_error(502, e.to_string()).into_response())?;
+        .map_err(|e| {
+            tracing::warn!("Upstream body read error: {}", e);
+            AitError::upstream_error(502, "upstream request failed").into_response()
+        })?;
     trace!(
         model = model_name,
         body_size = bytes.len(),
@@ -166,10 +169,10 @@ pub(crate) async fn proxy_streamed(
         "proxy_streamed: execute start"
     );
     let response = state.http_client.execute(request).await.map_err(|e| {
+        tracing::warn!("Failed to connect to provider: {}", e);
         guard.event.error_message = Some(e.to_string());
         guard.finalize(&UsageTokens::default(), "502");
-        AitError::upstream_error(502, format!("Failed to connect to provider: {}", e))
-            .into_response()
+        AitError::upstream_error(502, "upstream request failed").into_response()
     })?;
     trace!(
         model = base_event.model_name,

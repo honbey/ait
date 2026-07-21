@@ -22,16 +22,9 @@ pub(crate) async fn check_ssrf(
         .host_str()
         .ok_or_else(|| AitError::upstream_error(502, "upstream request failed").into_response())?;
 
-    let ips = resolve_with_cache(host, dns_cache).await.map_err(|_| {
-        AitError::upstream_error(
-            502,
-            format!(
-                "Failed to connect to provider '{}': connection refused",
-                provider_name
-            ),
-        )
-        .into_response()
-    })?;
+    let ips = resolve_with_cache(host, dns_cache)
+        .await
+        .map_err(|_| AitError::upstream_error(502, "upstream request failed").into_response())?;
 
     for ip in &ips {
         if !is_allowed(ip, allowed_cidrs) {
