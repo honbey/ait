@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -7,14 +6,12 @@ use std::sync::{
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 thread_local! {
     static ECHARTS_READY: RefCell<Option<js_sys::Promise>> = const { RefCell::new(None) };
-    static CHART_CACHE: RefCell<HashMap<&'static str, Chart>> = RefCell::new(HashMap::new());
 }
 
 #[derive(Clone)]
@@ -24,6 +21,18 @@ impl Chart {
     pub fn new(dom: &web_sys::HtmlElement) -> Self {
         let echarts =
             js_sys::Reflect::get(&js_sys::global(), &"echarts".into()).expect("echarts not found");
+
+        let get_instance: js_sys::Function = js_sys::Reflect::get(&echarts, &"getInstanceByDom".into())
+            .expect("echarts.getInstanceByDom not found")
+            .unchecked_into();
+        if let Some(existing) = get_instance
+            .call1(&JsValue::UNDEFINED, dom)
+            .ok()
+            .filter(|v| !v.is_undefined() && !v.is_null())
+        {
+            return Chart(existing);
+        }
+
         let init: js_sys::Function = js_sys::Reflect::get(&echarts, &"init".into())
             .expect("echarts.init not found")
             .unchecked_into();
@@ -45,6 +54,13 @@ impl Chart {
             .expect("chart.dispose not found")
             .unchecked_into();
         let _ = dispose.call0(&self.0);
+    }
+
+    pub fn resize(&self) {
+        let resize: js_sys::Function = js_sys::Reflect::get(&self.0, &"resize".into())
+            .expect("chart.resize not found")
+            .unchecked_into();
+        let _ = resize.call0(&self.0);
     }
 }
 
@@ -83,67 +99,109 @@ async fn ensure_echarts_loaded() -> bool {
             .clone()
     });
 
-    JsFuture::from(promise).await.is_ok()
+    let ok = JsFuture::from(promise).await.is_ok();
+    if !ok {
+        ECHARTS_READY.with(|cell| *cell.borrow_mut() = None);
+    }
+    ok
 }
 
-fn get_chart_element(id: &str) -> Option<web_sys::HtmlElement> {
-    web_sys::window()?
-        .document()?
-        .get_element_by_id(id)?
-        .dyn_into::<web_sys::HtmlElement>()
-        .ok()
-}
-
-pub fn use_echarts(id: &'static str) -> (RwSignal<Option<Chart>>, Arc<AtomicBool>) {
+pub fn use_chart(node: NodeRef<leptos::html::Div>) -> RwSignal<Option<Chart>> {
     let chart: RwSignal<Option<Chart>> = RwSignal::new(None);
-    let mounted = Arc::new(AtomicBool::new(true));
+    let loading = Arc::new(AtomicBool::new(false));
+    let alive = Arc::new(AtomicBool::new(true));
+    let observer = StoredValue::new_local(None::<web_sys::ResizeObserver>);
 
-    // Restore cached chart if available (component re-render path)
-    if let Some(cached) = CHART_CACHE.with(|c| c.borrow().get(id).cloned()) {
-        chart.set(Some(cached));
-    }
+    Effect::new({
+        let loading = loading.clone();
+        let alive = alive.clone();
 
-    on_cleanup({
-        let mounted = mounted.clone();
-        move || {
-            mounted.store(false, Ordering::Relaxed);
-            if let Some(c) = chart.get_untracked() {
-                c.dispose();
+        move |_| {
+            let Some(el) = node.get() else { return };
+            if observer.get_value().is_some() {
+                return;
             }
-            CHART_CACHE.with(|c| c.borrow_mut().remove(id));
+            if loading.load(Ordering::Relaxed) {
+                return;
+            }
+
+            let loading_cb = loading.clone();
+            let alive_cb = alive.clone();
+            let cb_el = el.clone();
+            let chart_cb = chart;
+
+            let cb = Closure::<dyn FnMut(Vec<web_sys::ResizeObserverEntry>, web_sys::ResizeObserver)>::new(
+                move |_entries: Vec<web_sys::ResizeObserverEntry>, _observer: web_sys::ResizeObserver| {
+                    if cb_el.offset_width() == 0 {
+                        return;
+                    }
+
+                    if let Some(c) = chart_cb.get_untracked() {
+                        c.resize();
+                    } else if !loading_cb.load(Ordering::Relaxed) {
+                        loading_cb.store(true, Ordering::Relaxed);
+                        spawn_local({
+                            let cb_el = cb_el.clone();
+                            let loading_cb = loading_cb.clone();
+                            let alive_cb = alive_cb.clone();
+                            async move {
+                                let loaded = ensure_echarts_loaded().await;
+                                if loaded {
+                                    if alive_cb.load(Ordering::Relaxed) {
+                                        let c = Chart::new(&cb_el);
+                                        chart_cb.set(Some(c));
+                                    } else {
+                                        let c = Chart::new(&cb_el);
+                                        c.dispose();
+                                    }
+                                } else {
+                                    loading_cb.store(false, Ordering::Relaxed);
+                                }
+                            }
+                        });
+                    }
+                },
+            );
+
+            let f: &js_sys::Function = cb.as_ref().unchecked_ref::<js_sys::Function>();
+            let ro = web_sys::ResizeObserver::new(f).expect("ResizeObserver::new failed");
+            let el_ref: &web_sys::Element = el.as_ref();
+            ro.observe(el_ref);
+            observer.set_value(Some(ro));
+            cb.forget();
+
+            if el.offset_width() > 0 && chart.get_untracked().is_none() && !loading.load(Ordering::Relaxed) {
+                loading.store(true, Ordering::Relaxed);
+                let loading = loading.clone();
+                let alive = alive.clone();
+                let el_init = el.clone();
+                spawn_local(async move {
+                    let loaded = ensure_echarts_loaded().await;
+                    if loaded {
+                        if alive.load(Ordering::Relaxed) {
+                            let c = Chart::new(&el_init);
+                            chart.set(Some(c));
+                        } else {
+                            let c = Chart::new(&el_init);
+                            c.dispose();
+                        }
+                    } else {
+                        loading.store(false, Ordering::Relaxed);
+                    }
+                });
+            }
         }
     });
 
-    (chart, mounted)
-}
-
-pub fn init_or_show_chart(
-    id: &'static str,
-    chart: RwSignal<Option<Chart>>,
-    mounted: Arc<AtomicBool>,
-    option: JsValue,
-) {
-    // Fast path: chart already cached — sync setOption
-    if let Some(cached) = CHART_CACHE.with(|c| c.borrow().get(id).cloned()) {
-        cached.set_option(&option);
-        chart.set(Some(cached));
-        return;
-    }
-
-    // Slow path: first init
-    spawn_local(async move {
-        if !ensure_echarts_loaded().await || !mounted.load(Ordering::Relaxed) {
-            return;
+    on_cleanup(move || {
+        alive.store(false, Ordering::Relaxed);
+        if let Some(ro) = observer.get_value() {
+            ro.disconnect();
         }
-        if let Some(el) = get_chart_element(id) {
-            let c = Chart::new(&el);
-            c.set_option(&option);
-            if mounted.load(Ordering::Relaxed) {
-                chart.set(Some(c.clone()));
-                CHART_CACHE.with(|cache| cache.borrow_mut().insert(id, c));
-            } else {
-                c.dispose();
-            }
+        if let Some(c) = chart.get_untracked() {
+            c.dispose();
         }
     });
+
+    chart
 }

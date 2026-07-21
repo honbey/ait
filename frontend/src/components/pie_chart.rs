@@ -69,13 +69,18 @@ fn build_pie_option(data: &[PieData], dark: bool) -> JsValue {
 }
 
 #[component]
-pub fn PieChart(id: &'static str, data: Vec<PieData>) -> impl IntoView {
-    let dark = use_context::<RwSignal<bool>>()
-        .map(|d| d.get_untracked())
-        .unwrap_or(false);
-    let (chart, mounted) = echarts::use_echarts(id);
-    let option = build_pie_option(&data, dark);
-    echarts::init_or_show_chart(id, chart, mounted, option);
+pub fn PieChart(id: &'static str, data: Signal<Vec<PieData>>) -> impl IntoView {
+    let node = NodeRef::<leptos::html::Div>::new();
+    let chart = echarts::use_chart(node);
+    let dark = use_context::<RwSignal<bool>>();
 
-    view! { <div id=id class="h-64 w-full"></div> }
+    Effect::new(move || {
+        let dark = dark.map(|d| d.get()).unwrap_or(false);
+        let option = build_pie_option(&data.get(), dark);
+        if let Some(c) = chart.get() {
+            c.set_option(&option);
+        }
+    });
+
+    view! { <div id=id node_ref=node class="h-64 w-full"></div> }
 }
