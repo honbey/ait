@@ -123,6 +123,16 @@ fn validate_base_url(url: &str) -> Result<reqwest::Url, AitError> {
     if parsed.host_str().is_none() {
         return Err(AitError::bad_request("base_url must include a host"));
     }
+    let host_start = url.find("://").map(|i| i + 3).unwrap_or(0);
+    let host_end = url[host_start..]
+        .find(['/', ':'])
+        .unwrap_or(url.len() - host_start);
+    let host = &url[host_start..host_start + host_end];
+    if !host.is_empty() && host.chars().all(|c| c.is_ascii_digit()) {
+        return Err(AitError::bad_request(
+            "base_url host cannot be purely numeric",
+        ));
+    }
     Ok(parsed)
 }
 
