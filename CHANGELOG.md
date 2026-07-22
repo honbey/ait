@@ -1,5 +1,52 @@
 # 更新日志
 
+## [v0.1.5] - 2026-07-22
+
+### 新增功能
+
+- **SSE 空闲超时** - 流式响应超时返回 504，防止挂起的流占用资源
+- **base_url 安全校验** - 创建/更新 provider 时校验 URL 格式并预检 SSRF
+- **端点类型校验** - 按 provider type 拒绝不支持的端点
+- **会话自动续期** - 活跃访问时自动续期 session 过期时间
+- **run_blocking 超时保护** - 30s 超时防止阻塞任务卡死
+
+### 优化
+
+- **死锁修复** - DashMap 读锁在 .await 前释放，防止自死锁
+- **代理**
+  - body 以 owned value 传递到 build_request 消除 clone
+  - 提取 collect_x_headers 和 redirect_error 公共辅助函数
+  - body_len 估算替代 tokenizer
+- **缓存**
+  - 命中时续期 TTL + 容量驱逐
+  - 精确失效替代 clear() 全量清除
+- **前端**
+  - AuthStatus 三态枚举替代 Option\<bool\>
+  - 骨架屏与实际页面布局对齐
+  - keyed diff patch 替代 clone_from 全量同步
+  - ECharts 持久化组件 + ResizeObserver 优化生命周期
+  - 提取 FormModalShell / use_page_title 消除重复代码
+  - 硬编码 CSS 类提取到 style.rs 常量
+  - 分页器重新设计为紧凑布局
+  - 日志筛选表单添加 id/for 无障碍属性
+  - 本地时区感知的 UTC 时间戳计算
+
+### 修复
+
+- **CORS** - 策略收紧
+- **数据库** - insert_model / insert_api_key 包裹 BEGIN IMMEDIATE
+- **上游错误** - 清理 proxy 和 SSRF 中的错误信息，UTF-8 安全截断
+- **输入验证** - provider / model / apikey 字符串字段验证，拒绝纯数字 host
+- **路由** - 未注册路由返回 404 而非 SPA fallback
+- **HTTP 状态码** - DbError 映射正确状态码，创建返回 201，删除不存在返回 404
+- **时间戳** - ProviderResponse / ModelResponse 时间戳类型对齐
+- **前端** - Action value effects 防过期重复触发，创建后 mask API key，401 清除缓存
+
+### Chore
+
+- 移除 llama.cpp reasoning_effort 映射
+- i18n 清理未使用 key，排序统一
+
 ## [v0.1.4] - 2026-06-30
 
 ### 新增功能
