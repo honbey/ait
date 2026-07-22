@@ -1,5 +1,5 @@
-use crate::db::{Database, Model, Provider, ProviderType, Session, User};
-use chrono::{Duration, Utc};
+use crate::db::{Database, Model, Provider, ProviderType, User};
+use chrono::Utc;
 use tempfile::TempDir;
 
 pub fn create_test_db(max_api_keys: u64) -> (Database, TempDir) {
@@ -42,23 +42,5 @@ pub fn create_test_model(name: &str, provider_id: &str) -> Model {
         enabled: true,
         created_at: Utc::now(),
         updated_at: Utc::now(),
-    }
-}
-
-pub fn create_test_session(username: &str, ttl_secs: i64) -> Session {
-    Session {
-        session_key: uuid::Uuid::new_v4().to_string(),
-        username: username.to_string(),
-        created_at: Utc::now(),
-        expires_at: Utc::now() + Duration::seconds(ttl_secs),
-    }
-}
-
-pub fn create_expired_session(username: &str) -> Session {
-    Session {
-        session_key: uuid::Uuid::new_v4().to_string(),
-        username: username.to_string(),
-        created_at: Utc::now() - Duration::hours(2),
-        expires_at: Utc::now() - Duration::hours(1),
     }
 }

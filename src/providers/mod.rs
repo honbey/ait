@@ -25,7 +25,7 @@ pub trait UpstreamProvider: Send + Sync {
     async fn build_request(
         &self,
         client: &Client,
-        body: &serde_json::Value,
+        body: serde_json::Value,
         stream: bool,
         upstream_model: &str,
         upstream_path: &str,

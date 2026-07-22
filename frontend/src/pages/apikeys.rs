@@ -7,18 +7,19 @@ use crate::api::{ApiKey, ApiKeyStoreFields};
 use crate::auth::AuthContext;
 
 use crate::components::error_display::{ErrorCard, ErrorText};
-use crate::components::modal::{DeleteConfirmModal, ModalShell};
+use crate::components::modal::{DeleteConfirmModal, FormModalShell, ModalShell};
 use crate::components::skeleton::table_skeleton;
 use crate::components::style::{
-    CLASS_BTN_CANCEL, CLASS_BTN_PRIMARY, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE_MONO,
-    CLASS_DETAIL_VALUE_PLAIN, CLASS_DETAIL_VALUE_TAG, CLASS_FORM_FOOTER, CLASS_ICON_BTN,
-    CLASS_INPUT, CLASS_LABEL, CLASS_PAGE_TITLE,
+    CLASS_BORDER_B, CLASS_BTN_PRIMARY, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE_MONO,
+    CLASS_DETAIL_VALUE_PLAIN, CLASS_DETAIL_VALUE_TAG, CLASS_ICON_BTN, CLASS_INPUT, CLASS_LABEL,
+    CLASS_PAGE_TITLE, CLASS_TEXT_MUTED,
 };
 use crate::components::table::{
-    DataTableCard, DetailCloseButton, DetailRow, EntityModal, SubmitButton, ToggleField,
-    status_badge, timestamp_str,
+    DataTableCard, DetailCloseButton, DetailRow, EntityModal, ToggleField, status_badge,
+    timestamp_str,
 };
 use crate::components::toast::use_toast;
+use crate::components::use_page_title;
 use crate::time_utils::{date_str_to_ts, ts_to_datetime_str};
 use crate::{t, tr, trs, ts};
 
@@ -48,10 +49,8 @@ fn expires_at_display(expires_at: Option<i64>) -> String {
 }
 
 #[component]
-pub fn ApiKeyPage() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(ApiKey)));
-    }
+pub fn ApiKeysPage() -> impl IntoView {
+    use_page_title(&format!("Ait - {}", ts!(ApiKey)));
     let modal = RwSignal::new(ApiKeyModal::Closed);
     let state = Store::new(ApiKeysStore::default());
     let auth = use_context::<AuthContext>().expect("AuthContext not provided");
@@ -71,11 +70,8 @@ pub fn ApiKeyPage() -> impl IntoView {
     });
 
     let _sync_store = Effect::new(move |_| match api_keys_rsc.get() {
-        Some(Ok(ref items)) => {
-            let items_field = state.items();
-            let mut guard = items_field.write();
-            guard.clone_from(items);
-            drop(guard);
+        Some(Ok(items)) => {
+            state.items().patch(items);
             state.error().set(None);
         }
         Some(Err(ref e)) => state.error().set(Some(e.to_string())),
@@ -101,25 +97,31 @@ pub fn ApiKeyPage() -> impl IntoView {
                             <div class="overflow-x-auto">
                                 <table class="w-full text-sm">
                                     <thead>
-                                        <tr class="border-b border-gray-100 dark:border-gray-700">
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(Name)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(ApiKey)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(ExpiresAt)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(TableStatus)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(UpdatedAt)}
-                                            </th>
-                                            <th class="px-6 py-3 text-center text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(Actions)}
-                                            </th>
+                                        <tr class=CLASS_BORDER_B>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(Name)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(ApiKey)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(ExpiresAt)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(TableStatus)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(UpdatedAt)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-center {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(Actions)}</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -136,9 +138,10 @@ pub fn ApiKeyPage() -> impl IntoView {
                                                             {move || k.name().get()}
                                                         </td>
                                                         <td class="px-6 py-4">
-                                                            <span class="font-mono text-xs text-gray-500 dark:text-gray-400">
-                                                                {k.key().get()}
-                                                            </span>
+                                                            <span class=format!(
+                                                                "font-mono text-xs {}",
+                                                                CLASS_TEXT_MUTED,
+                                                            )>{k.display().get()}</span>
                                                         </td>
                                                         <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
                                                             {move || expires_at_display(k.expires_at().get())}
@@ -233,17 +236,19 @@ pub fn ApiKeyPage() -> impl IntoView {
                                 {t!(ApiKeyRawKeyHint)}
                             </p>
                             <div>
-                                <label class="text-sm text-gray-500 dark:text-gray-400">
-                                    {t!(ApiKeyName)}
-                                </label>
+                                <label class=format!(
+                                    "text-sm {}",
+                                    CLASS_TEXT_MUTED,
+                                )>{t!(ApiKeyName)}</label>
                                 <p class="text-gray-900 dark:text-gray-100 font-medium mt-0.5">
                                     {raw_name.clone()}
                                 </p>
                             </div>
                             <div>
-                                <label class="text-sm text-gray-500 dark:text-gray-400">
-                                    {t!(ApiKeyKey)}
-                                </label>
+                                <label class=format!(
+                                    "text-sm {}",
+                                    CLASS_TEXT_MUTED,
+                                )>{t!(ApiKeyKey)}</label>
                                 <div class="flex items-center gap-2 mt-0.5">
                                     <div class="flex-1 bg-gray-100 dark:bg-gray-700 px-3 py-2 rounded-lg text-sm font-mono break-all text-gray-800 dark:text-gray-200 select-all">
                                         {raw.clone()}
@@ -414,31 +419,44 @@ fn ApiKeyFormModal(
     });
 
     let on_submitted = on_close.clone();
+    let consumed = RwSignal::new(false);
 
     Effect::new(move |_| {
-        if let Some(Ok(api_key)) = save_action.value().get() {
-            if let Some(field) = edit_model {
-                field.patch(api_key);
-            } else {
-                created_raw_key.set(Some((api_key.key.clone(), api_key.name.clone())));
-                state.items().write().push(api_key);
-            }
-            let action_label = if is_edit {
-                ts!(ActionUpdated)
-            } else {
-                ts!(ActionCreated)
-            };
-            toast.success(trs!(
-                EntityAction,
-                &[("entity", &ts!(ApiKey)), ("action", &action_label)]
-            ));
-            on_submitted();
+        if save_action.pending().get() {
+            consumed.set(false);
+            return;
         }
-    });
-
-    Effect::new(move |_| {
-        if let Some(Err(e)) = save_action.value().get() {
-            form_error.set(e);
+        if consumed.get_untracked() {
+            return;
+        }
+        match save_action.value().get() {
+            Some(Ok(api_key)) => {
+                consumed.set(true);
+                if let Some(field) = edit_model {
+                    field.patch(api_key);
+                } else {
+                    created_raw_key.set(Some((api_key.display.clone(), api_key.name.clone())));
+                    let mut masked = api_key;
+                    let k = masked.display.clone();
+                    masked.display = format!("{}******{}", &k[..6], &k[k.len() - 3..]);
+                    state.items().write().push(masked);
+                }
+                let action_label = if is_edit {
+                    ts!(ActionUpdated)
+                } else {
+                    ts!(ActionCreated)
+                };
+                toast.success(trs!(
+                    EntityAction,
+                    &[("entity", &ts!(ApiKey)), ("action", &action_label)]
+                ));
+                on_submitted();
+            }
+            Some(Err(e)) => {
+                consumed.set(true);
+                form_error.set(e);
+            }
+            None => {}
         }
     });
 
@@ -470,51 +488,40 @@ fn ApiKeyFormModal(
     };
 
     view! {
-        <ModalShell on_close=on_close.clone() title=title>
-            <form on:submit=on_submit class="space-y-4">
-                <div>
-                    <label for="form-name" class=CLASS_LABEL>
-                        {t!(ApiKeyName)}
-                    </label>
-                    <input
-                        id="form-name"
-                        type="text"
-                        class=CLASS_INPUT
-                        placeholder=ts!(ApiKeyName)
-                        prop:value=name
-                        on:input=move |ev| name.set(event_target_value(&ev))
-                    />
-                </div>
+        <FormModalShell on_close=on_close.clone() title=title on_submit pending is_edit form_error>
+            <div>
+                <label for="form-name" class=CLASS_LABEL>
+                    {t!(ApiKeyName)}
+                </label>
+                <input
+                    id="form-name"
+                    type="text"
+                    class=CLASS_INPUT
+                    placeholder=ts!(ApiKeyName)
+                    prop:value=name
+                    on:input=move |ev| name.set(event_target_value(&ev))
+                />
+            </div>
 
-                <div>
-                    <label for="form-expires" class=CLASS_LABEL>
-                        {t!(ExpiresAt)}
-                    </label>
-                    <input
-                        id="form-expires"
-                        type="datetime-local"
-                        class=CLASS_INPUT
-                        prop:value=expires_date
-                        disabled=move || clear_expiry.get()
-                        on:input=move |ev| expires_date.set(event_target_value(&ev))
-                    />
-                </div>
+            <div>
+                <label for="form-expires" class=CLASS_LABEL>
+                    {t!(ExpiresAt)}
+                </label>
+                <input
+                    id="form-expires"
+                    type="datetime-local"
+                    class=CLASS_INPUT
+                    prop:value=expires_date
+                    disabled=move || clear_expiry.get()
+                    on:input=move |ev| expires_date.set(event_target_value(&ev))
+                />
+            </div>
 
-                <ToggleField id="form-clear-expiry" signal=clear_expiry label=ts!(NeverExpires) />
-                <Show when=move || is_edit>
-                    <ToggleField id="form-enabled" signal=enabled label=ts!(StatusEnabled) />
-                </Show>
-
-                <ErrorText msg=form_error />
-
-                <div class=CLASS_FORM_FOOTER>
-                    <button type="button" class=CLASS_BTN_CANCEL on:click=move |_| on_close()>
-                        {t!(Cancel)}
-                    </button>
-                    <SubmitButton is_edit=is_edit pending=pending />
-                </div>
-            </form>
-        </ModalShell>
+            <ToggleField id="form-clear-expiry" signal=clear_expiry label=ts!(NeverExpires) />
+            <Show when=move || is_edit>
+                <ToggleField id="form-enabled" signal=enabled label=ts!(StatusEnabled) />
+            </Show>
+        </FormModalShell>
     }
 }
 
@@ -525,7 +532,7 @@ fn ApiKeyDetailModal(
 ) -> impl IntoView {
     let key_id = key.id().get();
     let key_name = key.name().get();
-    let key_value = key.key().get();
+    let key_value = key.display().get();
     let key_enabled = key.enabled().get();
     let key_created = key.created_at().get();
     let key_updated = key.updated_at().get();

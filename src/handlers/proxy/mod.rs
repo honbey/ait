@@ -9,7 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::app::AppState;
 use crate::db::{Model, Provider, ProxyEvent, SessionUser};
@@ -21,46 +21,64 @@ use crate::ssrf;
 mod exec;
 mod guard;
 mod sse;
-mod tokenizer;
 
 use exec::{proxy_non_streamed, proxy_streamed};
 use guard::{ProxyLogGuard, UsageTokens};
-use tokenizer::count_prompt_tokens;
 
 pub async fn chat_completions(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Extension(client_ip): Extension<Option<IpAddr>>,
-    Json(body): Json<serde_json::Value>,
+    body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, client_ip, body, "/chat/completions").await
+    let body_len = body.len();
+    let body = serde_json::from_slice(&body)
+        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    proxy_request(
+        state,
+        session,
+        client_ip,
+        body,
+        body_len,
+        "/chat/completions",
+    )
+    .await
 }
 
 pub async fn completions(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Extension(client_ip): Extension<Option<IpAddr>>,
-    Json(body): Json<serde_json::Value>,
+    body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, client_ip, body, "/completions").await
+    let body_len = body.len();
+    let body = serde_json::from_slice(&body)
+        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    proxy_request(state, session, client_ip, body, body_len, "/completions").await
 }
 
 pub async fn embeddings(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Extension(client_ip): Extension<Option<IpAddr>>,
-    Json(body): Json<serde_json::Value>,
+    body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, client_ip, body, "/embeddings").await
+    let body_len = body.len();
+    let body = serde_json::from_slice(&body)
+        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    proxy_request(state, session, client_ip, body, body_len, "/embeddings").await
 }
 
 pub async fn responses(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
     Extension(client_ip): Extension<Option<IpAddr>>,
-    Json(body): Json<serde_json::Value>,
+    body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    proxy_request(state, session, client_ip, body, "/responses").await
+    let body_len = body.len();
+    let body = serde_json::from_slice(&body)
+        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    proxy_request(state, session, client_ip, body, body_len, "/responses").await
 }
 
 pub async fn health(State(state): State<AppState>) -> AxumJson<serde_json::Value> {
@@ -143,6 +161,7 @@ pub async fn proxy_request(
     session: SessionUser,
     client_ip: Option<IpAddr>,
     body: serde_json::Value,
+    body_len: usize,
     upstream_path: &str,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     let start = Instant::now();
@@ -150,6 +169,8 @@ pub async fn proxy_request(
     let model_name = body.get("model").and_then(|m| m.as_str()).ok_or_else(|| {
         AitError::bad_request("Missing 'model' field in request body").into_response()
     })?;
+
+    trace!(model_name, "proxy_request: start");
 
     let (model, provider) = {
         async fn resolve(
@@ -184,31 +205,56 @@ pub async fn proxy_request(
             }
         }
 
-        let needs_resolve = state
-            .model_cache
-            .get(model_name)
-            .is_none_or(|cached| cached.1.elapsed() >= CACHE_TTL);
-
-        if needs_resolve {
-            resolve(&state, model_name).await?
-        } else {
-            let cached = state.model_cache.get(model_name).unwrap();
-            let (ref resolved, _) = *cached;
-            match resolved {
-                Some((m, p)) => (m.clone(), p.clone()),
-                None => {
-                    return Err(not_found(format!(
-                        "Model '{}' not found or disabled",
-                        model_name
-                    )));
-                }
+        let cached = state.model_cache.get_mut(model_name).and_then(|mut entry| {
+            if entry.1.elapsed() < CACHE_TTL {
+                entry.1 = Instant::now();
+                Some(entry.0.clone())
+            } else {
+                None
             }
+        });
+        match cached {
+            Some(Some((m, p))) => (m, p),
+            Some(None) => {
+                return Err(not_found(format!(
+                    "Model '{}' not found or disabled",
+                    model_name
+                )));
+            }
+            None => resolve(&state, model_name).await?,
         }
     };
 
-    let upstream = match state.provider_cache.get(&provider.id) {
-        Some(cached) if cached.1.elapsed() < CACHE_TTL => cached.0.clone(),
-        _ => {
+    trace!(
+        model = model_name,
+        provider = provider.name,
+        "proxy_request: model resolved, elapsed={}ms",
+        start.elapsed().as_millis()
+    );
+
+    if !provider.provider_type.supports_endpoint(upstream_path) {
+        return Err(AitError::bad_request(format!(
+            "provider type '{}' does not support endpoint '{}'",
+            provider.provider_type.as_ref(),
+            upstream_path
+        ))
+        .into_response());
+    }
+
+    let cached_upstream = state
+        .provider_cache
+        .get_mut(&provider.id)
+        .and_then(|mut entry| {
+            if entry.1.elapsed() < CACHE_TTL {
+                entry.1 = Instant::now();
+                Some(entry.0.clone())
+            } else {
+                None
+            }
+        });
+    let upstream = match cached_upstream {
+        Some(upstream) => upstream,
+        None => {
             let upstream = create_provider(&provider, state.http_client.clone());
             state
                 .provider_cache
@@ -226,10 +272,12 @@ pub async fn proxy_request(
         .unwrap_or(false)
         && state.config.proxy.stream;
 
+    let prompt_tokens = count_prompt_tokens(body_len);
+
     let request = upstream
         .build_request(
             &state.http_client,
-            &body,
+            body,
             stream,
             &model.upstream_model,
             upstream_path,
@@ -257,9 +305,14 @@ pub async fn proxy_request(
     let upstream_model = model.upstream_model.clone();
     let provider_type = provider.provider_type.as_ref().to_string();
     let client_ip_str = client_ip.map(|ip| ip.to_string());
-    let prompt_tokens = count_prompt_tokens(&body);
 
     if stream {
+        trace!(
+            model = model_name,
+            provider = provider_name,
+            "proxy_request: -> streamed, elapsed={}ms",
+            start.elapsed().as_millis()
+        );
         return proxy_streamed(
             state,
             request,
@@ -305,7 +358,14 @@ pub async fn proxy_request(
         start,
     );
 
-    match proxy_non_streamed(
+    trace!(
+        model = model_name,
+        provider = provider_name,
+        "proxy_request: -> non-streamed, elapsed={}ms",
+        start.elapsed().as_millis()
+    );
+
+    let result = proxy_non_streamed(
         state.clone(),
         request,
         upstream,
@@ -313,18 +373,42 @@ pub async fn proxy_request(
         &provider,
         start,
     )
-    .await
-    {
+    .await;
+
+    match result {
         Ok((resp, usage, ttfb, body_size)) => {
+            trace!(
+                model = model_name,
+                provider = provider_name,
+                "proxy_request: non-streamed done, ttfb={}ms, elapsed={}ms",
+                ttfb,
+                start.elapsed().as_millis()
+            );
             guard.event.time_to_first_token_ms = Some(ttfb);
             guard.event.response_body_size = Some(body_size as i64);
             guard.finalize(&usage, "200");
             Ok(resp.into_response())
         }
         Err(e) => {
+            trace!(
+                model = model_name,
+                provider = provider_name,
+                "proxy_request: non-streamed error, elapsed={}ms",
+                start.elapsed().as_millis()
+            );
             guard.event.error_message = Some(e.1.0.message.clone());
             guard.finalize(&UsageTokens::default(), &e.0.as_u16().to_string());
             Err(e)
         }
+    }
+}
+
+/// Normal paths will be overwritten by the upstream usage precise value;
+/// this fallback value is only used if the connection is interrupted.
+fn count_prompt_tokens(body_len: usize) -> Option<i64> {
+    if body_len == 0 {
+        None
+    } else {
+        Some(body_len as i64 / 3)
     }
 }

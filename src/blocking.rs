@@ -1,3 +1,6 @@
+use crate::error::BlockingError;
+use tokio::time::{Duration, timeout};
+
 /// Run a blocking operation (DB IO, bcrypt hashing) on a dedicated blocking
 /// thread so it does not stall the tokio async executor.
 ///
@@ -7,12 +10,15 @@
 /// Calling either directly on a tokio worker thread stalls every other task
 /// on that thread (including in-flight proxy streams).
 ///
-/// Returns `Err(JoinError)` if the blocking task panicked. Callers should
-/// convert this to an appropriate error response (e.g., `internal_error`).
-pub async fn run_blocking<T, F>(f: F) -> Result<T, tokio::task::JoinError>
+/// Returns `Err(BlockingError::Timeout)` if the task does not complete within
+/// 30 seconds, or `Err(BlockingError::Join)` if the task panicked.
+pub async fn run_blocking<T, F>(f: F) -> Result<T, BlockingError>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    tokio::task::spawn_blocking(f).await
+    timeout(Duration::from_secs(30), tokio::task::spawn_blocking(f))
+        .await
+        .map_err(|_| BlockingError::Timeout)?
+        .map_err(BlockingError::Join)
 }

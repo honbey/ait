@@ -3,12 +3,14 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use chrono::Utc;
+use chrono::serde::ts_seconds;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::db::{AuditEvent, Model, SessionUser};
 use crate::error::{AitError, internal_error, not_found};
+use crate::handlers::{model_name_chars, upstream_model_chars, uuid_chars, validate_string};
 
 // ── Model types ──
 
@@ -20,8 +22,10 @@ pub struct ModelResponse {
     provider_id: String,
     upstream_model: String,
     enabled: bool,
-    created_at: i64,
-    updated_at: i64,
+    #[serde(with = "ts_seconds")]
+    created_at: DateTime<Utc>,
+    #[serde(with = "ts_seconds")]
+    updated_at: DateTime<Utc>,
 }
 
 impl From<Model> for ModelResponse {
@@ -32,8 +36,8 @@ impl From<Model> for ModelResponse {
             provider_id: m.provider_id,
             upstream_model: m.upstream_model,
             enabled: m.enabled,
-            created_at: m.created_at.timestamp(),
-            updated_at: m.updated_at.timestamp(),
+            created_at: m.created_at,
+            updated_at: m.updated_at,
         }
     }
 }
@@ -88,14 +92,29 @@ pub async fn create_model(
     Extension(session): Extension<SessionUser>,
     Json(input): Json<CreateModelRequest>,
 ) -> Result<(StatusCode, Json<ModelResponse>), (StatusCode, Json<AitError>)> {
-    let model: Model = input.into();
+    let name = validate_string(&input.name, "name", 128, model_name_chars)?;
+    let provider_id = validate_string(&input.provider_id, "provider_id", 40, uuid_chars)?;
+    let upstream_model = validate_string(
+        &input.upstream_model,
+        "upstream_model",
+        128,
+        upstream_model_chars,
+    )?;
+    let model = Model {
+        id: String::new(),
+        name,
+        provider_id,
+        upstream_model,
+        enabled: input.enabled,
+        created_at: chrono::DateTime::default(),
+        updated_at: chrono::DateTime::default(),
+    };
     let db = state.db.clone();
     let inserted = crate::run_blocking(move || db.insert_model(model))
         .await
         .map_err(internal_error)?
         .map_err(|e| AitError::from_db_error(e).into_response())?;
 
-    state.model_cache.clear();
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         username: session.username.clone(),
@@ -116,7 +135,7 @@ pub async fn list_models(
     let models = crate::run_blocking(move || db.list_models())
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
     Ok(Json(models.into_iter().map(ModelResponse::from).collect()))
 }
 
@@ -130,7 +149,7 @@ pub async fn get_model(
     let model = crate::run_blocking(move || db.get_model(&name_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?
+        .map_err(|e| AitError::from_db_error(e).into_response())?
         .ok_or_else(|| not_found(format!("Model '{}' not found", name)))?;
 
     Ok(Json(ModelResponse::from(model)))
@@ -143,12 +162,15 @@ pub async fn delete_model(
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
     let db = state.db.clone();
     let name_clone = name.clone();
-    crate::run_blocking(move || db.delete_model(&name_clone))
+    if !crate::run_blocking(move || db.delete_model(&name_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?
+    {
+        return Err(not_found(format!("Model '{}' not found", name)));
+    }
 
-    state.model_cache.clear();
+    state.model_cache.remove(&name);
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         username: session.username.clone(),
@@ -167,21 +189,37 @@ pub async fn update_model(
     Path(name): Path<String>,
     Json(input): Json<UpdateModelRequest>,
 ) -> Result<Json<ModelResponse>, (StatusCode, Json<AitError>)> {
-    let mut updates: Model = input.into();
-    updates.name = name.clone();
+    let model_name = validate_string(&name, "name", 128, model_name_chars)?;
+    let provider_id = input
+        .provider_id
+        .map(|v| validate_string(&v, "provider_id", 40, uuid_chars))
+        .transpose()?;
+    let upstream_model = input
+        .upstream_model
+        .map(|v| validate_string(&v, "upstream_model", 128, upstream_model_chars))
+        .transpose()?;
+    let updates = Model {
+        id: String::new(),
+        name: model_name.clone(),
+        provider_id: provider_id.unwrap_or_default(),
+        upstream_model: upstream_model.unwrap_or_default(),
+        enabled: input.enabled.unwrap_or(true),
+        created_at: chrono::DateTime::default(),
+        updated_at: chrono::DateTime::default(),
+    };
     let db = state.db.clone();
     let model = crate::run_blocking(move || db.update_model(&updates))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
 
-    state.model_cache.clear();
+    state.model_cache.remove(&model_name);
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         username: session.username.clone(),
         action: "update".into(),
         resource: "model".into(),
-        resource_id: name,
+        resource_id: model_name,
         detail: None,
     });
 

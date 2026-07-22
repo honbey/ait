@@ -72,20 +72,18 @@ impl LogManager {
         let (sender, receiver) = mpsc::sync_channel(config.channel_cap as usize);
         let analytics = Analytics::new(conn.try_clone()?, config.analytics_timeout_secs);
 
-        let handle = thread::spawn(move || match conn.try_clone() {
-            Ok(worker_conn) => {
-                if let Err(e) = worker_loop(
-                    receiver,
-                    worker_conn,
-                    flush_batch,
-                    flush_interval,
-                    retention_every,
-                    retention_days,
-                ) {
-                    error!("[logs] worker exited with error: {e}");
-                }
+        let worker_conn = conn.try_clone()?;
+        let handle = thread::spawn(move || {
+            if let Err(e) = worker_loop(
+                receiver,
+                worker_conn,
+                flush_batch,
+                flush_interval,
+                retention_every,
+                retention_days,
+            ) {
+                error!("[logs] worker exited with error: {e}");
             }
-            Err(e) => error!("[logs] failed to clone worker connection: {e}"),
         });
 
         Ok(Self {

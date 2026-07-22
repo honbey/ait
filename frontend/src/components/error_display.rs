@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 
-use crate::components::style::CLASS_FORM_ERROR;
+use crate::components::style::{CLASS_CARD, CLASS_FORM_ERROR};
 use crate::t;
 
 #[component]
@@ -9,7 +9,7 @@ pub fn ErrorCard(
     #[prop(optional)] on_retry: Option<Box<dyn Fn() + 'static>>,
 ) -> impl IntoView {
     view! {
-        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-8">
+        <div class=format!("{} p-8", CLASS_CARD)>
             <div class="text-center py-12">
                 <p class="font-semibold text-gray-900 dark:text-gray-100 mb-2">{t!(LoadFailed)}</p>
                 <p class="text-red-500 mb-4">{message}</p>

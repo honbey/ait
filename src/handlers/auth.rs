@@ -10,7 +10,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, Session, hash_key};
+use crate::db::{AuditEvent, hash_key};
 use crate::error::{AitError, internal_error, unauthorized};
 use crate::middleware::{CACHE_TTL, extract_session_key};
 
@@ -82,20 +82,15 @@ pub async fn login(
         Err(join_err) => return Err(internal_error(join_err)),
     };
 
-    let session_key = generate_session_key();
     let ttl = state.config.auth.session_ttl_secs;
-    let session = Session {
-        session_key: session_key.clone(),
-        username: input.username.clone(),
-        created_at: Utc::now(),
-        expires_at: Utc::now() + chrono::Duration::seconds(ttl as i64),
-    };
+    let expires_at = Utc::now() + chrono::Duration::seconds(ttl as i64);
 
     let db = state.db.clone();
-    crate::run_blocking(move || db.insert_session(session))
+    let username = input.username.clone();
+    let session_key = crate::run_blocking(move || db.insert_session(&username, expires_at))
         .await
         .map_err(internal_error)?
-        .map_err(|_| internal_error("Failed to create session"))?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -161,14 +156,17 @@ pub async fn session_check(
     let session_key = session_key.to_string();
     let hash = hash_key(&session_key);
 
-    if let Some(cached) = state.session_cache.get(&hash) {
-        let (ref user, ref expires_at, ref inserted_at) = *cached;
-        if *expires_at > Utc::now() && inserted_at.elapsed() < CACHE_TTL {
+    if let Some(mut entry) = state.session_cache.get_mut(&hash) {
+        if entry.1 > Utc::now() && entry.2.elapsed() < CACHE_TTL {
+            entry.2 = Instant::now();
+            let user = entry.0.clone();
+            drop(entry);
             return Json(SessionResponse {
                 authenticated: true,
-                username: Some(user.username.clone()),
+                username: Some(user.username),
             });
         }
+        drop(entry);
     }
 
     let db = state.db.clone();
@@ -181,6 +179,14 @@ pub async fn session_check(
             });
         }
     };
+
+    // Fire-and-forget session renewal so active sessions do not expire
+    let db = state.db.clone();
+    let hash_clone = hash.clone();
+    let ttl = state.config.auth.session_ttl_secs;
+    tokio::spawn(async move {
+        let _ = crate::run_blocking(move || db.renew_session(&hash_clone, ttl)).await;
+    });
 
     let user = crate::db::SessionUser {
         username: session.username.clone(),
@@ -195,15 +201,6 @@ pub async fn session_check(
         authenticated: true,
         username: Some(session.username),
     })
-}
-
-fn generate_session_key() -> String {
-    use rand::RngExt;
-    const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let mut rng = rand::rng();
-    (0..32)
-        .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
-        .collect()
 }
 
 fn dummy_hash() -> &'static str {

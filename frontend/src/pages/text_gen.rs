@@ -11,15 +11,14 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::api;
 use crate::components::error_display::{ErrorCard, ErrorText};
-use crate::components::style::{CLASS_INPUT, CLASS_LABEL};
+use crate::components::style::{CLASS_INPUT, CLASS_LABEL, CLASS_TEXT_MUTED};
+use crate::components::use_page_title;
 use crate::{t, trs, ts};
 use gloo_net::http::Request;
 
 #[component]
 pub fn TextGenPage() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(TextGeneration)));
-    }
+    use_page_title(&format!("Ait - {}", ts!(TextGeneration)));
     let models_resource = LocalResource::new(|| async move { api::fetch_models().await });
 
     let api_key: RwSignal<String> = RwSignal::new(String::new());
@@ -55,7 +54,7 @@ pub fn TextGenPage() -> impl IntoView {
         }
         let model = selected_model.get_untracked();
         if model.is_empty() {
-            error.set(ts!(TextGenSelectModel));
+            error.set(ts!(Model));
             return;
         }
 
@@ -192,7 +191,7 @@ pub fn TextGenPage() -> impl IntoView {
 
                                 <div>
                                     <label for="model-select" class=CLASS_LABEL>
-                                        {t!(TextGenSelectModel)}
+                                        {t!(Model)}
                                     </label>
                                     <select
                                         id="model-select"
@@ -280,9 +279,10 @@ pub fn TextGenPage() -> impl IntoView {
                             </div>
 
                             <div class="w-2/3 border-l border-gray-200 dark:border-gray-700 pl-6">
-                                <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
-                                    {t!(TextGenResponse)}
-                                </h3>
+                                <h3 class=format!(
+                                    "text-sm font-medium {} mb-2",
+                                    CLASS_TEXT_MUTED,
+                                )>{t!(TextGenResponse)}</h3>
                                 <Show when=move || response.get().is_some()>
                                     <div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-gray-100 text-sm leading-relaxed whitespace-pre-wrap font-sans overflow-y-auto max-h-[70vh]">
                                         {move || response.get().unwrap_or_default()}

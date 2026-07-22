@@ -3,7 +3,9 @@ use reactive_graph::traits::Write;
 use reactive_stores::{Field, Patch, PatchField};
 
 use crate::components::style::{
-    CLASS_BTN_PRIMARY, CLASS_DETAIL_LABEL, CLASS_DETAIL_VALUE, CLASS_ICON_BTN, CLASS_TOGGLE_LABEL,
+    CLASS_BG_MUTED, CLASS_BORDER_B, CLASS_BTN_PRIMARY, CLASS_CARD, CLASS_DETAIL_LABEL,
+    CLASS_DETAIL_VALUE, CLASS_ICON_BTN, CLASS_PILL_GREEN, CLASS_PILL_RED, CLASS_TEXT_MUTED,
+    CLASS_TOGGLE_LABEL,
 };
 use crate::{t, tr};
 
@@ -16,10 +18,14 @@ pub fn DataTableCard(
     children: Children,
 ) -> impl IntoView {
     view! {
-        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm">
-            <div class="p-6 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
+        <div class=CLASS_CARD>
+            <div class=format!("p-6 {} flex items-center justify-between", CLASS_BORDER_B)>
                 <div class="flex items-center gap-3">
-                    <span class="text-sm text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 px-3 py-1 rounded-full">
+                    <span class=format!(
+                        "text-sm {} {} px-3 py-1 rounded-full",
+                        CLASS_TEXT_MUTED,
+                        CLASS_BG_MUTED,
+                    )>
                         {move || tr!(TotalCount, &[("count", &item_count.get().to_string())])()}
                     </span>
                     <button class=CLASS_ICON_BTN on:click=move |_| on_refresh()>
@@ -42,18 +48,20 @@ pub fn DataTableCard(
 pub fn status_badge(enabled: bool) -> AnyView {
     if enabled {
         view! {
-            <span class="inline-block px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400">
-                {t!(StatusEnabled)}
-            </span>
+            <span class=format!(
+                "inline-block px-2 py-1 rounded-full text-xs font-medium {}",
+                CLASS_PILL_GREEN,
+            )>{t!(StatusEnabled)}</span>
         }
-            .into_any()
+        .into_any()
     } else {
         view! {
-            <span class="inline-block px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400">
-                {t!(StatusDisabled)}
-            </span>
+            <span class=format!(
+                "inline-block px-2 py-1 rounded-full text-xs font-medium {}",
+                CLASS_PILL_RED,
+            )>{t!(StatusDisabled)}</span>
         }
-            .into_any()
+        .into_any()
     }
 }
 
@@ -148,19 +156,30 @@ pub fn attach_save_effect<T, A>(
     A: 'static,
 {
     let action = *action;
+    let consumed = RwSignal::new(false);
     Effect::new(move |_| {
-        if let Some(Ok(model)) = action.value().get() {
-            if let Some(field) = edit_field {
-                field.patch(model);
-            } else {
-                store_items.write().push(model);
-            }
-            (on_success)();
+        if action.pending().get() {
+            consumed.set(false);
+            return;
         }
-    });
-    Effect::new(move |_| {
-        if let Some(Err(e)) = action.value().get() {
-            form_error.set(e);
+        if consumed.get_untracked() {
+            return;
+        }
+        match action.value().get() {
+            Some(Ok(model)) => {
+                consumed.set(true);
+                if let Some(field) = edit_field {
+                    field.patch(model);
+                } else {
+                    store_items.write().push(model);
+                }
+                (on_success)();
+            }
+            Some(Err(e)) => {
+                consumed.set(true);
+                form_error.set(e);
+            }
+            None => {}
         }
     });
 }

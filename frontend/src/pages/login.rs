@@ -3,16 +3,15 @@ use leptos_router::components::{A, Redirect};
 use leptos_router::hooks::use_navigate;
 
 use crate::api;
-use crate::auth::AuthContext;
+use crate::auth::{AuthContext, AuthStatus};
 use crate::components::error_display::ErrorText;
-use crate::components::style::{CLASS_INPUT, CLASS_LABEL};
+use crate::components::style::{CLASS_CARD, CLASS_INPUT, CLASS_LABEL};
+use crate::components::use_page_title;
 use crate::{t, trs, ts};
 
 #[component]
 pub fn LoginPage() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(Login)));
-    }
+    use_page_title(&format!("Ait - {}", ts!(Login)));
     let auth = use_context::<AuthContext>().expect("AuthContext");
 
     let username = RwSignal::new(String::new());
@@ -28,17 +27,28 @@ pub fn LoginPage() -> impl IntoView {
             async move { api::login_api(&u, &p).await.map_err(|e| e.to_string()) }
         });
 
-    Effect::new(move |_| {
-        if let Some(Ok(())) = login_action.value().get() {
-            let u = username.get_untracked();
-            auth.set_logged_in(u);
-            navigate("/console", Default::default());
-        }
-    });
+    let consumed = RwSignal::new(false);
 
     Effect::new(move |_| {
-        if let Some(Err(e)) = login_action.value().get() {
-            error.set(trs!(LoginError, &[("msg", &e)]));
+        if login_action.pending().get() {
+            consumed.set(false);
+            return;
+        }
+        if consumed.get_untracked() {
+            return;
+        }
+        match login_action.value().get() {
+            Some(Ok(())) => {
+                consumed.set(true);
+                let u = username.get_untracked();
+                auth.set_logged_in(u);
+                navigate("/console", Default::default());
+            }
+            Some(Err(e)) => {
+                consumed.set(true);
+                error.set(trs!(LoginError, &[("msg", &e)]));
+            }
+            None => {}
         }
     });
 
@@ -61,15 +71,12 @@ pub fn LoginPage() -> impl IntoView {
     };
 
     view! {
-        <Show when=move || auth_redirect.authenticated.get() == Some(true)>
+        <Show when=move || auth_redirect.authenticated.get() == AuthStatus::Authenticated>
             <Redirect path="/console" />
         </Show>
         <main>
             <div class="min-h-[calc(100vh-3.5rem)] flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-                <form
-                    on:submit=on_submit
-                    class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-8 w-full max-w-md mx-4"
-                >
+                <form on:submit=on_submit class=format!("{} p-8 w-full max-w-md mx-4", CLASS_CARD)>
                     <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6 text-center">
                         {t!(Login)}
                     </h2>

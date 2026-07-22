@@ -10,3 +10,9 @@ pub mod style;
 pub mod table;
 pub mod toast;
 pub mod topbar;
+
+pub fn use_page_title(title: &str) {
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        doc.set_title(title);
+    }
+}

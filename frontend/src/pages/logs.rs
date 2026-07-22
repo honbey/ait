@@ -3,21 +3,23 @@ use leptos::prelude::*;
 use crate::api::{self, PaginatedResponse, ProxyLogEntryResponse};
 use crate::components::error_display::ErrorCard;
 use crate::components::modal::ModalShell;
-use crate::components::skeleton::table_skeleton;
+use crate::components::skeleton::logs_table_skeleton;
 use crate::components::style::{
-    CLASS_BTN_PRIMARY, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE, CLASS_DETAIL_VALUE_MONO,
-    CLASS_DETAIL_VALUE_PLAIN, CLASS_INPUT, CLASS_PAGE_TITLE,
+    CLASS_BORDER_B, CLASS_BTN_PRIMARY, CLASS_CARD, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE,
+    CLASS_DETAIL_VALUE_MONO, CLASS_DETAIL_VALUE_PLAIN, CLASS_INPUT, CLASS_PAGE_TITLE,
+    CLASS_PILL_GREEN, CLASS_PILL_RED, CLASS_TEXT_MUTED,
 };
 use crate::components::table::DetailRow;
 use crate::components::table::timestamp_str;
+use crate::components::use_page_title;
 use crate::time_utils::{date_str_to_ts, ts_to_date_str};
 use crate::{t, ts};
 
 fn latency_pill(latency_s: f64) -> &'static str {
     if latency_s < 3.0 {
-        "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+        CLASS_PILL_GREEN
     } else {
-        "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
+        CLASS_PILL_RED
     }
 }
 
@@ -31,6 +33,8 @@ fn latency_s(ms: i64) -> f64 {
 
 #[component]
 fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) -> impl IntoView {
+    let input_ref = NodeRef::<leptos::html::Input>::new();
+
     let go = move |p: u64| {
         let t = total_signal.get_untracked();
         if p >= 1 && p <= t.div_ceil(per_page).max(1) {
@@ -38,42 +42,39 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
         }
     };
 
+    let on_keydown = move |ev: leptos::ev::KeyboardEvent| {
+        if ev.key() == "Enter" {
+            if let Ok(p) = event_target_value(&ev).parse::<u64>() {
+                go(p);
+            }
+            let _ = input_ref
+                .get_untracked()
+                .map(|el| el.set_value(&page.get_untracked().to_string()));
+        }
+    };
+
+    let on_blur = move |ev: leptos::ev::FocusEvent| {
+        if let Ok(p) = event_target_value(&ev).parse::<u64>() {
+            go(p);
+        }
+        let cur = page.get_untracked();
+        let _ = input_ref
+            .get_untracked()
+            .map(|el| el.set_value(&cur.to_string()));
+    };
+
     move || {
         let t = total_signal.get();
         let total_pages = t.div_ceil(per_page).max(1);
         let cur = page.get();
-
-        let mut items: Vec<u64> = Vec::new();
-        if total_pages <= 7 {
-            for i in 1..=total_pages {
-                items.push(i);
-            }
-        } else {
-            items.push(1);
-            if cur > 3 {
-                items.push(u64::MAX);
-            }
-            let start = if cur > 3 {
-                cur.saturating_sub(1).max(2)
-            } else {
-                2
-            };
-            let end = if cur < total_pages - 2 {
-                (cur + 1).min(total_pages - 1)
-            } else {
-                total_pages - 1
-            };
-            for i in start..=end {
-                items.push(i);
-            }
-            if cur < total_pages - 2 {
-                items.push(u64::MAX);
-            }
-            items.push(total_pages);
-        }
+        let is_first = cur == 1;
+        let is_last = cur == total_pages;
 
         view! {
-            <div class="flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-700 text-sm text-gray-500 dark:text-gray-400">
+            <div class=format!(
+                "flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-700 text-sm {}",
+                CLASS_TEXT_MUTED,
+            )>
                 <div>
                     {move || {
                         let t = total_signal.get();
@@ -95,45 +96,59 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
                     }}
                 </div>
                 <div class="flex items-center gap-1">
-                    <span class="mr-2">
-                        {move || {
-                            crate::i18n::use_i18n()
-                                .t_replace(
-                                    crate::i18n::K::PaginationTotalPages,
-                                    &[
-                                        (
-                                            "pages",
-                                            &total_signal.get().div_ceil(per_page).max(1).to_string(),
-                                        ),
-                                    ],
-                                )
-                        }}
-                    </span>
-                    {move || {
-                        items
-                            .iter()
-                            .map(|&p| {
-                                if p == u64::MAX {
-                                    view! { <span class="px-1">...</span> }.into_any()
-                                } else {
-                                    let is_active = p == cur;
-                                    let cls = if is_active {
-                                        "px-2 py-0.5 text-sm font-medium rounded bg-indigo-600 text-white cursor-pointer"
-                                    } else {
-                                        "px-2 py-0.5 text-sm rounded text-gray-600 dark:text-gray-300 \
-                                 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
-                                    };
-                                    let on_click = move |_| go(p);
-                                    view! {
-                                        <button class=cls on:click=on_click>
-                                            {p}
-                                        </button>
-                                    }
-                                        .into_any()
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                    }}
+                    <button
+                        class=if is_first {
+                            "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                        } else {
+                            "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                        }
+                        disabled=is_first
+                        on:click=move |_| go(1)
+                    >
+                        <i class="fas fa-angles-left"></i>
+                    </button>
+                    <button
+                        class=if is_first {
+                            "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                        } else {
+                            "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                        }
+                        disabled=is_first
+                        on:click=move |_| go(cur - 1)
+                    >
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                    <input
+                        node_ref=input_ref
+                        id="filter-page"
+                        class="w-10 text-center px-1 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 outline-none"
+                        prop:value=move || page.get().to_string()
+                        on:keydown=on_keydown
+                        on:blur=on_blur
+                    />
+                    <span class=format!("text-sm {}", CLASS_TEXT_MUTED)>{" / "}{total_pages}</span>
+                    <button
+                        class=if is_last {
+                            "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                        } else {
+                            "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                        }
+                        disabled=is_last
+                        on:click=move |_| go(cur + 1)
+                    >
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                    <button
+                        class=if is_last {
+                            "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                        } else {
+                            "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                        }
+                        disabled=is_last
+                        on:click=move |_| go(total_pages)
+                    >
+                        <i class="fas fa-angles-right"></i>
+                    </button>
                 </div>
             </div>
         }
@@ -142,9 +157,7 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
 
 #[component]
 pub fn LogsPage() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(LogQuery)));
-    }
+    use_page_title(&format!("Ait - {}", ts!(LogQuery)));
 
     let page = RwSignal::new(1u64);
     let query_trigger = RwSignal::new(0u64);
@@ -153,7 +166,6 @@ pub fn LogsPage() -> impl IntoView {
     let (start_ts, set_start_ts) = signal::<Option<i64>>(None);
     let (end_ts, set_end_ts) = signal::<Option<i64>>(None);
     let (provider_name, set_provider_name) = signal(String::new());
-    let (provider_type, set_provider_type) = signal(String::new());
     let (model_name, set_model_name) = signal(String::new());
     let (api_key_name, set_api_key_name) = signal(String::new());
     let (client_ip, set_client_ip) = signal(String::new());
@@ -174,7 +186,6 @@ pub fn LogsPage() -> impl IntoView {
             let s = start_ts.get_untracked();
             let e = end_ts.get_untracked();
             let pn = provider_name.get_untracked();
-            let pt = provider_type.get_untracked();
             let mn = model_name.get_untracked();
             let ak = api_key_name.get_untracked();
             let ci = client_ip.get_untracked();
@@ -189,7 +200,6 @@ pub fn LogsPage() -> impl IntoView {
                     s,
                     e,
                     if pn.is_empty() { None } else { Some(pn) },
-                    if pt.is_empty() { None } else { Some(pt) },
                     if mn.is_empty() { None } else { Some(mn) },
                     if ak.is_empty() { None } else { Some(ak) },
                     if ci.is_empty() { None } else { Some(ci) },
@@ -214,7 +224,6 @@ pub fn LogsPage() -> impl IntoView {
         set_start_ts.set(None);
         set_end_ts.set(None);
         set_provider_name.set(String::new());
-        set_provider_type.set(String::new());
         set_model_name.set(String::new());
         set_api_key_name.set(String::new());
         set_client_ip.set(String::new());
@@ -246,6 +255,7 @@ pub fn LogsPage() -> impl IntoView {
                 </h1>
                 <div class="flex items-center gap-2 shrink-0">
                     <select
+                        id="filter-source"
                         title=t!(LogSource)
                         disabled
                         class=format!(
@@ -260,13 +270,64 @@ pub fn LogsPage() -> impl IntoView {
                 </div>
             </div>
 
-            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-5 space-y-4">
-                <div class="grid grid-cols-4 gap-3 items-end">
-                    <div>
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                            {t!(StartDate)}
-                        </label>
+            <div class=format!("{} p-5 space-y-4", CLASS_CARD)>
+                <div class="grid grid-cols-8 gap-3 items-end">
+                    <div class="col-span-2">
                         <input
+                            id="filter-provider-name"
+                            type="text"
+                            class=CLASS_INPUT
+                            placeholder=ts!(Providers)
+                            prop:value=move || provider_name.get()
+                            on:input=move |ev| set_provider_name.set(event_target_value(&ev))
+                        />
+                    </div>
+                    <div class="col-span-2">
+                        <input
+                            id="filter-model-name"
+                            type="text"
+                            class=CLASS_INPUT
+                            placeholder=t!(Models)
+                            prop:value=move || model_name.get()
+                            on:input=move |ev| set_model_name.set(event_target_value(&ev))
+                        />
+                    </div>
+                    <div class="col-span-2">
+                        <input
+                            id="filter-api-key-name"
+                            type="text"
+                            class=CLASS_INPUT
+                            placeholder=t!(LogApiKeyName)
+                            prop:value=move || api_key_name.get()
+                            on:input=move |ev| set_api_key_name.set(event_target_value(&ev))
+                        />
+                    </div>
+                    <div class="col-span-1">
+                        <input
+                            id="filter-client-ip"
+                            type="text"
+                            class=CLASS_INPUT
+                            placeholder=t!(LogClientIp)
+                            prop:value=move || client_ip.get()
+                            on:input=move |ev| set_client_ip.set(event_target_value(&ev))
+                        />
+                    </div>
+                    <div class="col-span-1">
+                        <input
+                            id="filter-status"
+                            type="text"
+                            class=CLASS_INPUT
+                            placeholder=t!(LogStatusCode)
+                            prop:value=move || status.get()
+                            on:input=move |ev| set_status.set(event_target_value(&ev))
+                        />
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-6 gap-3 items-end">
+                    <div>
+                        <input
+                            id="filter-start-date"
                             type="date"
                             class=CLASS_INPUT
                             prop:value=move || start_str.get()
@@ -274,10 +335,8 @@ pub fn LogsPage() -> impl IntoView {
                         />
                     </div>
                     <div>
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                            {t!(EndDate)}
-                        </label>
                         <input
+                            id="filter-end-date"
                             type="date"
                             class=CLASS_INPUT
                             prop:value=move || end_str.get()
@@ -285,82 +344,8 @@ pub fn LogsPage() -> impl IntoView {
                         />
                     </div>
                     <div>
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                            {t!(Providers)}
-                        </label>
-                        <input
-                            type="text"
-                            class=CLASS_INPUT
-                            prop:value=move || provider_name.get()
-                            on:input=move |ev| set_provider_name.set(event_target_value(&ev))
-                        />
-                    </div>
-                    <div>
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                            {t!(LogProviderType)}
-                        </label>
-                        <input
-                            type="text"
-                            class=CLASS_INPUT
-                            prop:value=move || provider_type.get()
-                            on:input=move |ev| set_provider_type.set(event_target_value(&ev))
-                        />
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-4 gap-3 items-end">
-                    <div>
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                            {t!(Models)}
-                        </label>
-                        <input
-                            type="text"
-                            class=CLASS_INPUT
-                            prop:value=move || model_name.get()
-                            on:input=move |ev| set_model_name.set(event_target_value(&ev))
-                        />
-                    </div>
-                    <div>
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                            {t!(LogApiKeyName)}
-                        </label>
-                        <input
-                            type="text"
-                            class=CLASS_INPUT
-                            prop:value=move || api_key_name.get()
-                            on:input=move |ev| set_api_key_name.set(event_target_value(&ev))
-                        />
-                    </div>
-                    <div>
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                            {t!(LogClientIp)}
-                        </label>
-                        <input
-                            type="text"
-                            class=CLASS_INPUT
-                            prop:value=move || client_ip.get()
-                            on:input=move |ev| set_client_ip.set(event_target_value(&ev))
-                        />
-                    </div>
-                    <div>
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                            {t!(TableStatus)}
-                        </label>
-                        <input
-                            type="text"
-                            class=CLASS_INPUT
-                            prop:value=move || status.get()
-                            on:input=move |ev| set_status.set(event_target_value(&ev))
-                        />
-                    </div>
-                </div>
-
-                <div class="flex items-center gap-3">
-                    <div class="w-48">
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                            {t!(LogEndpoint)}
-                        </label>
                         <select
+                            id="filter-endpoint"
                             class=select_cls
                             on:change=move |ev| {
                                 let v = event_target_value(&ev);
@@ -368,18 +353,16 @@ pub fn LogsPage() -> impl IntoView {
                             }
                         >
                             <option value="" selected>
-                                {t!(LogAll)}
+                                {move || t!(LogEndpointAll)}
                             </option>
                             <option value="/v1/chat/completions">{"/v1/chat/completions"}</option>
                             <option value="/v1/completions">{"/v1/completions"}</option>
                             <option value="/v1/embeddings">{"/v1/embeddings"}</option>
                         </select>
                     </div>
-                    <div class="w-36">
-                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                            {t!(LogStreaming)}
-                        </label>
+                    <div>
                         <select
+                            id="filter-streaming"
                             class=select_cls
                             on:change=move |ev| {
                                 let v = event_target_value(&ev);
@@ -394,31 +377,32 @@ pub fn LogsPage() -> impl IntoView {
                             }
                         >
                             <option value="" selected>
-                                {t!(LogAll)}
+                                {move || t!(LogStreamingAll)}
                             </option>
-                            <option value="true">{t!(LogYes)}</option>
-                            <option value="false">{t!(LogNo)}</option>
+                            <option value="true">{"Streaming"}</option>
+                            <option value="false">{"Non-streaming"}</option>
                         </select>
                     </div>
-                    <div class="flex-1"></div>
-                    <button
-                        class="px-4 py-2 text-sm font-medium rounded-lg \
-                        bg-gray-100 dark:bg-gray-700 \
-                        text-gray-600 dark:text-gray-300 \
-                        hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
-                        on:click=do_reset
-                    >
-                        {t!(LogReset)}
-                    </button>
-                    <button class=CLASS_BTN_PRIMARY on:click=do_query>
-                        <i class="fas fa-search"></i>
-                        {t!(LogQueryBtn)}
-                    </button>
+                    <div class="col-span-2 flex justify-end gap-3">
+                        <button
+                            class="px-4 py-2 text-sm font-medium rounded-lg \
+                            bg-gray-100 dark:bg-gray-700 \
+                            text-gray-600 dark:text-gray-300 \
+                            hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                            on:click=do_reset
+                        >
+                            {t!(LogReset)}
+                        </button>
+                        <button class=CLASS_BTN_PRIMARY on:click=do_query>
+                            <i class="fas fa-search"></i>
+                            {t!(LogQueryBtn)}
+                        </button>
+                    </div>
                 </div>
             </div>
 
-            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm">
-                <Transition fallback=move || table_skeleton()>
+            <div class=CLASS_CARD>
+                <Transition fallback=move || logs_table_skeleton()>
                     {move || match rsc.get() {
                         Some(Ok(ref data)) => {
                             let items = &data.items;
@@ -436,31 +420,39 @@ pub fn LogsPage() -> impl IntoView {
                                         <div class="overflow-x-auto">
                                             <table class="w-full text-sm">
                                                 <thead>
-                                                    <tr class="border-b border-gray-100 dark:border-gray-700">
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(CreatedAt)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(Providers)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(Models)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(LogLatency)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(LogInput)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(LogOutput)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(LogClientIp)}
-                                                        </th>
-                                                        <th class="px-6 py-3 text-center text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                                                            {t!(TableStatus)}
-                                                        </th>
+                                                    <tr class=CLASS_BORDER_B>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(CreatedAt)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(Providers)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(Models)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(LogLatency)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(LogInput)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(LogOutput)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(LogClientIp)}</th>
+                                                        <th class=format!(
+                                                            "px-6 py-3 text-center {} font-medium whitespace-nowrap",
+                                                            CLASS_TEXT_MUTED,
+                                                        )>{t!(TableStatus)}</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -485,9 +477,10 @@ pub fn LogsPage() -> impl IntoView {
                                                                     </td>
                                                                     <td class="px-6 py-4 whitespace-nowrap">
                                                                         <div class="flex items-center gap-1">
-                                                                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400">
-                                                                                {format!("{:.2}s", latency_s(e.latency_ms))}
-                                                                            </span>
+                                                                            <span class=format!(
+                                                                                "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium {}",
+                                                                                CLASS_PILL_GREEN,
+                                                                            )>{format!("{:.2}s", latency_s(e.latency_ms))}</span>
                                                                             <Show
                                                                                 when=move || e.is_streaming
                                                                                 fallback=move || {
@@ -538,9 +531,9 @@ pub fn LogsPage() -> impl IntoView {
                                                                         {{
                                                                             let code: u16 = e.status.parse().unwrap_or(0);
                                                                             let cls = if code >= 400 {
-                                                                                "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
+                                                                                CLASS_PILL_RED
                                                                             } else {
-                                                                                "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+                                                                                CLASS_PILL_GREEN
                                                                             };
                                                                             view! {
                                                                                 <span class=format!(
@@ -603,7 +596,7 @@ pub fn LogsPage() -> impl IntoView {
                                 <DetailRow label=ts!(LogEndpoint)>
                                     <span class=CLASS_DETAIL_VALUE_MONO>{item.endpoint}</span>
                                 </DetailRow>
-                                <DetailRow label=ts!(LogUpstreamModel)>
+                                <DetailRow label=ts!(UpstreamModel)>
                                     <span class=CLASS_DETAIL_VALUE>{item.upstream_model}</span>
                                 </DetailRow>
                                 <DetailRow label=ts!(LogProviderType)>
@@ -614,12 +607,12 @@ pub fn LogsPage() -> impl IntoView {
                                         {item.api_key_name.unwrap_or_default()}
                                     </span>
                                 </DetailRow>
-                                <DetailRow label=ts!(LogStreaming)>
+                                <DetailRow label=ts!(LogTransportType)>
                                     <span class=CLASS_DETAIL_VALUE>
                                         {if item.is_streaming {
-                                            ts!(LogStreamingY)
+                                            "Streaming".to_string()
                                         } else {
-                                            ts!(LogStreamingN)
+                                            "Non-streaming".to_string()
                                         }}
                                     </span>
                                 </DetailRow>

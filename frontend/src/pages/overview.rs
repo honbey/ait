@@ -6,6 +6,8 @@ use crate::components::error_display::ErrorCard;
 use crate::components::line_chart::{ChartSeries, LineChart};
 use crate::components::pie_chart::{PieChart, PieData};
 use crate::components::skeleton::overview_skeleton;
+use crate::components::style::{CLASS_CARD, CLASS_TEXT_MUTED};
+use crate::components::use_page_title;
 use crate::time_utils::{clamp_range, date_str_to_ts, midnight_ts, now_timestamp, ts_to_date_str};
 use crate::{t, tr, ts};
 
@@ -99,7 +101,7 @@ fn StatCard(
             </div>
             <div>
                 <div class="text-3xl font-bold text-gray-800 dark:text-gray-100">{value}</div>
-                <div class="text-sm text-gray-500 dark:text-gray-400">{label}</div>
+                <div class=format!("text-sm {}", CLASS_TEXT_MUTED)>{label}</div>
             </div>
         </div>
     }
@@ -125,9 +127,7 @@ fn TabButton(active: bool, on_click: impl Fn() + 'static, label: impl IntoView) 
 
 #[component]
 pub fn Overview() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(Overview)));
-    }
+    use_page_title(&format!("Ait - {}", ts!(Overview)));
 
     let auth = use_context::<AuthContext>().expect("AuthContext");
 
@@ -206,10 +206,17 @@ pub fn Overview() -> impl IntoView {
         }
     };
 
-    let content = move || match overview_resource.get() {
-        None => overview_skeleton().into_any(),
-        Some(Err(e)) => view! { <ErrorCard message=e.clone() /> }.into_any(),
-        Some(Ok(data)) => {
+    // Chart data signals (persistent across data refreshes)
+    let req_x_data = RwSignal::new(Vec::<String>::new());
+    let req_series = RwSignal::new(Vec::<ChartSeries>::new());
+    let tok_x_data = RwSignal::new(Vec::<String>::new());
+    let tok_series = RwSignal::new(Vec::<ChartSeries>::new());
+    let model_pie_data = RwSignal::new(Vec::<PieData>::new());
+    let token_pie_data = RwSignal::new(Vec::<PieData>::new());
+    let has_chart_data = RwSignal::new(false);
+
+    Effect::new(move || {
+        if let Some(Ok(data)) = overview_resource.get() {
             let req_filled = fill_daily_range(
                 &aggregate_daily(&data.request_buckets),
                 start_ts.get_untracked(),
@@ -221,164 +228,100 @@ pub fn Overview() -> impl IntoView {
                 end_ts.get_untracked(),
             );
 
-            let req_x_data: Vec<String> = req_filled
-                .iter()
-                .map(|r| ts_to_date_str(r.timestamp))
-                .collect();
-            let req_series = vec![ChartSeries {
+            req_x_data.set(
+                req_filled
+                    .iter()
+                    .map(|r| ts_to_date_str(r.timestamp))
+                    .collect(),
+            );
+            req_series.set(vec![ChartSeries {
                 name: "Requests".to_string(),
                 data: req_filled.iter().map(|r| r.count as f64).collect(),
-            }];
-
-            let tok_x_data: Vec<String> = tok_filled
-                .iter()
-                .map(|r| ts_to_date_str(r.timestamp))
-                .collect();
-            let tok_series = vec![ChartSeries {
+            }]);
+            tok_x_data.set(
+                tok_filled
+                    .iter()
+                    .map(|r| ts_to_date_str(r.timestamp))
+                    .collect(),
+            );
+            tok_series.set(vec![ChartSeries {
                 name: "Tokens".to_string(),
                 data: tok_filled.iter().map(|r| r.count as f64).collect(),
-            }];
-
-            let model_pie_data: Vec<PieData> = data
-                .model_dist
-                .iter()
-                .map(|m| PieData {
-                    name: m.model.clone(),
-                    value: m.count as f64,
-                })
-                .collect();
-
-            let token_pie_data: Vec<PieData> = data
-                .token_dist
-                .iter()
-                .map(|e| PieData {
-                    name: e.category.clone(),
-                    value: e.count as f64,
-                })
-                .collect();
-
-            view! {
-                <div class="space-y-6 sm:space-y-8">
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                        <StatCard
-                            icon="fa-server"
-                            icon_bg="bg-indigo-100 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-400"
-                            value=data.provider_count.to_string()
-                            label=t!(Providers)
-                        />
-                        <StatCard
-                            icon="fa-arrow-right-arrow-left"
-                            icon_bg="bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-400"
-                            value=data.api_request_count.to_string()
-                            label=t!(ApiRequestCount)
-                        />
-                        <StatCard
-                            icon="fa-gauge-high"
-                            icon_bg="bg-teal-100 text-teal-600 dark:bg-teal-900 dark:text-teal-400"
-                            value=format!("{:.2}", data.rpm)
-                            // Keeping RPM/TPM as plain-text per convention
-                            // (i18n keys exist but are intentionally unused)
-                            label="RPM"
-                        />
-                    </div>
-
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                        <StatCard
-                            icon="fa-cube"
-                            icon_bg="bg-green-100 text-green-600 dark:bg-green-900 dark:text-green-400"
-                            value=data.model_count.to_string()
-                            label=t!(Models)
-                        />
-                        <StatCard
-                            icon="fa-code"
-                            icon_bg="bg-pink-100 text-pink-600 dark:bg-pink-900 dark:text-pink-400"
-                            value=data.token_consumption.to_string()
-                            label=t!(TokenConsumption)
-                        />
-                        <StatCard
-                            icon="fa-fire"
-                            icon_bg="bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-400"
-                            value=format!("{:.2}", data.tpm)
-                            // Keeping RPM/TPM as plain-text per convention
-                            // (i18n keys exist but are intentionally unused)
-                            label="TPM"
-                        />
-                    </div>
-
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
-                            <div class="flex items-center gap-2 mb-4">
-                                <TabButton
-                                    active=left_tab.get() == 0
-                                    on_click={
-                                        let l = set_left_tab;
-                                        move || l.set(0)
-                                    }
-                                    label=t!(ApiRequestCountTrendingTableTitle)
-                                />
-                                <TabButton
-                                    active=left_tab.get() == 1
-                                    on_click={
-                                        let l = set_left_tab;
-                                        move || l.set(1)
-                                    }
-                                    label=t!(ModelDistribution)
-                                />
-                            </div>
-                            <div style:display=move || {
-                                if left_tab.get() == 0 { "block" } else { "none" }
-                            }>
-                                <LineChart
-                                    id="chart-left-line"
-                                    x_data=req_x_data.clone()
-                                    series_list=req_series.clone()
-                                />
-                            </div>
-                            <div style:display=move || {
-                                if left_tab.get() == 1 { "block" } else { "none" }
-                            }>
-                                <PieChart id="chart-left-pie" data=model_pie_data.clone() />
-                            </div>
-                        </div>
-                        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
-                            <div class="flex items-center gap-2 mb-4">
-                                <TabButton
-                                    active=right_tab.get() == 0
-                                    on_click={
-                                        let l = set_right_tab;
-                                        move || l.set(0)
-                                    }
-                                    label=t!(TokenConsumptionTrendingTableTitle)
-                                />
-                                <TabButton
-                                    active=right_tab.get() == 1
-                                    on_click={
-                                        let l = set_right_tab;
-                                        move || l.set(1)
-                                    }
-                                    label=t!(TokenDistribution)
-                                />
-                            </div>
-                            <div style:display=move || {
-                                if right_tab.get() == 0 { "block" } else { "none" }
-                            }>
-                                <LineChart
-                                    id="chart-right-line"
-                                    x_data=tok_x_data.clone()
-                                    series_list=tok_series.clone()
-                                />
-                            </div>
-                            <div style:display=move || {
-                                if right_tab.get() == 1 { "block" } else { "none" }
-                            }>
-                                <PieChart id="chart-right-pie" data=token_pie_data.clone() />
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            }
-            .into_any()
+            }]);
+            model_pie_data.set(
+                data.model_dist
+                    .iter()
+                    .map(|m| PieData {
+                        name: m.model.clone(),
+                        value: m.count as f64,
+                    })
+                    .collect(),
+            );
+            token_pie_data.set(
+                data.token_dist
+                    .iter()
+                    .map(|e| PieData {
+                        name: e.category.clone(),
+                        value: e.count as f64,
+                    })
+                    .collect(),
+            );
+            has_chart_data.set(true);
+        } else {
+            has_chart_data.set(false);
         }
+    });
+
+    let content = move || match overview_resource.get() {
+        None => overview_skeleton().into_any(),
+        Some(Err(e)) => view! { <ErrorCard message=e.clone() /> }.into_any(),
+        Some(Ok(data)) => view! {
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                <StatCard
+                    icon="fa-server"
+                    icon_bg="bg-indigo-100 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-400"
+                    value=data.provider_count.to_string()
+                    label=t!(Providers)
+                />
+                <StatCard
+                    icon="fa-arrow-right-arrow-left"
+                    icon_bg="bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-400"
+                    value=data.api_request_count.to_string()
+                    label=t!(ApiRequestCount)
+                />
+                <StatCard
+                    icon="fa-gauge-high"
+                    icon_bg="bg-teal-100 text-teal-600 dark:bg-teal-900 dark:text-teal-400"
+                    value=format!("{:.2}", data.rpm)
+                    // Keeping RPM/TPM as plain-text per convention
+                    // (i18n keys exist but are intentionally unused)
+                    label="RPM"
+                />
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                <StatCard
+                    icon="fa-cube"
+                    icon_bg="bg-green-100 text-green-600 dark:bg-green-900 dark:text-green-400"
+                    value=data.model_count.to_string()
+                    label=t!(Models)
+                />
+                <StatCard
+                    icon="fa-code"
+                    icon_bg="bg-pink-100 text-pink-600 dark:bg-pink-900 dark:text-pink-400"
+                    value=data.token_consumption.to_string()
+                    label=t!(TokenConsumption)
+                />
+                <StatCard
+                    icon="fa-fire"
+                    icon_bg="bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-400"
+                    value=format!("{:.2}", data.tpm)
+                    // Keeping RPM/TPM as plain-text per convention
+                    // (i18n keys exist but are intentionally unused)
+                    label="TPM"
+                />
+            </div>
+        }
+        .into_any(),
     };
 
     let greeting = {
@@ -465,6 +408,78 @@ pub fn Overview() -> impl IntoView {
                 </div>
             </div>
             {content}
+            <Show when=move || has_chart_data.get()>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div class=format!("{} p-6", CLASS_CARD)>
+                        <div class="flex items-center gap-2 mb-4">
+                            <TabButton
+                                active=left_tab.get() == 0
+                                on_click={
+                                    let l = set_left_tab;
+                                    move || l.set(0)
+                                }
+                                label=t!(ApiRequestCountTrendingTableTitle)
+                            />
+                            <TabButton
+                                active=left_tab.get() == 1
+                                on_click={
+                                    let l = set_left_tab;
+                                    move || l.set(1)
+                                }
+                                label=t!(ModelDistribution)
+                            />
+                        </div>
+                        <div style:display=move || {
+                            if left_tab.get() == 0 { "block" } else { "none" }
+                        }>
+                            <LineChart
+                                id="chart-left-line"
+                                x_data=Signal::from(req_x_data)
+                                series_list=Signal::from(req_series)
+                            />
+                        </div>
+                        <div style:display=move || {
+                            if left_tab.get() == 1 { "block" } else { "none" }
+                        }>
+                            <PieChart id="chart-left-pie" data=Signal::from(model_pie_data) />
+                        </div>
+                    </div>
+                    <div class=format!("{} p-6", CLASS_CARD)>
+                        <div class="flex items-center gap-2 mb-4">
+                            <TabButton
+                                active=right_tab.get() == 0
+                                on_click={
+                                    let l = set_right_tab;
+                                    move || l.set(0)
+                                }
+                                label=t!(TokenConsumptionTrendingTableTitle)
+                            />
+                            <TabButton
+                                active=right_tab.get() == 1
+                                on_click={
+                                    let l = set_right_tab;
+                                    move || l.set(1)
+                                }
+                                label=t!(TokenDistribution)
+                            />
+                        </div>
+                        <div style:display=move || {
+                            if right_tab.get() == 0 { "block" } else { "none" }
+                        }>
+                            <LineChart
+                                id="chart-right-line"
+                                x_data=Signal::from(tok_x_data)
+                                series_list=Signal::from(tok_series)
+                            />
+                        </div>
+                        <div style:display=move || {
+                            if right_tab.get() == 1 { "block" } else { "none" }
+                        }>
+                            <PieChart id="chart-right-pie" data=Signal::from(token_pie_data) />
+                        </div>
+                    </div>
+                </div>
+            </Show>
         </div>
     }
 }

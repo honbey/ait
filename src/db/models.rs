@@ -65,6 +65,17 @@ impl ProviderType {
     pub fn from_db(s: &str) -> Self {
         s.parse().unwrap_or_default()
     }
+
+    pub fn supports_endpoint(&self, path: &str) -> bool {
+        match self {
+            Self::DeepSeek => path == "/chat/completions",
+            Self::Zhipu => matches!(path, "/chat/completions" | "/embeddings"),
+            _ => matches!(
+                path,
+                "/chat/completions" | "/completions" | "/embeddings" | "/responses"
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

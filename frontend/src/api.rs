@@ -9,7 +9,7 @@ use leptos::prelude::*;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::auth::AuthContext;
+use crate::auth::{AuthContext, AuthStatus};
 use crate::components::toast::ToastManager;
 use crate::i18n::{I18n, K};
 use reactive_stores::{Patch, Store};
@@ -68,12 +68,17 @@ impl Drop for Suppress401Guard {
     }
 }
 
+pub fn clear_cache() {
+    FETCH_CACHE.with(|c| c.borrow_mut().clear());
+}
+
 fn handle_401(status: u16) {
     if status != 401 || SUPPRESS_401.get() {
         return;
     }
+    clear_cache();
     if let Some(auth) = use_context::<AuthContext>() {
-        auth.authenticated.set(Some(false));
+        auth.authenticated.set(AuthStatus::NotAuthenticated);
         if let (Some(toast), Some(i18n)) = (use_context::<ToastManager>(), use_context::<I18n>()) {
             toast.error(i18n.t_untracked(K::SessionExpired));
         }
@@ -392,7 +397,8 @@ pub struct BucketEntry {
 #[derive(Debug, Clone, Default, Deserialize, Store, Patch)]
 pub struct ApiKey {
     pub id: String,
-    pub key: String,
+    #[serde(rename = "key")]
+    pub display: String,
     pub name: String,
     #[serde(default)]
     pub created_at: i64,
@@ -537,7 +543,6 @@ pub async fn fetch_proxy_logs(
     start_ts: Option<i64>,
     end_ts: Option<i64>,
     provider_name: Option<String>,
-    provider_type: Option<String>,
     model_name: Option<String>,
     api_key_name: Option<String>,
     client_ip: Option<String>,
@@ -549,7 +554,6 @@ pub async fn fetch_proxy_logs(
     push_qs(&mut parts, "start_ts", start_ts);
     push_qs(&mut parts, "end_ts", end_ts);
     push_qs(&mut parts, "provider_name", provider_name);
-    push_qs(&mut parts, "provider_type", provider_type);
     push_qs(&mut parts, "model_name", model_name);
     push_qs(&mut parts, "api_key_name", api_key_name);
     push_qs(&mut parts, "client_ip", client_ip);

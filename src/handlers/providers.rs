@@ -5,13 +5,16 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use chrono::Utc;
+use chrono::serde::ts_seconds;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use strum::{EnumMessage, IntoEnumIterator};
 
 use crate::app::AppState;
 use crate::db::{AuditEvent, Provider, ProviderType, SessionUser};
 use crate::error::{AitError, internal_error, not_found};
+use crate::handlers::{ident_chars, validate_string};
+use crate::ssrf;
 
 // ── Provider types ──
 
@@ -25,8 +28,10 @@ pub struct ProviderResponse {
     base_url: String,
     api_key: Option<String>,
     enabled: bool,
-    created_at: i64,
-    updated_at: i64,
+    #[serde(with = "ts_seconds")]
+    created_at: DateTime<Utc>,
+    #[serde(with = "ts_seconds")]
+    updated_at: DateTime<Utc>,
 }
 
 impl From<Provider> for ProviderResponse {
@@ -41,8 +46,8 @@ impl From<Provider> for ProviderResponse {
                 .as_ref()
                 .map(|k| crate::db::models::mask_api_key(k)),
             enabled: p.enabled,
-            created_at: p.created_at.timestamp(),
-            updated_at: p.updated_at.timestamp(),
+            created_at: p.created_at,
+            updated_at: p.updated_at,
         }
     }
 }
@@ -99,12 +104,7 @@ impl From<CreateProviderRequest> for Provider {
 
 // ── Validation ──
 
-fn validate_base_url(url: &str) -> Result<(), AitError> {
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(AitError::bad_request(
-            "base_url must start with http:// or https://",
-        ));
-    }
+fn validate_base_url(url: &str) -> Result<reqwest::Url, AitError> {
     if !url
         .chars()
         .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '~' | ':' | '/'))
@@ -113,7 +113,27 @@ fn validate_base_url(url: &str) -> Result<(), AitError> {
             "base_url contains invalid characters",
         ));
     }
-    Ok(())
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| AitError::bad_request("base_url is not a valid URL"))?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err(AitError::bad_request(
+            "base_url must use http:// or https:// scheme",
+        ));
+    }
+    if parsed.host_str().is_none() {
+        return Err(AitError::bad_request("base_url must include a host"));
+    }
+    let host_start = url.find("://").map(|i| i + 3).unwrap_or(0);
+    let host_end = url[host_start..]
+        .find(['/', ':'])
+        .unwrap_or(url.len() - host_start);
+    let host = &url[host_start..host_start + host_end];
+    if !host.is_empty() && host.chars().all(|c| c.is_ascii_digit()) {
+        return Err(AitError::bad_request(
+            "base_url host cannot be purely numeric",
+        ));
+    }
+    Ok(parsed)
 }
 
 // ── Handlers ──
@@ -123,16 +143,46 @@ pub async fn create_provider(
     Extension(session): Extension<SessionUser>,
     Json(input): Json<CreateProviderRequest>,
 ) -> Result<(StatusCode, Json<ProviderResponse>), (StatusCode, Json<AitError>)> {
-    validate_base_url(&input.base_url)?;
-    let provider: Provider = input.into();
+    let name = validate_string(&input.name, "name", 128, ident_chars)?;
+    let parsed_url =
+        validate_base_url(&validate_string(&input.base_url, "base_url", 1024, |_| {
+            true
+        })?)?;
+    ssrf::check_ssrf_config(
+        &parsed_url,
+        &state.config.security.ssrf_allowed_cidrs,
+        &state.ssrf_dns_cache,
+        &input.name,
+    )
+    .await
+    .map_err(|e| e.into_response())?;
+    let api_key = input.api_key.and_then(|k| {
+        let t = k.trim().to_string();
+        if t.is_empty() { None } else { Some(t) }
+    });
+    if let Some(ref k) = api_key
+        && k.len() > 512
+    {
+        return Err(
+            AitError::bad_request("api_key must not exceed 512 characters").into_response(),
+        );
+    }
+    let provider = Provider {
+        id: String::new(),
+        name,
+        provider_type: input.provider_type,
+        base_url: parsed_url.to_string(),
+        api_key,
+        enabled: input.enabled,
+        created_at: chrono::DateTime::default(),
+        updated_at: chrono::DateTime::default(),
+    };
     let db = state.db.clone();
     let inserted = crate::run_blocking(move || db.insert_provider(provider))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
 
-    state.model_cache.clear();
-    state.provider_cache.clear();
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         username: session.username.clone(),
@@ -153,7 +203,7 @@ pub async fn list_providers(
     let providers = crate::run_blocking(move || db.list_providers())
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
     Ok(Json(
         providers.into_iter().map(ProviderResponse::from).collect(),
     ))
@@ -169,7 +219,7 @@ pub async fn get_provider(
     let provider = crate::run_blocking(move || db.get_provider(&id_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?
+        .map_err(|e| AitError::from_db_error(e).into_response())?
         .ok_or_else(|| not_found(format!("Provider '{}' not found", id)))?;
 
     Ok(Json(ProviderResponse::from(provider)))
@@ -185,7 +235,7 @@ pub async fn get_provider_api_key(
     let provider = crate::run_blocking(move || db.get_provider(&id_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?
+        .map_err(|e| AitError::from_db_error(e).into_response())?
         .ok_or_else(|| not_found(format!("Provider '{}' not found", id)))?;
 
     state.log_manager.log_audit(AuditEvent {
@@ -210,19 +260,68 @@ pub async fn update_provider(
     Path(id): Path<String>,
     Json(input): Json<UpdateProviderRequest>,
 ) -> Result<Json<ProviderResponse>, (StatusCode, Json<AitError>)> {
-    if let Some(ref url) = input.base_url {
-        validate_base_url(url)?;
+    let name = input
+        .name
+        .map(|n| validate_string(&n, "name", 128, ident_chars))
+        .transpose()?;
+    let parsed_url = input
+        .base_url
+        .map(|u| -> Result<reqwest::Url, AitError> {
+            let v = validate_string(&u, "base_url", 1024, |_| true)?;
+            validate_base_url(&v)
+        })
+        .transpose()?;
+    let api_key = match input.api_key {
+        Some(k) => {
+            let t = k.trim().to_string();
+            if t.is_empty() {
+                Some(String::new())
+            } else {
+                if t.len() > 512 {
+                    return Err(
+                        AitError::bad_request("api_key must not exceed 512 characters")
+                            .into_response(),
+                    );
+                }
+                Some(t)
+            }
+        }
+        None => None,
+    };
+    if let Some(ref parsed) = parsed_url {
+        ssrf::check_ssrf_config(
+            parsed,
+            &state.config.security.ssrf_allowed_cidrs,
+            &state.ssrf_dns_cache,
+            &id,
+        )
+        .await
+        .map_err(|e| e.into_response())?;
     }
-    let mut updates: Provider = input.into();
+    let mut updates = Provider {
+        id: String::new(),
+        name: name.unwrap_or_default(),
+        provider_type: input.provider_type.unwrap_or_default(),
+        base_url: parsed_url
+            .as_ref()
+            .map(|u| u.to_string())
+            .unwrap_or_default(),
+        api_key,
+        enabled: input.enabled.unwrap_or(true),
+        created_at: chrono::DateTime::default(),
+        updated_at: chrono::DateTime::default(),
+    };
     updates.id = id.clone();
     let db = state.db.clone();
     let provider = crate::run_blocking(move || db.update_provider(&updates))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
 
-    state.model_cache.clear();
-    state.provider_cache.clear();
+    state.provider_cache.remove(&id);
+    state
+        .model_cache
+        .retain(|_, v| v.0.as_ref().is_none_or(|(_, p)| p.id != id));
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         username: session.username.clone(),
@@ -245,13 +344,15 @@ pub async fn delete_provider(
     if !crate::run_blocking(move || db.delete_provider(&id_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?
+        .map_err(|e| AitError::from_db_error(e).into_response())?
     {
         return Err(not_found(format!("Provider '{}' not found", id)));
     }
 
-    state.model_cache.clear();
-    state.provider_cache.clear();
+    state.provider_cache.remove(&id);
+    state
+        .model_cache
+        .retain(|_, v| v.0.as_ref().is_none_or(|(_, p)| p.id != id));
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         username: session.username.clone(),

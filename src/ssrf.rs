@@ -10,28 +10,24 @@ use tracing::warn;
 use crate::error::AitError;
 use crate::middleware::CACHE_TTL;
 
-/// Pre-request SSRF check: resolve hostname to IPs and verify each is
-/// either a public address or explicitly allowed via `allowed_cidrs`.
-pub(crate) async fn check_ssrf(
+enum SsrfDeny {
+    NoHost,
+    DnsFailed(String),
+    Blocked,
+}
+
+/// Shared lookup + IP check.  Logs the block on [`SsrfDeny::Blocked`].
+async fn resolve_and_check(
     url: &Url,
     allowed_cidrs: &[String],
     dns_cache: &Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
     provider_name: &str,
-) -> Result<(), (axum::http::StatusCode, axum::Json<AitError>)> {
-    let host = url
-        .host_str()
-        .ok_or_else(|| AitError::upstream_error(502, "upstream request failed").into_response())?;
+) -> Result<(), SsrfDeny> {
+    let host = url.host_str().ok_or(SsrfDeny::NoHost)?;
 
-    let ips = resolve_with_cache(host, dns_cache).await.map_err(|_| {
-        AitError::upstream_error(
-            502,
-            format!(
-                "Failed to connect to provider '{}': connection refused",
-                provider_name
-            ),
-        )
-        .into_response()
-    })?;
+    let ips = resolve_with_cache(host, dns_cache)
+        .await
+        .map_err(SsrfDeny::DnsFailed)?;
 
     for ip in &ips {
         if !is_allowed(ip, allowed_cidrs) {
@@ -39,11 +35,43 @@ pub(crate) async fn check_ssrf(
                 "[ssrf] blocked request to provider '{}' — {} resolves to private IP {}",
                 provider_name, host, ip
             );
-            return Err(AitError::upstream_error(502, "upstream request failed").into_response());
+            return Err(SsrfDeny::Blocked);
         }
     }
 
     Ok(())
+}
+
+/// Pre-request SSRF check: opaque 502 on failure (proxy path).
+pub(crate) async fn check_ssrf(
+    url: &Url,
+    allowed_cidrs: &[String],
+    dns_cache: &Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
+    provider_name: &str,
+) -> Result<(), (axum::http::StatusCode, axum::Json<AitError>)> {
+    resolve_and_check(url, allowed_cidrs, dns_cache, provider_name)
+        .await
+        .map_err(|_| AitError::upstream_error(502, "upstream request failed").into_response())
+}
+
+/// SSRF check for provider create/update: 400 with descriptive message.
+pub(crate) async fn check_ssrf_config(
+    url: &Url,
+    allowed_cidrs: &[String],
+    dns_cache: &Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
+    provider_name: &str,
+) -> Result<(), AitError> {
+    match resolve_and_check(url, allowed_cidrs, dns_cache, provider_name).await {
+        Ok(()) => Ok(()),
+        Err(SsrfDeny::NoHost) => Err(AitError::bad_request("base_url must include a host")),
+        Err(SsrfDeny::DnsFailed(e)) => {
+            warn!("[ssrf] config check DNS error: {}", e);
+            Err(AitError::bad_request("base_url host could not be resolved"))
+        }
+        Err(SsrfDeny::Blocked) => Err(AitError::bad_request(
+            "base_url resolves to a blocked address",
+        )),
+    }
 }
 
 async fn resolve_with_cache(

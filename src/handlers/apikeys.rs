@@ -9,6 +9,7 @@ use serde::Deserialize;
 use crate::app::AppState;
 use crate::db::{ApiKey, AuditEvent, SessionUser};
 use crate::error::{AitError, forbidden, internal_error, not_found};
+use crate::handlers::{ident_chars, validate_string};
 
 #[derive(Deserialize)]
 pub struct CreateApiKeyRequest {
@@ -32,7 +33,7 @@ pub async fn create_api_key(
     Extension(session): Extension<SessionUser>,
     Path(username): Path<String>,
     Json(input): Json<CreateApiKeyRequest>,
-) -> Result<Json<ApiKeyResponse>, (StatusCode, Json<AitError>)> {
+) -> Result<(StatusCode, Json<ApiKeyResponse>), (StatusCode, Json<AitError>)> {
     if session.username != username {
         return Err(forbidden("You can only manage your own API keys"));
     }
@@ -45,9 +46,9 @@ pub async fn create_api_key(
         })
         .transpose()?;
 
+    let name = validate_string(&input.name, "name", 128, ident_chars)?;
     let db = state.db.clone();
     let username_clone = username.clone();
-    let name = input.name.clone();
     let (stored, raw_key) =
         crate::run_blocking(move || db.insert_api_key(&username_clone, &name, expires_at))
             .await
@@ -63,15 +64,18 @@ pub async fn create_api_key(
         detail: None,
     });
 
-    Ok(Json(ApiKeyResponse {
-        id: stored.id.clone(),
-        key: raw_key,
-        name: stored.name,
-        created_at: stored.created_at.timestamp(),
-        updated_at: stored.updated_at.timestamp(),
-        enabled: stored.enabled,
-        expires_at: stored.expires_at.map(|dt| dt.timestamp()),
-    }))
+    Ok((
+        StatusCode::CREATED,
+        Json(ApiKeyResponse {
+            id: stored.id.clone(),
+            key: raw_key,
+            name: stored.name,
+            created_at: stored.created_at.timestamp(),
+            updated_at: stored.updated_at.timestamp(),
+            enabled: stored.enabled,
+            expires_at: stored.expires_at.map(|dt| dt.timestamp()),
+        }),
+    ))
 }
 
 pub async fn list_api_keys(
@@ -88,7 +92,7 @@ pub async fn list_api_keys(
     let user = crate::run_blocking(move || db.get_user(&username_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?
+        .map_err(|e| AitError::from_db_error(e).into_response())?
         .ok_or_else(|| not_found(format!("User '{}' not found", username)))?;
 
     let items: Vec<ApiKeyResponse> = user
@@ -122,7 +126,7 @@ pub async fn delete_api_key(
     let hash = crate::run_blocking(move || db.delete_api_key(&username_clone, &key_clone))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
     state.api_key_cache.remove(&hash);
 
     state.log_manager.log_audit(AuditEvent {
@@ -167,14 +171,32 @@ pub async fn update_api_key(
         return Err(forbidden("You can only manage your own API keys"));
     }
 
-    let mut updates: ApiKey = input.into();
-    updates.id = key_id.clone();
+    let name = match input.name {
+        Some(n) => {
+            let t = n.trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(validate_string(&t, "name", 128, ident_chars)?)
+            }
+        }
+        None => None,
+    };
+    let updates = ApiKey {
+        id: key_id.clone(),
+        name: name.unwrap_or_default(),
+        enabled: input.enabled.unwrap_or(true),
+        expires_at: input
+            .expires_at
+            .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or(DateTime::UNIX_EPOCH)),
+        ..Default::default()
+    };
     let db = state.db.clone();
     let username_clone = username.clone();
     let (updated, hash) = crate::run_blocking(move || db.update_api_key(&username_clone, &updates))
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
     state.api_key_cache.remove(&hash);
 
     state.log_manager.log_audit(AuditEvent {

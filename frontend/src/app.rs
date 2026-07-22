@@ -5,12 +5,12 @@ use leptos_router::{
 };
 
 use crate::api;
-use crate::auth::AuthContext;
+use crate::auth::{AuthContext, AuthStatus};
 use crate::components::console_layout::ConsoleShell;
 use crate::components::toast::{ToastContainer, ToastManager};
 use crate::components::topbar::Topbar;
 use crate::i18n::I18n;
-use crate::pages::apikeys::ApiKeyPage;
+use crate::pages::apikeys::ApiKeysPage;
 use crate::pages::home::Home;
 use crate::pages::login::LoginPage;
 use crate::pages::logs::LogsPage;
@@ -36,7 +36,7 @@ pub fn App() -> impl IntoView {
             match api::check_session().await {
                 Ok(Some(uname)) => auth_clone.set_logged_in(uname),
                 Ok(None) => auth_clone.set_logged_out(),
-                Err(_) => auth_clone.authenticated.set(Some(false)),
+                Err(_) => auth_clone.authenticated.set(AuthStatus::NotAuthenticated),
             }
         }
     });
@@ -69,7 +69,7 @@ pub fn App() -> impl IntoView {
         <div class=move || if dark.get() { "dark" } else { "" }>
             <Router>
                 <Topbar dark=dark />
-                <main class="min-h-[calc(100vh-3.5rem)] animate-fadeIn">
+                <main class="min-h-[calc(100vh-3.5rem)]">
                     <Routes fallback=|| view! { <NotFoundPage /> }>
                         <Route path=StaticSegment("") view=Home />
                         <Route path=StaticSegment("login") view=LoginPage />
@@ -77,7 +77,7 @@ pub fn App() -> impl IntoView {
                             <Route path=StaticSegment("") view=Overview />
                             <Route path=StaticSegment("overview") view=Overview />
                             <Route path=StaticSegment("providers") view=ProvidersPage />
-                            <Route path=StaticSegment("apikeys") view=ApiKeyPage />
+                            <Route path=StaticSegment("apikeys") view=ApiKeysPage />
                             <Route path=StaticSegment("logs") view=LogsPage />
                             <Route path=StaticSegment("models") view=ModelsPage />
                             <Route path=StaticSegment("text-generation") view=TextGenPage />

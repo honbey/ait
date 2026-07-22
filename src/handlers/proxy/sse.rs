@@ -1,3 +1,4 @@
+use core::time::Duration;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -22,6 +23,8 @@ pub(crate) struct SseTransformStream<S> {
     pub(crate) start: Instant,
     pub(crate) shutdown_fut: Pin<Box<WaitForCancellationFutureOwned>>,
     pub(crate) done: bool,
+    pub(crate) idle_timeout: Duration,
+    pub(crate) last_data_time: Instant,
 }
 
 impl<S> SseTransformStream<S> {
@@ -143,6 +146,7 @@ where
         loop {
             match Pin::new(&mut this.inner).poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
+                    this.last_data_time = Instant::now();
                     this.buf.extend_from_slice(&bytes);
                     this.record_ttfb();
                     if let Some(event_end) = this.find_event_boundary() {
@@ -161,7 +165,20 @@ where
                     return Poll::Ready(Some(Err(e)));
                 }
                 Poll::Ready(None) => return this.finalize_stream(),
-                Poll::Pending => return Poll::Pending,
+                Poll::Pending => {
+                    if this.last_data_time.elapsed() >= this.idle_timeout {
+                        this.event.status = "504".to_string();
+                        this.event.error_message = Some("SSE stream idle timeout".to_string());
+                        tracing::warn!(
+                            model = this.event.model_name,
+                            provider = this.event.provider_name,
+                            idle_secs = this.last_data_time.elapsed().as_secs(),
+                            "SSE stream idle timeout"
+                        );
+                        return this.finalize_stream();
+                    }
+                    return Poll::Pending;
+                }
             }
         }
     }

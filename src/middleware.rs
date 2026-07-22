@@ -79,16 +79,17 @@ pub async fn auth_middleware(
 
     let hash = hash_key(token);
 
-    // Cache hit — verify freshness
-    if let Some(cached) = state.api_key_cache.get(&hash) {
-        let (ref key_info, ref inserted_at) = *cached;
-        if inserted_at.elapsed() < CACHE_TTL {
-            let key_info = key_info.clone();
-            drop(cached);
+    // Cache hit — verify freshness and renew TTL
+    if let Some(mut entry) = state.api_key_cache.get_mut(&hash) {
+        if entry.1.elapsed() < CACHE_TTL {
+            entry.1 = Instant::now();
+            let key_info = entry.0.clone();
+            drop(entry);
             verify_key(&key_info, &mut req)?;
             req.extensions_mut().insert(client_ip);
             return Ok(next.run(req).await);
         }
+        drop(entry);
     }
 
     // Cache miss or stale — load from DB
@@ -123,16 +124,17 @@ pub async fn admin_auth_middleware(
 
     let hash = hash_key(session_key);
 
-    // Cache hit — verify freshness
-    if let Some(cached) = state.session_cache.get(&hash) {
-        let (ref user, ref expires_at, ref inserted_at) = *cached;
-        if *expires_at > Utc::now() && inserted_at.elapsed() < CACHE_TTL {
-            let user = user.clone();
-            drop(cached);
+    // Cache hit — verify freshness and renew TTL
+    if let Some(mut entry) = state.session_cache.get_mut(&hash) {
+        if entry.1 > Utc::now() && entry.2.elapsed() < CACHE_TTL {
+            entry.2 = Instant::now();
+            let user = entry.0.clone();
+            drop(entry);
             req.extensions_mut().insert(user);
             req.extensions_mut().insert(client_ip);
             return Ok(next.run(req).await);
         }
+        drop(entry);
     }
 
     // Cache miss or stale — load from DB (only session; username is enough for SessionUser)
@@ -147,6 +149,14 @@ pub async fn admin_auth_middleware(
     if session.is_expired() {
         return Err(unauthorized("Unauthorized: invalid or missing API key"));
     }
+
+    // Fire-and-forget session renewal so active sessions do not expire
+    let db = state.db.clone();
+    let hash_clone = hash.clone();
+    let ttl = state.config.auth.session_ttl_secs;
+    tokio::spawn(async move {
+        let _ = crate::run_blocking(move || db.renew_session(&hash_clone, ttl)).await;
+    });
 
     let user = SessionUser {
         username: session.username,

@@ -43,7 +43,7 @@ pub async fn overview_stats(
         })
         .await
         .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .map_err(|e| AitError::from_db_error(e).into_response())?;
     let api_request_count = state
         .log_manager
         .total_requests(range.start, range.end)

@@ -4,19 +4,20 @@ use reactive_stores::{Field, Patch, Store};
 
 use crate::api;
 use crate::api::{Model, ModelStoreFields};
-use crate::components::error_display::{ErrorCard, ErrorText};
-use crate::components::modal::{DeleteConfirmModal, ModalShell};
+use crate::components::error_display::ErrorCard;
+use crate::components::modal::{DeleteConfirmModal, FormModalShell, ModalShell};
 use crate::components::skeleton::table_skeleton;
 use crate::components::style::{
-    CLASS_BTN_CANCEL, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE_PLAIN, CLASS_DETAIL_VALUE_TAG,
-    CLASS_DISABLED_INPUT, CLASS_FORM_FOOTER, CLASS_ICON_BTN, CLASS_INPUT, CLASS_LABEL,
-    CLASS_PAGE_TITLE,
+    CLASS_BORDER_B, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE_PLAIN, CLASS_DETAIL_VALUE_TAG,
+    CLASS_DISABLED_INPUT, CLASS_ICON_BTN, CLASS_INPUT, CLASS_LABEL, CLASS_PAGE_TITLE,
+    CLASS_TEXT_MUTED,
 };
 use crate::components::table::{
-    DataTableCard, DetailCloseButton, DetailRow, EntityModal, SubmitButton, ToggleField,
-    attach_save_effect, provider_display_name, status_badge, timestamp_str,
+    DataTableCard, DetailCloseButton, DetailRow, EntityModal, ToggleField, attach_save_effect,
+    provider_display_name, status_badge, timestamp_str,
 };
 use crate::components::toast::use_toast;
+use crate::components::use_page_title;
 use crate::{t, tr, trs, ts};
 
 #[derive(Store, Patch, Default)]
@@ -30,9 +31,7 @@ type ModelModal = EntityModal<Model>;
 
 #[component]
 pub fn ModelsPage() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(Models)));
-    }
+    use_page_title(&format!("Ait - {}", ts!(Models)));
     let modal = RwSignal::new(ModelModal::Closed);
     let state = Store::new(ModelsStore::default());
 
@@ -51,11 +50,8 @@ pub fn ModelsPage() -> impl IntoView {
         LocalResource::new(|| async move { api::fetch_models().await.map_err(|e| e.to_string()) });
 
     let _sync_store = Effect::new(move |_| match models_rsc.get() {
-        Some(Ok(ref items)) => {
-            let items_field = state.items();
-            let mut guard = items_field.write();
-            guard.clone_from(items);
-            drop(guard);
+        Some(Ok(items)) => {
+            state.items().patch(items);
             state.error().set(None);
         }
         Some(Err(ref e)) => state.error().set(Some(e.to_string())),
@@ -81,25 +77,31 @@ pub fn ModelsPage() -> impl IntoView {
                             <div class="overflow-x-auto">
                                 <table class="w-full text-sm">
                                     <thead>
-                                        <tr class="border-b border-gray-100 dark:border-gray-700">
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(Name)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(Providers)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(ModelUpstreamModel)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(TableStatus)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(UpdatedAt)}
-                                            </th>
-                                            <th class="px-6 py-3 text-center text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(Actions)}
-                                            </th>
+                                        <tr class=CLASS_BORDER_B>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(Name)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(Providers)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(UpstreamModel)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(TableStatus)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(UpdatedAt)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-center {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(Actions)}</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -331,88 +333,84 @@ fn ModelFormModal(
     };
 
     view! {
-        <ModalShell on_close=on_close.clone() title=title>
-            <form on:submit=on_submit class="space-y-4">
+        <FormModalShell
+            on_close=on_close.clone()
+            title=title
+            on_submit
+            pending=save_action.pending()
+            is_edit
+            form_error
+        >
 
-                <div>
-                    <label for="form-name" class=CLASS_LABEL>
-                        {t!(Name)}
-                    </label>
-                    <Show when=move || !is_edit>
-                        <input
-                            id="form-name"
-                            type="text"
-                            class=CLASS_INPUT
-                            placeholder=ts!(Name)
-                            prop:value=name
-                            on:input=move |ev| name.set(event_target_value(&ev))
-                        />
-                    </Show>
-                    <Show when=move || is_edit>
-                        <input
-                            id="form-name"
-                            type="text"
-                            class=CLASS_DISABLED_INPUT
-                            prop:value=name
-                            disabled
-                        />
-                    </Show>
-                </div>
-
-                <div>
-                    <label for="form-provider" class=CLASS_LABEL>
-                        {t!(Providers)}
-                    </label>
-                    <select
-                        id="form-provider"
-                        class=CLASS_INPUT
-                        on:change=move |ev| provider_id.set(event_target_value(&ev))
-                    >
-                        {providers_resource
-                            .get_untracked()
-                            .map(|providers| {
-                                let current = provider_id.get_untracked();
-                                providers
-                                    .iter()
-                                    .map(|(id, name)| {
-                                        view! {
-                                            <option value=id.clone() selected=current == *id>
-                                                {name.clone()}
-                                            </option>
-                                        }
-                                    })
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default()}
-                    </select>
-                </div>
-
-                <div>
-                    <label for="form-upstream" class=CLASS_LABEL>
-                        {t!(ModelUpstreamModel)}
-                    </label>
+            <div>
+                <label for="form-name" class=CLASS_LABEL>
+                    {t!(Name)}
+                </label>
+                <Show when=move || !is_edit>
                     <input
-                        id="form-upstream"
+                        id="form-name"
                         type="text"
                         class=CLASS_INPUT
-                        placeholder=ts!(ModelUpstreamModel)
-                        prop:value=upstream_model
-                        on:input=move |ev| upstream_model.set(event_target_value(&ev))
+                        placeholder=ts!(Name)
+                        prop:value=name
+                        on:input=move |ev| name.set(event_target_value(&ev))
                     />
-                </div>
+                </Show>
+                <Show when=move || is_edit>
+                    <input
+                        id="form-name"
+                        type="text"
+                        class=CLASS_DISABLED_INPUT
+                        prop:value=name
+                        disabled
+                    />
+                </Show>
+            </div>
 
-                <ToggleField id="form-enabled" signal=enabled label=ts!(StatusEnabled) />
+            <div>
+                <label for="form-provider" class=CLASS_LABEL>
+                    {t!(Providers)}
+                </label>
+                <select
+                    id="form-provider"
+                    class=CLASS_INPUT
+                    on:change=move |ev| provider_id.set(event_target_value(&ev))
+                >
+                    {providers_resource
+                        .get_untracked()
+                        .map(|providers| {
+                            let current = provider_id.get_untracked();
+                            providers
+                                .iter()
+                                .map(|(id, name)| {
+                                    view! {
+                                        <option value=id.clone() selected=current == *id>
+                                            {name.clone()}
+                                        </option>
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()}
+                </select>
+            </div>
 
-                <ErrorText msg=form_error />
+            <div>
+                <label for="form-upstream" class=CLASS_LABEL>
+                    {t!(UpstreamModel)}
+                </label>
+                <input
+                    id="form-upstream"
+                    type="text"
+                    class=CLASS_INPUT
+                    placeholder=ts!(UpstreamModel)
+                    prop:value=upstream_model
+                    on:input=move |ev| upstream_model.set(event_target_value(&ev))
+                />
+            </div>
 
-                <div class=CLASS_FORM_FOOTER>
-                    <button type="button" class=CLASS_BTN_CANCEL on:click=move |_| on_close()>
-                        {t!(Cancel)}
-                    </button>
-                    <SubmitButton is_edit=is_edit pending=save_action.pending() />
-                </div>
-            </form>
-        </ModalShell>
+            <ToggleField id="form-enabled" signal=enabled label=ts!(StatusEnabled) />
+        </FormModalShell>
     }
 }
 
@@ -443,7 +441,7 @@ fn ModelDetailModal(
                 <DetailRow label="ID".to_string()>{model_id}</DetailRow>
                 <DetailRow label=ts!(Name)>{model_name}</DetailRow>
                 <DetailRow label=ts!(Providers)>{provider_name}</DetailRow>
-                <DetailRow label=ts!(ModelUpstreamModel)>{model_upstream}</DetailRow>
+                <DetailRow label=ts!(UpstreamModel)>{model_upstream}</DetailRow>
                 <DetailRow label=ts!(TableStatus) value_class=CLASS_DETAIL_VALUE_TAG>
                     {status_badge(model_enabled)}
                 </DetailRow>

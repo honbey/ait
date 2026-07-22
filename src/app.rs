@@ -55,7 +55,10 @@ impl AppState {
 
         let http_client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(std::time::Duration::from_secs(config.proxy.timeout_secs))
+            .connect_timeout(std::time::Duration::from_secs(
+                config.proxy.connect_timeout_secs,
+            ))
+            .tcp_keepalive(Some(std::time::Duration::from_secs(60)))
             .build()
             .map_err(AppInitError::HttpClient)?;
 
@@ -99,6 +102,7 @@ impl AppState {
             ssrf_dns_cache.clone(),
             shutdown_token.clone(),
             config.server.cache_cleanup_interval_secs,
+            config.server.cache_max_entries as usize,
         );
 
         Ok(Self {
@@ -163,7 +167,9 @@ fn spawn_session_cleanup(db: Arc<Database>, shutdown: CancellationToken, interva
 }
 
 /// Evict expired in-memory cache entries at a configurable interval.
+/// Applies a shorter TTL when a cache exceeds 90% of max_entries.
 /// Covers session, api_key, model, provider, and SSRF DNS caches in one task.
+#[allow(clippy::too_many_arguments)]
 fn spawn_caches_cleanup(
     session_cache: Arc<DashMap<String, SessionCacheEntry>>,
     api_key_cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>>,
@@ -172,6 +178,7 @@ fn spawn_caches_cleanup(
     ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
     shutdown: CancellationToken,
     interval_secs: u64,
+    max_entries: usize,
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
@@ -179,11 +186,29 @@ fn spawn_caches_cleanup(
             tokio::select! {
                 _ = shutdown.cancelled() => break,
                 _ = interval.tick() => {
-                    session_cache.retain(|_, v| v.2.elapsed() < CACHE_TTL);
-                    api_key_cache.retain(|_, v| v.1.elapsed() < CACHE_TTL);
-                    model_cache.retain(|_, v| v.1.elapsed() < CACHE_TTL);
-                    provider_cache.retain(|_, v| v.1.elapsed() < CACHE_TTL);
-                    ssrf_dns_cache.retain(|_, v| v.1.elapsed() < CACHE_TTL);
+                    let caches = (
+                        session_cache.clone(),
+                        api_key_cache.clone(),
+                        model_cache.clone(),
+                        provider_cache.clone(),
+                        ssrf_dns_cache.clone(),
+                    );
+                    if let Err(e) = crate::run_blocking(move || {
+                        let threshold = max_entries.saturating_mul(9) / 10;
+                        let aggressive = |len: usize| if len > threshold { CACHE_TTL / 2 } else { CACHE_TTL };
+                        let ttl = aggressive(caches.0.len());
+                        caches.0.retain(|_, v| v.2.elapsed() < ttl);
+                        let ttl = aggressive(caches.1.len());
+                        caches.1.retain(|_, v| v.1.elapsed() < ttl);
+                        let ttl = aggressive(caches.2.len());
+                        caches.2.retain(|_, v| v.1.elapsed() < ttl);
+                        let ttl = aggressive(caches.3.len());
+                        caches.3.retain(|_, v| v.1.elapsed() < ttl);
+                        let ttl = aggressive(caches.4.len());
+                        caches.4.retain(|_, v| v.1.elapsed() < ttl);
+                    }).await {
+                        tracing::warn!("Cache cleanup error: {e}");
+                    }
                 }
             }
         }
@@ -201,7 +226,14 @@ fn spawn_rate_limiter_cleanup(
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
-                _ = interval.tick() => limiter.cleanup(window_secs),
+                _ = interval.tick() => {
+                    let limiter = limiter.clone();
+                    if let Err(e) = crate::run_blocking(move || {
+                        limiter.cleanup(window_secs);
+                    }).await {
+                        tracing::warn!("Rate limiter cleanup error: {e}");
+                    }
+                }
             }
         }
     });

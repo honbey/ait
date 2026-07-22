@@ -5,19 +5,20 @@ use reactive_stores::{Field, Patch, Store};
 use crate::api;
 use crate::api::{Provider, ProviderStoreFields};
 
-use crate::components::error_display::{ErrorCard, ErrorText};
-use crate::components::modal::{DeleteConfirmModal, ModalShell};
+use crate::components::error_display::ErrorCard;
+use crate::components::modal::{DeleteConfirmModal, FormModalShell, ModalShell};
 use crate::components::skeleton::table_skeleton;
 use crate::components::style::{
-    CLASS_BTN_CANCEL, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE_MONO, CLASS_DETAIL_VALUE_PLAIN,
-    CLASS_DETAIL_VALUE_TAG, CLASS_FORM_FOOTER, CLASS_ICON_BTN, CLASS_INPUT, CLASS_LABEL,
-    CLASS_PAGE_TITLE,
+    CLASS_BORDER_B, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE_MONO, CLASS_DETAIL_VALUE_PLAIN,
+    CLASS_DETAIL_VALUE_TAG, CLASS_ICON_BTN, CLASS_INPUT, CLASS_LABEL, CLASS_PAGE_TITLE,
+    CLASS_TEXT_MUTED,
 };
 use crate::components::table::{
-    DataTableCard, DetailCloseButton, DetailRow, EntityModal, SubmitButton, ToggleField,
-    attach_save_effect, provider_display_name, status_badge, timestamp_str,
+    DataTableCard, DetailCloseButton, DetailRow, EntityModal, ToggleField, attach_save_effect,
+    provider_display_name, status_badge, timestamp_str,
 };
 use crate::components::toast::use_toast;
+use crate::components::use_page_title;
 use crate::storage;
 use crate::{t, tr, trs, ts};
 use leptos::logging;
@@ -37,9 +38,7 @@ struct ProvidersStore {
 
 #[component]
 pub fn ProvidersPage() -> impl IntoView {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(&format!("Ait - {}", ts!(Providers)));
-    }
+    use_page_title(&format!("Ait - {}", ts!(Providers)));
     let modal = RwSignal::new(ProviderModal::Closed);
     let state = Store::new(ProvidersStore::default());
 
@@ -77,11 +76,8 @@ pub fn ProvidersPage() -> impl IntoView {
         );
 
     let _sync_store = Effect::new(move |_| match providers_rsc.get() {
-        Some(Ok(ref items)) => {
-            let items_field = state.items();
-            let mut guard = items_field.write();
-            guard.clone_from(items);
-            drop(guard);
+        Some(Ok(items)) => {
+            state.items().patch(items);
             state.error().set(None);
         }
         Some(Err(ref e)) => state.error().set(Some(e.to_string())),
@@ -107,25 +103,31 @@ pub fn ProvidersPage() -> impl IntoView {
                             <div class="overflow-x-auto">
                                 <table class="w-full text-sm">
                                     <thead>
-                                        <tr class="border-b border-gray-100 dark:border-gray-700">
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(Name)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(ProviderType)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(ProviderBaseUrl)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(TableStatus)}
-                                            </th>
-                                            <th class="px-6 py-3 text-left text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(UpdatedAt)}
-                                            </th>
-                                            <th class="px-6 py-3 text-center text-gray-500 dark:text-gray-400 font-medium">
-                                                {t!(Actions)}
-                                            </th>
+                                        <tr class=CLASS_BORDER_B>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(Name)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(ProviderType)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(ProviderBaseUrl)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(TableStatus)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(UpdatedAt)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-center {} font-medium",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(Actions)}</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -399,113 +401,109 @@ fn ProviderFormModal(
     };
 
     view! {
-        <ModalShell on_close=on_close.clone() title=title>
-            <form on:submit=on_submit class="space-y-4">
+        <FormModalShell
+            on_close=on_close.clone()
+            title=title
+            on_submit
+            pending=save_action.pending()
+            is_edit
+            form_error
+        >
 
-                <div>
-                    <label for="form-name" class=CLASS_LABEL>
-                        {t!(Name)}
-                    </label>
-                    <input
-                        id="form-name"
-                        type="text"
-                        class=CLASS_INPUT
-                        placeholder=ts!(Name)
-                        prop:value=name
-                        on:input=move |ev| name.set(event_target_value(&ev))
-                    />
-                </div>
+            <div>
+                <label for="form-name" class=CLASS_LABEL>
+                    {t!(Name)}
+                </label>
+                <input
+                    id="form-name"
+                    type="text"
+                    class=CLASS_INPUT
+                    placeholder=ts!(Name)
+                    prop:value=name
+                    on:input=move |ev| name.set(event_target_value(&ev))
+                />
+            </div>
 
-                <div>
-                    <label for="form-type" class=CLASS_LABEL>
-                        {t!(ProviderType)}
-                    </label>
-                    <select
-                        id="form-type"
-                        class=CLASS_INPUT
-                        on:change=move |ev| provider_type.set(event_target_value(&ev))
-                    >
-                        {{
-                            let current = provider_type.get_untracked();
-                            let types = provider_types_resource
-                                .get_untracked()
-                                .filter(|types| !types.is_empty());
-                            if let Some(types) = types {
-                                types
-                                    .iter()
-                                    .map(|(id, name)| {
-                                        view! {
-                                            <option value=id.clone() selected=current == *id>
-                                                {name.clone()}
-                                            </option>
-                                        }
-                                    })
-                                    .collect::<Vec<_>>()
-                            } else {
-                                vec![
+            <div>
+                <label for="form-type" class=CLASS_LABEL>
+                    {t!(ProviderType)}
+                </label>
+                <select
+                    id="form-type"
+                    class=CLASS_INPUT
+                    on:change=move |ev| provider_type.set(event_target_value(&ev))
+                >
+                    {{
+                        let current = provider_type.get_untracked();
+                        let types = provider_types_resource
+                            .get_untracked()
+                            .filter(|types| !types.is_empty());
+                        if let Some(types) = types {
+                            types
+                                .iter()
+                                .map(|(id, name)| {
                                     view! {
-                                        <option
-                                            value="openai_compat".to_string()
-                                            selected=current == "openai_compat"
-                                        >
-                                            {"OpenAI Compatible".to_string()}
+                                        <option value=id.clone() selected=current == *id>
+                                            {name.clone()}
                                         </option>
-                                    },
-                                ]
-                            }
-                        }}
-                    </select>
-                </div>
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                        } else {
+                            vec![
+                                view! {
+                                    <option
+                                        value="openai_compat".to_string()
+                                        selected=current == "openai_compat"
+                                    >
+                                        {"OpenAI Compatible".to_string()}
+                                    </option>
+                                },
+                            ]
+                        }
+                    }}
+                </select>
+            </div>
 
-                <div>
-                    <label for="form-url" class=CLASS_LABEL>
-                        {t!(ProviderBaseUrl)}
-                    </label>
-                    <input
-                        id="form-url"
-                        type="text"
-                        class=CLASS_INPUT
-                        placeholder=ts!(ProviderBaseUrl)
-                        prop:value=base_url
-                        on:input=move |ev| base_url.set(event_target_value(&ev))
-                    />
-                </div>
+            <div>
+                <label for="form-url" class=CLASS_LABEL>
+                    {t!(ProviderBaseUrl)}
+                </label>
+                <input
+                    id="form-url"
+                    type="text"
+                    class=CLASS_INPUT
+                    placeholder=ts!(ProviderBaseUrl)
+                    prop:value=base_url
+                    on:input=move |ev| base_url.set(event_target_value(&ev))
+                />
+            </div>
 
-                <div>
-                    <label for="form-api-key" class=CLASS_LABEL>
-                        {t!(ApiKey)}
-                        <Show when=move || is_edit>
-                            <span class="text-xs text-gray-400 dark:text-gray-500 ml-1">
-                                {t!(KeepKeyHint)}
-                            </span>
-                        </Show>
-                    </label>
-                    <input
-                        id="form-api-key"
-                        type="text"
-                        class=CLASS_INPUT
-                        placeholder=ts!(ApiKey)
-                        prop:value=api_key
-                        on:input=move |ev| api_key.set(event_target_value(&ev))
-                    />
-                </div>
+            <div>
+                <label for="form-api-key" class=CLASS_LABEL>
+                    {t!(ApiKey)}
+                    <Show when=move || is_edit>
+                        <span class="text-xs text-gray-400 dark:text-gray-500 ml-1">
+                            {t!(KeepKeyHint)}
+                        </span>
+                    </Show>
+                </label>
+                <input
+                    id="form-api-key"
+                    type="text"
+                    class=CLASS_INPUT
+                    placeholder=ts!(ApiKey)
+                    prop:value=api_key
+                    on:input=move |ev| api_key.set(event_target_value(&ev))
+                />
+            </div>
 
-                <Show when=move || is_edit>
-                    <ToggleField id="form-clear-key" signal=clear_key label=ts!(ClearKey) />
-                </Show>
+            <Show when=move || is_edit>
+                <ToggleField id="form-clear-key" signal=clear_key label=ts!(ClearKey) />
+            </Show>
 
-                <ToggleField id="form-enabled" signal=enabled label=ts!(StatusEnabled) />
-
-                <ErrorText msg=form_error />
-
-                <div class=CLASS_FORM_FOOTER>
-                    <button type="button" class=CLASS_BTN_CANCEL on:click=move |_| on_close()>
-                        {t!(Cancel)}
-                    </button>
-                    <SubmitButton is_edit=is_edit pending=save_action.pending() />
-                </div>
-            </form>
-        </ModalShell>
+            <ToggleField id="form-enabled" signal=enabled label=ts!(StatusEnabled) />
+        </FormModalShell>
     }
 }
 
