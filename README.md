@@ -125,7 +125,7 @@ ait -c /path/to/config.toml
 | POST | /v1/chat/completions | 聊天补全 |
 | POST | /v1/completions | 文本补全 |
 | POST | /v1/embeddings | 文本嵌入 |
-| POST | /v1/responase | 新版接口 |
+| POST | /v1/responses | 新版接口 |
 | GET | /v1/models | 模型列表 |
 | GET | /v1/health | 健康检查 |
 
@@ -136,3 +136,7 @@ ait -c /path/to/config.toml
 - [x] DeepSeek
 - [x] Zhipu
 - [x] OpenCode Go (OpenAI Compatible)
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。
