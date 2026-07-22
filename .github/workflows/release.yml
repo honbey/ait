@@ -46,8 +46,10 @@ jobs:
           cp -r frontend/dist dist/frontend/
           tar czf ait-${{ github.ref_name }}-x86_64-linux.tar.gz -C dist .
 
-      - name: Upload Release Artifact
-        uses: actions/upload-artifact@v7
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
         with:
-          name: ait-${{ github.ref_name }}-x86_64-linux
-          path: ait-${{ github.ref_name }}-x86_64-linux.tar.gz
+          files: ait-${{ github.ref_name }}-x86_64-linux.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
