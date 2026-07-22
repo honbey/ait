@@ -11,7 +11,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: rustup target add wasm32-unknown-unknown
 
@@ -22,7 +22,7 @@ jobs:
           tar xzf trunk.tar.gz
           sudo mv trunk /usr/local/bin/
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/
@@ -47,7 +47,7 @@ jobs:
           tar czf ait-${{ github.ref_name }}-x86_64-linux.tar.gz -C dist .
 
       - name: Upload Release Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ait-${{ github.ref_name }}-x86_64-linux
           path: ait-${{ github.ref_name }}-x86_64-linux.tar.gz

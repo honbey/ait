@@ -13,10 +13,10 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: rustup target add wasm32-unknown-unknown
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/
@@ -25,18 +25,18 @@ jobs:
           key: check-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             check-${{ runner.os }}-
-      - run: cargo check --verbose
-      - run: cargo check --verbose --target wasm32-unknown-unknown -p ait-frontend
+      - run: cargo check
+      - run: cargo check --target wasm32-unknown-unknown -p ait-frontend
 
   clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - run: rustup target add wasm32-unknown-unknown
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/
@@ -45,13 +45,13 @@ jobs:
           key: clippy-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             clippy-${{ runner.os }}-
-      - run: cargo clippy --verbose -- -D warnings
-      - run: cargo clippy --verbose --target wasm32-unknown-unknown -p ait-frontend -- -D warnings
+      - run: cargo clippy -- -D warnings
+      - run: cargo clippy --target wasm32-unknown-unknown -p ait-frontend -- -D warnings
 
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -60,7 +60,7 @@ jobs:
   leptosfmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install leptosfmt
         run: |
           curl -sSfLo leptosfmt.tar.gz \
@@ -73,9 +73,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/
@@ -85,4 +85,4 @@ jobs:
           restore-keys: |
             test-${{ runner.os }}-
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test
