@@ -5,7 +5,7 @@ use leptos_router::{
 };
 
 use crate::api;
-use crate::auth::AuthContext;
+use crate::auth::{AuthContext, AuthStatus};
 use crate::components::console_layout::ConsoleShell;
 use crate::components::toast::{ToastContainer, ToastManager};
 use crate::components::topbar::Topbar;
@@ -36,7 +36,7 @@ pub fn App() -> impl IntoView {
             match api::check_session().await {
                 Ok(Some(uname)) => auth_clone.set_logged_in(uname),
                 Ok(None) => auth_clone.set_logged_out(),
-                Err(_) => auth_clone.authenticated.set(Some(false)),
+                Err(_) => auth_clone.authenticated.set(AuthStatus::NotAuthenticated),
             }
         }
     });

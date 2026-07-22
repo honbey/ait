@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use leptos_router::components::A;
 
-use crate::auth::AuthContext;
+use crate::auth::{AuthContext, AuthStatus};
 use crate::components::skeleton::render_loading;
 use crate::components::style::CLASS_TEXT_MUTED;
 use crate::components::use_page_title;
@@ -14,8 +14,8 @@ pub fn Home() -> impl IntoView {
 
     move || {
         match auth.authenticated.get() {
-        None => render_loading().into_any(),
-        Some(_) => view! {
+        AuthStatus::Unknown => render_loading().into_any(),
+        _ => view! {
             <div class="min-h-[calc(100vh-3.5rem)] flex items-center justify-center bg-gray-50 dark:bg-gray-900">
                 <div class="text-center px-4">
                     <h1 class="text-6xl font-bold text-gray-900 dark:text-gray-100 mb-6">
@@ -27,7 +27,7 @@ pub fn Home() -> impl IntoView {
                     )>{t!(IndexSubtitle)}</p>
                     <div class="mt-8 flex items-center justify-center gap-4">
                         <Show
-                            when=move || auth.authenticated.get() == Some(true)
+                            when=move || auth.authenticated.get() == AuthStatus::Authenticated
                             fallback=|| {
                                 view! {
                                     <A

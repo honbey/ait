@@ -3,7 +3,7 @@ use leptos_router::components::{A, Redirect};
 use leptos_router::hooks::use_navigate;
 
 use crate::api;
-use crate::auth::AuthContext;
+use crate::auth::{AuthContext, AuthStatus};
 use crate::components::error_display::ErrorText;
 use crate::components::style::{CLASS_CARD, CLASS_INPUT, CLASS_LABEL};
 use crate::components::use_page_title;
@@ -71,7 +71,7 @@ pub fn LoginPage() -> impl IntoView {
     };
 
     view! {
-        <Show when=move || auth_redirect.authenticated.get() == Some(true)>
+        <Show when=move || auth_redirect.authenticated.get() == AuthStatus::Authenticated>
             <Redirect path="/console" />
         </Show>
         <main>

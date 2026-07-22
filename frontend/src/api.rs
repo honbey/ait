@@ -9,7 +9,7 @@ use leptos::prelude::*;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::auth::AuthContext;
+use crate::auth::{AuthContext, AuthStatus};
 use crate::components::toast::ToastManager;
 use crate::i18n::{I18n, K};
 use reactive_stores::{Patch, Store};
@@ -78,7 +78,7 @@ fn handle_401(status: u16) {
     }
     clear_cache();
     if let Some(auth) = use_context::<AuthContext>() {
-        auth.authenticated.set(Some(false));
+        auth.authenticated.set(AuthStatus::NotAuthenticated);
         if let (Some(toast), Some(i18n)) = (use_context::<ToastManager>(), use_context::<I18n>()) {
             toast.error(i18n.t_untracked(K::SessionExpired));
         }
