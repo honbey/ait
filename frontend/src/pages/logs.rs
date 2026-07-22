@@ -3,7 +3,7 @@ use leptos::prelude::*;
 use crate::api::{self, PaginatedResponse, ProxyLogEntryResponse};
 use crate::components::error_display::ErrorCard;
 use crate::components::modal::ModalShell;
-use crate::components::skeleton::table_skeleton;
+use crate::components::skeleton::logs_table_skeleton;
 use crate::components::style::{
     CLASS_BORDER_B, CLASS_BTN_PRIMARY, CLASS_CARD, CLASS_DETAIL_DIVIDER, CLASS_DETAIL_VALUE,
     CLASS_DETAIL_VALUE_MONO, CLASS_DETAIL_VALUE_PLAIN, CLASS_INPUT, CLASS_PAGE_TITLE,
@@ -402,7 +402,7 @@ pub fn LogsPage() -> impl IntoView {
             </div>
 
             <div class=CLASS_CARD>
-                <Transition fallback=move || table_skeleton()>
+                <Transition fallback=move || logs_table_skeleton()>
                     {move || match rsc.get() {
                         Some(Ok(ref data)) => {
                             let items = &data.items;
