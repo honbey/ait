@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: check-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            check-${{ runner.os }}-
+      - run: cargo check --verbose
+      - run: cargo check --verbose --target wasm32-unknown-unknown -p ait-frontend
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: clippy-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            clippy-${{ runner.os }}-
+      - run: cargo clippy --verbose -- -D warnings
+      - run: cargo clippy --verbose --target wasm32-unknown-unknown -p ait-frontend -- -D warnings
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  leptosfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install leptosfmt
+        run: |
+          curl -sSfLo leptosfmt.tar.gz \
+            https://github.com/bram209/leptosfmt/releases/download/0.1.33/leptosfmt-x86_64-unknown-linux-gnu.tar.gz
+          tar xzf leptosfmt.tar.gz
+          chmod +x leptosfmt
+          sudo mv leptosfmt /usr/local/bin/
+      - run: leptosfmt --check frontend/src/
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            test-${{ runner.os }}-
+      - name: Run tests
+        run: cargo test --verbose
