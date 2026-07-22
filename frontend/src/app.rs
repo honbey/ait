@@ -69,7 +69,7 @@ pub fn App() -> impl IntoView {
         <div class=move || if dark.get() { "dark" } else { "" }>
             <Router>
                 <Topbar dark=dark />
-                <main class="min-h-[calc(100vh-3.5rem)] animate-fadeIn">
+                <main class="min-h-[calc(100vh-3.5rem)]">
                     <Routes fallback=|| view! { <NotFoundPage /> }>
                         <Route path=StaticSegment("") view=Home />
                         <Route path=StaticSegment("login") view=LoginPage />
