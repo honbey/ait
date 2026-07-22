@@ -50,6 +50,8 @@ port = 8000
 health_detail = false
 session_cleanup_interval_secs = 3600
 rate_limiter_cleanup_interval_secs = 600
+cache_cleanup_interval_secs = 300
+cache_max_entries = 1000
 graceful_timeout_secs = 10
 trusted_proxies = ["127.0.0.1", "::1"]
 
@@ -72,13 +74,20 @@ flush_interval_secs = 10
 flush_batch = 100
 channel_cap = 10000
 retention_every = 100
+analytics_timeout_secs = 10
 level = "info"
 axum = "info"
 tower_http_trace = "info"
 
 [proxy]
 timeout_secs = 300
+connect_timeout_secs = 30
+sse_idle_timeout_secs = 60
 stream = true
+
+[security]
+cors_allowed_origins = []
+ssrf_allowed_cidrs = []
 ```
 
 **注意**：大部分配置项都可通过 `AIT_<SECTION>_<KEY>` 环境变量覆盖，例如：
@@ -102,7 +111,7 @@ ait -c /path/to/config.toml
 
 ## Web 管理界面
 
-编译时将前端 WASM 静态文件嵌入后端，启动后通过 `http://{host}:{port}` 访问。
+构建前端后将 `frontend/dist/` 与后端二进制一起部署，启动后通过 `http://{host}:{port}` 访问。
 
 详细说明见 [frontend/README.md](frontend/README.md)。
 
@@ -112,16 +121,18 @@ ait -c /path/to/config.toml
 可以通过配置文件 `auth.enabled: false` 关闭认证，但 Admin 接口（/api/*）必须认证。
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | POST | /v1/chat/completions | 聊天补全 |
 | POST | /v1/completions | 文本补全 |
 | POST | /v1/embeddings | 文本嵌入 |
-| GET  | /v1/models | 模型列表 |
-| GET  | /v1/health | 健康检查 |
+| POST | /v1/responase | 新版接口 |
+| GET | /v1/models | 模型列表 |
+| GET | /v1/health | 健康检查 |
 
 ## 支持的提供商类型
 
 - [x] llama.cpp 使用 OpenAI Compatible 接口 (llama-server)
 - [x] Ollama - 使用 OpenAI Compatible 接口
-- [ ] DeepSeek - 待验证
-- [ ] Zhipu - 待验证
+- [x] DeepSeek
+- [x] Zhipu
+- [x] OpenCode Go (OpenAI Compatible)

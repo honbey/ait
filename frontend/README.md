@@ -1,20 +1,20 @@
 # Ait Frontend
 
-基于 Leptos 0.8 CSR 的 WASM 前端，编译为 WebAssembly 后嵌入 Ait 后端。
+基于 Leptos 0.8 CSR 的 WASM 前端，编译的 WebAssembly 等静态文件由 Ait 后端 tower-http 的 `ServerDir` 提供。
 
 ## 技术栈
 
 | 层 | 选型 |
-|---|---|
-| 框架 | [Leptos 0.8](https://leptos.dev/)（CSR 模式）|
+| --- | --- |
+| 框架 | [Leptos 0.8](https://leptos.dev/)（CSR 模式） |
 | 路由 | [leptos_router 0.8](https://docs.rs/leptos_router/0.8) |
-| 样式 | [Tailwind CSS 4](https://tailwindcss.com/)（Trunk 构建钩子）|
-| 图表 | [ECharts 6.1](https://echarts.apache.org/)（动态注入）|
+| 样式 | [Tailwind CSS 4](https://tailwindcss.com/)（Trunk 构建钩子） |
+| 图表 | [ECharts 6.1](https://echarts.apache.org/)（动态注入） |
 | 构建 | [Trunk 0.21.14](https://trunkrs.dev/) |
 | HTTP | [gloo-net 0.7](https://docs.rs/gloo-net/0.7) |
-| 存储 | [gloo-storage 0.4](https://docs.rs/gloo-storage)（Local → Session → Memory 回退链）|
-| 格式化 | [leptosfmt](https://github.com/bram2103/leptosfmt)（`cargo fmt` 不会格式化 view! 宏）|
-| 国际化 | compile-time i18n（`locales/lang.json` → `build.rs` 生成 `K` 枚举）|
+| 存储 | [gloo-storage 0.4](https://docs.rs/gloo-storage)（Local → Session → Memory 回退链） |
+| 格式化 | [leptosfmt](https://github.com/bram2103/leptosfmt)（`cargo fmt` 不会格式化 view! 宏） |
+| 国际化 | compile-time i18n（`locales/lang.json` → `build.rs` 生成 `K` 枚举） |
 
 ## 功能
 
@@ -27,14 +27,14 @@
 ## 页面
 
 | 路径 | 页面 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `/` | 首页 | - |
 | `/login` | 登录 | 用户名密码登录 |
-| `/console/overview` | 概览 | 提供商 / 模型总数、API 请求数 / Token 消耗图表|
+| `/console/overview` | 概览 | 提供商 / 模型总数、API 请求数 / Token 消耗图表 |
 | `/console/providers` | 提供商管理 | - |
 | `/console/models` | 模型管理 | - |
 | `/console/api-keys` | API Key 管理 | - |
-| `/console/text-generation` | 文本生成 | 文本生成接口，需要 API Key |
+| `/console/text-generation` | 文本生成 | 文本生成接口 demo，需要 API Key |
 
 ## 开发
 
