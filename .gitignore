@@ -72,3 +72,4 @@ frontend/assets
 *.tmp
 *.http
 a.*
+.docs
