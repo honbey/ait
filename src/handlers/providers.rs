@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use strum::{EnumMessage, IntoEnumIterator};
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, Provider, ProviderType, SessionUser};
+use crate::db::{AuditEvent, Provider, ProviderType, RequestId, SessionUser};
 use crate::error::{AitError, internal_error, not_found};
 use crate::handlers::{ident_chars, validate_string};
 use crate::ssrf;
@@ -141,6 +141,7 @@ fn validate_base_url(url: &str) -> Result<reqwest::Url, AitError> {
 pub async fn create_provider(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(request_id): Extension<RequestId>,
     Json(input): Json<CreateProviderRequest>,
 ) -> Result<(StatusCode, Json<ProviderResponse>), (StatusCode, Json<AitError>)> {
     let name = validate_string(&input.name, "name", 128, ident_chars)?;
@@ -185,6 +186,7 @@ pub async fn create_provider(
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
+        request_id: request_id.0,
         username: session.username.clone(),
         action: "create".into(),
         resource: "provider".into(),
@@ -228,6 +230,7 @@ pub async fn get_provider(
 pub async fn get_provider_api_key(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
     let db = state.db.clone();
@@ -240,6 +243,7 @@ pub async fn get_provider_api_key(
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
+        request_id: request_id.0,
         username: session.username,
         action: "view_api_key".into(),
         resource: "provider".into(),
@@ -257,6 +261,7 @@ pub async fn get_provider_api_key(
 pub async fn update_provider(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
     Json(input): Json<UpdateProviderRequest>,
 ) -> Result<Json<ProviderResponse>, (StatusCode, Json<AitError>)> {
@@ -324,6 +329,7 @@ pub async fn update_provider(
         .retain(|_, v| v.0.as_ref().is_none_or(|(_, p)| p.id != id));
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
+        request_id: request_id.0,
         username: session.username.clone(),
         action: "update".into(),
         resource: "provider".into(),
@@ -337,6 +343,7 @@ pub async fn update_provider(
 pub async fn delete_provider(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
     let db = state.db.clone();
@@ -355,6 +362,7 @@ pub async fn delete_provider(
         .retain(|_, v| v.0.as_ref().is_none_or(|(_, p)| p.id != id));
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
+        request_id: request_id.0,
         username: session.username.clone(),
         action: "delete".into(),
         resource: "provider".into(),

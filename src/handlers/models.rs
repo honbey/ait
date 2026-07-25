@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, Model, SessionUser};
+use crate::db::{AuditEvent, Model, RequestId, SessionUser};
 use crate::error::{AitError, internal_error, not_found};
 use crate::handlers::{model_name_chars, upstream_model_chars, uuid_chars, validate_string};
 
@@ -90,6 +90,7 @@ impl From<CreateModelRequest> for Model {
 pub async fn create_model(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(request_id): Extension<RequestId>,
     Json(input): Json<CreateModelRequest>,
 ) -> Result<(StatusCode, Json<ModelResponse>), (StatusCode, Json<AitError>)> {
     let name = validate_string(&input.name, "name", 128, model_name_chars)?;
@@ -117,6 +118,7 @@ pub async fn create_model(
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
+        request_id: request_id.0,
         username: session.username.clone(),
         action: "create".into(),
         resource: "model".into(),
@@ -158,6 +160,7 @@ pub async fn get_model(
 pub async fn delete_model(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(request_id): Extension<RequestId>,
     Path(name): Path<String>,
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
     let db = state.db.clone();
@@ -173,6 +176,7 @@ pub async fn delete_model(
     state.model_cache.remove(&name);
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
+        request_id: request_id.0,
         username: session.username.clone(),
         action: "delete".into(),
         resource: "model".into(),
@@ -186,6 +190,7 @@ pub async fn delete_model(
 pub async fn update_model(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(request_id): Extension<RequestId>,
     Path(name): Path<String>,
     Json(input): Json<UpdateModelRequest>,
 ) -> Result<Json<ModelResponse>, (StatusCode, Json<AitError>)> {
@@ -216,6 +221,7 @@ pub async fn update_model(
     state.model_cache.remove(&model_name);
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
+        request_id: request_id.0,
         username: session.username.clone(),
         action: "update".into(),
         resource: "model".into(),
