@@ -4,7 +4,7 @@ use crate::error::{AitError, db_error, internal_error, too_many_requests, unauth
 use axum::{
     Json,
     extract::{ConnectInfo, Request, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     middleware::Next,
     response::Response,
 };
@@ -259,7 +259,12 @@ pub async fn access_log_middleware(
     let client_ip =
         get_client_ip(&req, &state.config.server.trusted_proxies).map(|ip| ip.to_string());
     req.extensions_mut().insert(RequestId(request_id.clone()));
-    let response = next.run(req).await;
+    let mut response = next.run(req).await;
+
+    response.headers_mut().insert(
+        HeaderName::from_static("x-request-id"),
+        HeaderValue::from_str(&request_id).expect("UUID is valid ASCII"),
+    );
 
     let latency = start.elapsed();
     let status = response.status().as_u16() as i32;
