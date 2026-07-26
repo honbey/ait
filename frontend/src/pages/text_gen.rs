@@ -18,7 +18,7 @@ use gloo_net::http::Request;
 
 #[component]
 pub fn TextGenPage() -> impl IntoView {
-    use_page_title(&format!("Ait - {}", ts!(TextGeneration)));
+    use_page_title(move || format!("Ait - {}", t!(TextGeneration)()));
     let models_resource = LocalResource::new(|| async move { api::fetch_models().await });
 
     let api_key: RwSignal<String> = RwSignal::new(String::new());

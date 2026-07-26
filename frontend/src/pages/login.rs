@@ -11,7 +11,7 @@ use crate::{t, trs, ts};
 
 #[component]
 pub fn LoginPage() -> impl IntoView {
-    use_page_title(&format!("Ait - {}", ts!(Login)));
+    use_page_title(move || format!("Ait - {}", t!(Login)()));
     let auth = use_context::<AuthContext>().expect("AuthContext");
 
     let username = RwSignal::new(String::new());

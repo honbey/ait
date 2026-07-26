@@ -50,7 +50,7 @@ fn expires_at_display(expires_at: Option<i64>) -> String {
 
 #[component]
 pub fn ApiKeysPage() -> impl IntoView {
-    use_page_title(&format!("Ait - {}", ts!(ApiKey)));
+    use_page_title(move || format!("Ait - {}", t!(ApiKey)()));
     let modal = RwSignal::new(ApiKeyModal::Closed);
     let state = Store::new(ApiKeysStore::default());
     let auth = use_context::<AuthContext>().expect("AuthContext not provided");

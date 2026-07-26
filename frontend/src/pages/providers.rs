@@ -38,7 +38,7 @@ struct ProvidersStore {
 
 #[component]
 pub fn ProvidersPage() -> impl IntoView {
-    use_page_title(&format!("Ait - {}", ts!(Providers)));
+    use_page_title(move || format!("Ait - {}", t!(Providers)()));
     let modal = RwSignal::new(ProviderModal::Closed);
     let state = Store::new(ProvidersStore::default());
 

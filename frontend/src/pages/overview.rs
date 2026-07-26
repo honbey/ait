@@ -9,7 +9,7 @@ use crate::components::skeleton::overview_skeleton;
 use crate::components::style::{CLASS_CARD, CLASS_TEXT_MUTED};
 use crate::components::use_page_title;
 use crate::time_utils::{clamp_range, date_str_to_ts, midnight_ts, now_timestamp, ts_to_date_str};
-use crate::{t, tr, ts};
+use crate::{t, tr};
 
 fn aggregate_daily(buckets: &[BucketEntry]) -> Vec<BucketEntry> {
     let mut daily: Vec<BucketEntry> = Vec::new();
@@ -137,7 +137,7 @@ fn TabButton(
 
 #[component]
 pub fn Overview() -> impl IntoView {
-    use_page_title(&format!("Ait - {}", ts!(Overview)));
+    use_page_title(move || format!("Ait - {}", t!(Overview)()));
 
     let auth = use_context::<AuthContext>().expect("AuthContext");
 
@@ -457,7 +457,7 @@ pub fn Overview() -> impl IntoView {
                         {t!(Last30Days)}
                     </button>
                     <div class="flex items-center border rounded-lg bg-white dark:bg-gray-700 \
-                     border-gray-300 dark:border-gray-600 overflow-hidden">
+                    border-gray-300 dark:border-gray-600 overflow-hidden">
                         <input
                             type="date"
                             id="filter-start-date"
@@ -465,8 +465,8 @@ pub fn Overview() -> impl IntoView {
                             aria-label=t!(StartDate)
                             prop:value=move || start_str.get()
                             class="px-2 py-1.5 text-sm border-0 bg-transparent \
-                             text-gray-700 dark:text-gray-200 cursor-pointer \
-                             focus:ring-0 focus:outline-none"
+                            text-gray-700 dark:text-gray-200 cursor-pointer \
+                            focus:ring-0 focus:outline-none"
                             on:change=on_start_date
                         />
                         <span class="px-1 text-gray-400 dark:text-gray-500 select-none">-</span>
@@ -477,8 +477,8 @@ pub fn Overview() -> impl IntoView {
                             aria-label=t!(EndDate)
                             prop:value=move || end_str.get()
                             class="px-2 py-1.5 text-sm border-0 bg-transparent \
-                             text-gray-700 dark:text-gray-200 cursor-pointer \
-                             focus:ring-0 focus:outline-none"
+                            text-gray-700 dark:text-gray-200 cursor-pointer \
+                            focus:ring-0 focus:outline-none"
                             on:change=on_end_date
                         />
                     </div>

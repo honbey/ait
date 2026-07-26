@@ -1,3 +1,5 @@
+use leptos::prelude::*;
+
 pub mod console_layout;
 pub mod echarts;
 pub mod error_display;
@@ -11,8 +13,10 @@ pub mod table;
 pub mod toast;
 pub mod topbar;
 
-pub fn use_page_title(title: &str) {
-    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-        doc.set_title(title);
-    }
+pub fn use_page_title(title: impl Fn() -> String + 'static) {
+    Effect::new(move |_| {
+        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+            doc.set_title(&title());
+        }
+    });
 }

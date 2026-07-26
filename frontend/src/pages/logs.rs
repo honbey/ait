@@ -196,7 +196,7 @@ fn PaginationBar(
 
 #[component]
 pub fn LogsPage() -> impl IntoView {
-    use_page_title(&format!("Ait - {}", ts!(LogQuery)));
+    use_page_title(move || format!("Ait - {}", t!(LogQuery)()));
 
     let page = RwSignal::new(1u64);
     let query_trigger = RwSignal::new(0u64);
