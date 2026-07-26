@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use reactive_graph::traits::{Get, ReadUntracked, Set, Write};
+use reactive_graph::traits::{Get, Read, ReadUntracked, Set, Write};
 use reactive_stores::{Field, Patch, Store};
 
 use crate::api;
@@ -91,7 +91,7 @@ pub fn ProvidersPage() -> impl IntoView {
     view! {
         <h1 class=CLASS_PAGE_TITLE>{tr!(ListTitle, &[("entity", &t!(Providers)())])}</h1>
         <DataTableCard
-            item_count=Signal::derive(move || state.items().get().len())
+            item_count=Signal::derive(move || state.items().read().len())
             on_refresh=do_refetch
             on_add=move || modal.set(ProviderModal::Add)
             add_label=trs!(Add, &[("entity", &ts!(Providers))])
