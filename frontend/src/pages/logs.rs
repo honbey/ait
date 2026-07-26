@@ -12,7 +12,7 @@ use crate::components::style::{
 use crate::components::table::DetailRow;
 use crate::components::table::timestamp_str;
 use crate::components::use_page_title;
-use crate::time_utils::{date_str_to_ts, ts_to_date_str};
+use crate::time_utils::{date_str_to_ts, midnight_ts, now_timestamp, ts_to_date_str};
 use crate::{t, ts};
 
 fn latency_pill(latency_s: f64) -> &'static str {
@@ -202,8 +202,10 @@ pub fn LogsPage() -> impl IntoView {
     let query_trigger = RwSignal::new(0u64);
     let per_page = RwSignal::new(10u64);
 
-    let (start_ts, set_start_ts) = signal::<Option<i64>>(None);
-    let (end_ts, set_end_ts) = signal::<Option<i64>>(None);
+    let now = now_timestamp();
+    let today = midnight_ts(now);
+    let (start_ts, set_start_ts) = signal::<Option<i64>>(Some(today - 6 * 86400));
+    let (end_ts, set_end_ts) = signal::<Option<i64>>(Some(now));
     let (provider_name, set_provider_name) = signal(String::new());
     let (model_name, set_model_name) = signal(String::new());
     let (api_key_name, set_api_key_name) = signal(String::new());
@@ -266,8 +268,10 @@ pub fn LogsPage() -> impl IntoView {
     };
 
     let do_reset = move |_| {
-        set_start_ts.set(None);
-        set_end_ts.set(None);
+        let now = now_timestamp();
+        let today = midnight_ts(now);
+        set_start_ts.set(Some(today - 6 * 86400));
+        set_end_ts.set(Some(now));
         set_provider_name.set(String::new());
         set_model_name.set(String::new());
         set_api_key_name.set(String::new());
@@ -369,26 +373,32 @@ pub fn LogsPage() -> impl IntoView {
                     </div>
                 </div>
 
-                <div class="grid grid-cols-6 gap-3 items-end">
-                    <div>
-                        <input
-                            id="filter-start-date"
-                            type="date"
-                            class=CLASS_INPUT
-                            prop:value=move || start_str.get()
-                            on:change=on_start_date
-                        />
+                <div class="grid grid-cols-8 gap-3 items-end">
+                    <div class="col-span-2">
+                        <div class="flex items-center border rounded-lg bg-white dark:bg-gray-700 \
+                        border-gray-300 dark:border-gray-600 overflow-hidden">
+                            <input
+                                id="filter-start-date"
+                                type="date"
+                                class="flex-1 px-3 py-2 text-sm border-0 bg-transparent \
+                                text-gray-900 dark:text-gray-100 cursor-pointer \
+                                focus:ring-0 focus:outline-none"
+                                prop:value=move || start_str.get()
+                                on:change=on_start_date
+                            />
+                            <span class="px-1 text-gray-400 dark:text-gray-500 select-none">-</span>
+                            <input
+                                id="filter-end-date"
+                                type="date"
+                                class="flex-1 px-3 py-2 text-sm border-0 bg-transparent \
+                                text-gray-900 dark:text-gray-100 cursor-pointer \
+                                focus:ring-0 focus:outline-none"
+                                prop:value=move || end_str.get()
+                                on:change=on_end_date
+                            />
+                        </div>
                     </div>
-                    <div>
-                        <input
-                            id="filter-end-date"
-                            type="date"
-                            class=CLASS_INPUT
-                            prop:value=move || end_str.get()
-                            on:change=on_end_date
-                        />
-                    </div>
-                    <div>
+                    <div class="col-span-1">
                         <select
                             id="filter-endpoint"
                             class=select_cls
@@ -400,12 +410,12 @@ pub fn LogsPage() -> impl IntoView {
                             <option value="" selected>
                                 {move || t!(LogEndpointAll)}
                             </option>
-                            <option value="/v1/chat/completions">{"/v1/chat/completions"}</option>
-                            <option value="/v1/completions">{"/v1/completions"}</option>
-                            <option value="/v1/embeddings">{"/v1/embeddings"}</option>
+                            <option value="/chat/completions">{"/chat/completions"}</option>
+                            <option value="/completions">{"/completions"}</option>
+                            <option value="/embeddings">{"/embeddings"}</option>
                         </select>
                     </div>
-                    <div>
+                    <div class="col-span-1">
                         <select
                             id="filter-streaming"
                             class=select_cls
@@ -428,7 +438,7 @@ pub fn LogsPage() -> impl IntoView {
                             <option value="false">{"Non-streaming"}</option>
                         </select>
                     </div>
-                    <div class="col-span-2 flex justify-end gap-3">
+                    <div class="col-span-4 flex justify-end gap-3">
                         <button
                             class="px-4 py-2 text-sm font-medium rounded-lg \
                             bg-gray-100 dark:bg-gray-700 \
