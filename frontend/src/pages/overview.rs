@@ -143,7 +143,8 @@ pub fn Overview() -> impl IntoView {
 
     let now = now_timestamp();
     let today = midnight_ts(now);
-    let default_end = now;
+    // exclusive backend bound (< end_ts), ~1s gap at 23:59:59 is negligible
+    let default_end = today + 86399;
     let default_start = today - 6 * 86400;
 
     let (start_ts, set_start_ts) = signal(default_start);

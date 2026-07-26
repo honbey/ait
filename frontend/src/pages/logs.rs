@@ -205,7 +205,10 @@ pub fn LogsPage() -> impl IntoView {
     let now = now_timestamp();
     let today = midnight_ts(now);
     let (start_ts, set_start_ts) = signal::<Option<i64>>(Some(today - 6 * 86400));
-    let (end_ts, set_end_ts) = signal::<Option<i64>>(Some(now));
+    let (end_ts, set_end_ts) = signal::<Option<i64>>(Some(
+        // exclusive backend bound (< end_ts), ~1s gap is negligible
+        today + 86399,
+    ));
     let (provider_name, set_provider_name) = signal(String::new());
     let (model_name, set_model_name) = signal(String::new());
     let (api_key_name, set_api_key_name) = signal(String::new());
@@ -271,7 +274,8 @@ pub fn LogsPage() -> impl IntoView {
         let now = now_timestamp();
         let today = midnight_ts(now);
         set_start_ts.set(Some(today - 6 * 86400));
-        set_end_ts.set(Some(now));
+        // exclusive backend bound (< end_ts), ~1s gap is negligible
+        set_end_ts.set(Some(today + 86399));
         set_provider_name.set(String::new());
         set_model_name.set(String::new());
         set_api_key_name.set(String::new());
