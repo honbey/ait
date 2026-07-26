@@ -252,8 +252,13 @@ pub fn LogsPage() -> impl IntoView {
             }
         });
 
-    let total: Signal<u64> =
-        Signal::derive(move || logs_resource.get().and_then(|r| r.ok()).map(|r| r.total).unwrap_or(0));
+    let total: Signal<u64> = Signal::derive(move || {
+        logs_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|r| r.total)
+            .unwrap_or(0)
+    });
 
     let do_query = move |_| {
         query_trigger.set(query_trigger.get_untracked() + 1);
