@@ -115,7 +115,7 @@ fn PaginationBar(
                 </div>
                 <div class="flex items-center gap-2">
                     <span class=format!("mr-1 {}", CLASS_TEXT_MUTED)>{t!(PerPage)}</span>
-                    <select class=select_cls on:change=on_per_page_change>
+                    <select id="filter-per-page" class=select_cls on:change=on_per_page_change>
                         <option value="10" selected=move || per_page.get() == 10>
                             "10"
                         </option>
