@@ -108,18 +108,26 @@ fn StatCard(
 }
 
 #[component]
-fn TabButton(active: bool, on_click: impl Fn() + 'static, label: impl IntoView) -> impl IntoView {
-    let cls = if active {
-        "px-4 py-1.5 text-sm font-medium rounded-lg \
-          bg-indigo-600 text-white shadow-sm cursor-pointer"
-    } else {
-        "px-4 py-1.5 text-sm font-medium rounded-lg \
-          bg-gray-100 dark:bg-gray-700 \
-          text-gray-600 dark:text-gray-300 \
-          hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
-    };
+fn TabButton(
+    active: Signal<bool>,
+    on_click: impl Fn() + 'static,
+    label: impl IntoView,
+) -> impl IntoView {
     view! {
-        <button class=cls on:click=move |_| on_click()>
+        <button
+            class=move || {
+                if active.get() {
+                    "px-4 py-1.5 text-sm font-medium rounded-lg \
+                      bg-indigo-600 text-white shadow-sm cursor-pointer"
+                } else {
+                    "px-4 py-1.5 text-sm font-medium rounded-lg \
+                      bg-gray-100 dark:bg-gray-700 \
+                      text-gray-600 dark:text-gray-300 \
+                      hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                }
+            }
+            on:click=move |_| on_click()
+        >
             {label}
         </button>
     }
@@ -413,7 +421,7 @@ pub fn Overview() -> impl IntoView {
                     <div class=format!("{} p-6", CLASS_CARD)>
                         <div class="flex items-center gap-2 mb-4">
                             <TabButton
-                                active=left_tab.get() == 0
+                                active=Signal::derive(move || left_tab.get() == 0)
                                 on_click={
                                     let l = set_left_tab;
                                     move || l.set(0)
@@ -421,7 +429,7 @@ pub fn Overview() -> impl IntoView {
                                 label=t!(ApiRequestCountTrendingTableTitle)
                             />
                             <TabButton
-                                active=left_tab.get() == 1
+                                active=Signal::derive(move || left_tab.get() == 1)
                                 on_click={
                                     let l = set_left_tab;
                                     move || l.set(1)
@@ -447,7 +455,7 @@ pub fn Overview() -> impl IntoView {
                     <div class=format!("{} p-6", CLASS_CARD)>
                         <div class="flex items-center gap-2 mb-4">
                             <TabButton
-                                active=right_tab.get() == 0
+                                active=Signal::derive(move || right_tab.get() == 0)
                                 on_click={
                                     let l = set_right_tab;
                                     move || l.set(0)
@@ -455,7 +463,7 @@ pub fn Overview() -> impl IntoView {
                                 label=t!(TokenConsumptionTrendingTableTitle)
                             />
                             <TabButton
-                                active=right_tab.get() == 1
+                                active=Signal::derive(move || right_tab.get() == 1)
                                 on_click={
                                     let l = set_right_tab;
                                     move || l.set(1)
