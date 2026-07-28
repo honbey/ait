@@ -1,5 +1,26 @@
 # 更新日志
 
+## [v0.1.6] - 2026-07-28
+
+### 新增功能
+
+- **X-Request-Id 追踪** - 所有响应添加 `X-Request-Id` header，`access_log` / `proxy_log` / `audit_log` 中记录 `request_id`，方便关联请求全链路
+- **分页条数选择** - 日志与概览表格增加 10/20/50 每页条数下拉选择器
+
+### 优化
+
+- **前端响应式优化**
+  - 图表数据从 `RwSignal+Effect` 迁移至 `Memo`，减少冗余渲染
+  - `use_page_title` 改为响应式，切换语言时自动更新 `<title>`
+- **UI 统一**
+  - 概览与日志页面的日期选择合并为范围选择器，对齐网格布局
+  - 默认时间范围改为最近 7 天，end_ts 设为当天 23:59:59 覆盖完整一天
+
+### Chore
+
+- Release workflow 改为 `softprops/action-gh-release`，tag 推送时自动创建 GitHub Release
+- 前端时间工具函数补充 UTC/local timezone 语义注释
+
 ## [v0.1.5] - 2026-07-22
 
 ### 新增功能

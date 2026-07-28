@@ -46,10 +46,24 @@ jobs:
           cp -r frontend/dist dist/frontend/
           tar czf ait-${{ github.ref_name }}-x86_64-linux.tar.gz -C dist .
 
+      - name: Extract release body from CHANGELOG
+        run: |
+          python3 -c "
+          tag='${{ github.ref_name }}'; s='## ['+tag
+          p=0
+          with open('CHANGELOG.md') as f:
+           for l in f:
+            if l.startswith(s): p=1
+            if p==1: print(l,end=''); p=2
+            elif p==2:
+             if l.startswith('## ['): break
+             print(l,end='')
+          " > /tmp/release_body.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: ait-${{ github.ref_name }}-x86_64-linux.tar.gz
-          generate_release_notes: true
+          body_path: /tmp/release_body.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
