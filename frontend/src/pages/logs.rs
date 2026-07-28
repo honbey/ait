@@ -12,7 +12,7 @@ use crate::components::style::{
 use crate::components::table::DetailRow;
 use crate::components::table::timestamp_str;
 use crate::components::use_page_title;
-use crate::time_utils::{date_str_to_ts, ts_to_date_str};
+use crate::time_utils::{date_str_to_ts, midnight_ts, now_timestamp, ts_to_date_str};
 use crate::{t, ts};
 
 fn latency_pill(latency_s: f64) -> &'static str {
@@ -32,20 +32,36 @@ fn latency_s(ms: i64) -> f64 {
 }
 
 #[component]
-fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) -> impl IntoView {
+fn PaginationBar(
+    page: RwSignal<u64>,
+    total_signal: Signal<u64>,
+    per_page: RwSignal<u64>,
+) -> impl IntoView {
     let input_ref = NodeRef::<leptos::html::Input>::new();
 
-    let go = move |p: u64| {
+    let goto_page = move |p: u64| {
         let t = total_signal.get_untracked();
-        if p >= 1 && p <= t.div_ceil(per_page).max(1) {
+        let pp = per_page.get_untracked();
+        if p >= 1 && p <= t.div_ceil(pp).max(1) {
             page.set(p);
         }
     };
 
+    let on_per_page_change = move |ev: leptos::ev::Event| {
+        if let Ok(p) = event_target_value(&ev).parse::<u64>() {
+            per_page.set(p);
+            page.set(1);
+        }
+    };
+
+    let select_cls = "w-16 text-center px-1 py-1 text-sm rounded border border-gray-300 \
+        dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 \
+        outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500";
+
     let on_keydown = move |ev: leptos::ev::KeyboardEvent| {
         if ev.key() == "Enter" {
             if let Ok(p) = event_target_value(&ev).parse::<u64>() {
-                go(p);
+                goto_page(p);
             }
             let _ = input_ref
                 .get_untracked()
@@ -55,7 +71,7 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
 
     let on_blur = move |ev: leptos::ev::FocusEvent| {
         if let Ok(p) = event_target_value(&ev).parse::<u64>() {
-            go(p);
+            goto_page(p);
         }
         let cur = page.get_untracked();
         let _ = input_ref
@@ -65,7 +81,8 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
 
     move || {
         let t = total_signal.get();
-        let total_pages = t.div_ceil(per_page).max(1);
+        let pp = per_page.get();
+        let total_pages = t.div_ceil(pp).max(1);
         let cur = page.get();
         let is_first = cur == 1;
         let is_last = cur == total_pages;
@@ -78,8 +95,9 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
                 <div>
                     {move || {
                         let t = total_signal.get();
-                        let start = (cur - 1) * per_page + 1;
-                        let end = (start + per_page - 1).min(t);
+                        let pp = per_page.get();
+                        let start = (cur - 1) * pp + 1;
+                        let end = (start + pp - 1).min(t);
                         if t == 0 {
                             String::new()
                         } else {
@@ -95,60 +113,81 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
                         }
                     }}
                 </div>
-                <div class="flex items-center gap-1">
-                    <button
-                        class=if is_first {
-                            "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
-                        } else {
-                            "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
-                        }
-                        disabled=is_first
-                        on:click=move |_| go(1)
-                    >
-                        <i class="fas fa-angles-left"></i>
-                    </button>
-                    <button
-                        class=if is_first {
-                            "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
-                        } else {
-                            "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
-                        }
-                        disabled=is_first
-                        on:click=move |_| go(cur - 1)
-                    >
-                        <i class="fas fa-chevron-left"></i>
-                    </button>
-                    <input
-                        node_ref=input_ref
-                        id="filter-page"
-                        class="w-10 text-center px-1 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 outline-none"
-                        prop:value=move || page.get().to_string()
-                        on:keydown=on_keydown
-                        on:blur=on_blur
-                    />
-                    <span class=format!("text-sm {}", CLASS_TEXT_MUTED)>{" / "}{total_pages}</span>
-                    <button
-                        class=if is_last {
-                            "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
-                        } else {
-                            "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
-                        }
-                        disabled=is_last
-                        on:click=move |_| go(cur + 1)
-                    >
-                        <i class="fas fa-chevron-right"></i>
-                    </button>
-                    <button
-                        class=if is_last {
-                            "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
-                        } else {
-                            "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
-                        }
-                        disabled=is_last
-                        on:click=move |_| go(total_pages)
-                    >
-                        <i class="fas fa-angles-right"></i>
-                    </button>
+                <div class="flex items-center gap-2">
+                    <span class=format!("mr-1 {}", CLASS_TEXT_MUTED)>{t!(PerPage)}</span>
+                    <select id="filter-per-page" class=select_cls on:change=on_per_page_change>
+                        <option value="10" selected=move || per_page.get() == 10>
+                            "10"
+                        </option>
+                        <option value="20" selected=move || per_page.get() == 20>
+                            "20"
+                        </option>
+                        <option value="50" selected=move || per_page.get() == 50>
+                            "50"
+                        </option>
+                    </select>
+                    <div class="flex items-center gap-1">
+                        <button
+                            class=if is_first {
+                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                            } else {
+                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                            }
+                            disabled=is_first
+                            title=t!(FirstPage)
+                            on:click=move |_| goto_page(1)
+                        >
+                            <i class="fas fa-angles-left"></i>
+                        </button>
+                        <button
+                            class=if is_first {
+                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                            } else {
+                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                            }
+                            disabled=is_first
+                            title=t!(PreviousPage)
+                            on:click=move |_| goto_page(cur - 1)
+                        >
+                            <i class="fas fa-chevron-left"></i>
+                        </button>
+                        <input
+                            node_ref=input_ref
+                            id="filter-page"
+                            class="w-10 text-center px-1 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 outline-none"
+                            prop:value=move || page.get().to_string()
+                            on:keydown=on_keydown
+                            on:blur=on_blur
+                        />
+                        <span class=format!(
+                            "text-sm {}",
+                            CLASS_TEXT_MUTED,
+                        )>{" / "}{total_pages}</span>
+                        <button
+                            class=if is_last {
+                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                            } else {
+                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                            }
+                            disabled=is_last
+                            title=t!(NextPage)
+                            on:click=move |_| goto_page(cur + 1)
+                        >
+                            <i class="fas fa-chevron-right"></i>
+                        </button>
+                        <button
+                            class=if is_last {
+                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                            } else {
+                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                            }
+                            disabled=is_last
+                            title=t!(LastPage)
+                            on:click=move |_| goto_page(total_pages)
+                        >
+                            <i class="fas fa-angles-right"></i>
+                        </button>
+                    </div>
                 </div>
             </div>
         }
@@ -157,14 +196,19 @@ fn PaginationBar(page: RwSignal<u64>, total_signal: Signal<u64>, per_page: u64) 
 
 #[component]
 pub fn LogsPage() -> impl IntoView {
-    use_page_title(&format!("Ait - {}", ts!(LogQuery)));
+    use_page_title(move || format!("Ait - {}", t!(LogQuery)()));
 
     let page = RwSignal::new(1u64);
     let query_trigger = RwSignal::new(0u64);
-    let per_page: u64 = 10;
+    let per_page = RwSignal::new(10u64);
 
-    let (start_ts, set_start_ts) = signal::<Option<i64>>(None);
-    let (end_ts, set_end_ts) = signal::<Option<i64>>(None);
+    let now = now_timestamp();
+    let today = midnight_ts(now);
+    let (start_ts, set_start_ts) = signal::<Option<i64>>(Some(today - 6 * 86400));
+    let (end_ts, set_end_ts) = signal::<Option<i64>>(Some(
+        // exclusive backend bound (< end_ts), ~1s gap is negligible
+        today + 86399,
+    ));
     let (provider_name, set_provider_name) = signal(String::new());
     let (model_name, set_model_name) = signal(String::new());
     let (api_key_name, set_api_key_name) = signal(String::new());
@@ -178,9 +222,10 @@ pub fn LogsPage() -> impl IntoView {
 
     let detail_item = RwSignal::new(None::<ProxyLogEntryResponse>);
 
-    let rsc: LocalResource<Result<PaginatedResponse<ProxyLogEntryResponse>, String>> =
+    let logs_resource: LocalResource<Result<PaginatedResponse<ProxyLogEntryResponse>, String>> =
         LocalResource::new(move || {
             let p = page.get();
+            let pp = per_page.get();
             let _ = query_trigger.get();
 
             let s = start_ts.get_untracked();
@@ -196,7 +241,7 @@ pub fn LogsPage() -> impl IntoView {
             async move {
                 api::fetch_proxy_logs(
                     p,
-                    per_page,
+                    pp,
                     s,
                     e,
                     if pn.is_empty() { None } else { Some(pn) },
@@ -212,8 +257,13 @@ pub fn LogsPage() -> impl IntoView {
             }
         });
 
-    let total: Signal<u64> =
-        Signal::derive(move || rsc.get().and_then(|r| r.ok()).map(|r| r.total).unwrap_or(0));
+    let total: Signal<u64> = Signal::derive(move || {
+        logs_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|r| r.total)
+            .unwrap_or(0)
+    });
 
     let do_query = move |_| {
         query_trigger.set(query_trigger.get_untracked() + 1);
@@ -221,8 +271,11 @@ pub fn LogsPage() -> impl IntoView {
     };
 
     let do_reset = move |_| {
-        set_start_ts.set(None);
-        set_end_ts.set(None);
+        let now = now_timestamp();
+        let today = midnight_ts(now);
+        set_start_ts.set(Some(today - 6 * 86400));
+        // exclusive backend bound (< end_ts), ~1s gap is negligible
+        set_end_ts.set(Some(today + 86399));
         set_provider_name.set(String::new());
         set_model_name.set(String::new());
         set_api_key_name.set(String::new());
@@ -324,26 +377,32 @@ pub fn LogsPage() -> impl IntoView {
                     </div>
                 </div>
 
-                <div class="grid grid-cols-6 gap-3 items-end">
-                    <div>
-                        <input
-                            id="filter-start-date"
-                            type="date"
-                            class=CLASS_INPUT
-                            prop:value=move || start_str.get()
-                            on:change=on_start_date
-                        />
+                <div class="grid grid-cols-8 gap-3 items-end">
+                    <div class="col-span-2">
+                        <div class="flex items-center border rounded-lg bg-white dark:bg-gray-700 \
+                        border-gray-300 dark:border-gray-600 overflow-hidden">
+                            <input
+                                id="filter-start-date"
+                                type="date"
+                                class="flex-1 px-3 py-2 text-sm border-0 bg-transparent \
+                                text-gray-900 dark:text-gray-100 cursor-pointer \
+                                focus:ring-0 focus:outline-none"
+                                prop:value=move || start_str.get()
+                                on:change=on_start_date
+                            />
+                            <span class="px-1 text-gray-400 dark:text-gray-500 select-none">-</span>
+                            <input
+                                id="filter-end-date"
+                                type="date"
+                                class="flex-1 px-3 py-2 text-sm border-0 bg-transparent \
+                                text-gray-900 dark:text-gray-100 cursor-pointer \
+                                focus:ring-0 focus:outline-none"
+                                prop:value=move || end_str.get()
+                                on:change=on_end_date
+                            />
+                        </div>
                     </div>
-                    <div>
-                        <input
-                            id="filter-end-date"
-                            type="date"
-                            class=CLASS_INPUT
-                            prop:value=move || end_str.get()
-                            on:change=on_end_date
-                        />
-                    </div>
-                    <div>
+                    <div class="col-span-1">
                         <select
                             id="filter-endpoint"
                             class=select_cls
@@ -355,12 +414,12 @@ pub fn LogsPage() -> impl IntoView {
                             <option value="" selected>
                                 {move || t!(LogEndpointAll)}
                             </option>
-                            <option value="/v1/chat/completions">{"/v1/chat/completions"}</option>
-                            <option value="/v1/completions">{"/v1/completions"}</option>
-                            <option value="/v1/embeddings">{"/v1/embeddings"}</option>
+                            <option value="/chat/completions">{"/chat/completions"}</option>
+                            <option value="/completions">{"/completions"}</option>
+                            <option value="/embeddings">{"/embeddings"}</option>
                         </select>
                     </div>
-                    <div>
+                    <div class="col-span-1">
                         <select
                             id="filter-streaming"
                             class=select_cls
@@ -383,7 +442,7 @@ pub fn LogsPage() -> impl IntoView {
                             <option value="false">{"Non-streaming"}</option>
                         </select>
                     </div>
-                    <div class="col-span-2 flex justify-end gap-3">
+                    <div class="col-span-4 flex justify-end gap-3">
                         <button
                             class="px-4 py-2 text-sm font-medium rounded-lg \
                             bg-gray-100 dark:bg-gray-700 \
@@ -403,7 +462,7 @@ pub fn LogsPage() -> impl IntoView {
 
             <div class=CLASS_CARD>
                 <Transition fallback=move || logs_table_skeleton()>
-                    {move || match rsc.get() {
+                    {move || match logs_resource.get() {
                         Some(Ok(ref data)) => {
                             let items = &data.items;
                             if items.is_empty() {
@@ -560,7 +619,7 @@ pub fn LogsPage() -> impl IntoView {
                             view! {
                                 <ErrorCard
                                     message=e.clone()
-                                    on_retry=Box::new(move || rsc.refetch())
+                                    on_retry=Box::new(move || logs_resource.refetch())
                                 />
                             }
                                 .into_any()

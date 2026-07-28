@@ -1,8 +1,11 @@
+/// Returns the current time as a UTC Unix timestamp.
 pub fn now_timestamp() -> i64 {
     let now = js_sys::Date::new_0();
     (now.get_time() / 1000.0) as i64
 }
 
+/// Given a UTC timestamp, returns the timestamp for midnight of that day
+/// in the user's local timezone.
 pub fn midnight_ts(ts: i64) -> i64 {
     let ms = (ts as f64) * 1000.0;
     let date = js_sys::Date::new(&ms.into());
@@ -14,6 +17,8 @@ pub fn midnight_ts(ts: i64) -> i64 {
     (midnight.get_time() / 1000.0) as i64
 }
 
+/// Clamps the end timestamp to at most `now + 3600s`. If start >= end
+/// after clamping, returns a 1-day window ending at `end`.
 pub fn clamp_range(start: i64, end: i64, now: i64) -> (i64, i64) {
     let end = if end > now + 3600 { now + 3600 } else { end };
     if start >= end {
@@ -23,6 +28,9 @@ pub fn clamp_range(start: i64, end: i64, now: i64) -> (i64, i64) {
     }
 }
 
+/// Parses a local date string (`YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`) and
+/// returns the corresponding UTC Unix timestamp at local midnight (or the
+/// given local hour/minute).
 pub fn date_str_to_ts(s: &str) -> Option<i64> {
     let (date_part, time_part) = s.split_once('T').unzip();
     let date_part = date_part.unwrap_or(s);
@@ -55,6 +63,7 @@ pub fn date_str_to_ts(s: &str) -> Option<i64> {
     if ts.is_nan() { None } else { Some(ts as i64) }
 }
 
+/// Formats a UTC timestamp as a local date string (`YYYY-MM-DD`).
 pub fn ts_to_date_str(ts: i64) -> String {
     let date = js_sys::Date::new(&((ts as f64) * 1000.0).into());
     let y = date.get_full_year();
@@ -63,6 +72,7 @@ pub fn ts_to_date_str(ts: i64) -> String {
     format!("{:04}-{:02}-{:02}", y, m, d)
 }
 
+/// Formats a UTC timestamp as a local datetime string (`YYYY-MM-DDTHH:MM`).
 pub fn ts_to_datetime_str(ts: i64) -> String {
     let d = js_sys::Date::new(&((ts as f64) * 1000.0).into());
     let y = d.get_full_year();

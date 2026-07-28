@@ -1,7 +1,7 @@
 use std::{sync::OnceLock, time::Instant};
 
 use axum::{
-    Json,
+    Extension, Json,
     extract::State,
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
@@ -10,7 +10,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, hash_key};
+use crate::db::{AuditEvent, RequestId, hash_key};
 use crate::error::{AitError, internal_error, unauthorized};
 use crate::middleware::{CACHE_TTL, extract_session_key};
 
@@ -42,6 +42,7 @@ fn set_cookie_header(session_key: &str, max_age: i64) -> String {
 
 pub async fn login(
     State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
     Json(input): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<AitError>)> {
     #[derive(Debug)]
@@ -100,6 +101,7 @@ pub async fn login(
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
+        request_id: request_id.0,
         username: input.username.clone(),
         action: "login".into(),
         resource: "session".into(),

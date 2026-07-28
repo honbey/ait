@@ -13,7 +13,7 @@ use reqwest::Request;
 use tracing::{trace, warn};
 
 use crate::app::AppState;
-use crate::db::{ProxyEvent, SessionUser};
+use crate::db::{ProxyEvent, RequestId, SessionUser};
 use crate::error::AitError;
 use crate::providers::UpstreamProvider;
 
@@ -137,6 +137,7 @@ pub(crate) async fn proxy_streamed(
     provider_type: String,
     client_ip: Option<String>,
     prompt_tokens: Option<i64>,
+    request_id: RequestId,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     let log_manager = state.log_manager.clone();
     let model_name_for_transform = model_name.clone();
@@ -146,6 +147,7 @@ pub(crate) async fn proxy_streamed(
         // error coverage (before the stream is set up); it is suppressed once
         // execution succeeds so only the stream writes the final record.
         timestamp: Utc::now(),
+        request_id: request_id.0,
         username: Some(session.username),
         api_key_name: session.api_key_name,
         model_name,

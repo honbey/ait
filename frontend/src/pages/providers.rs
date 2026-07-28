@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use reactive_graph::traits::{Get, Set, Write};
+use reactive_graph::traits::{Get, Read, ReadUntracked, Set, Write};
 use reactive_stores::{Field, Patch, Store};
 
 use crate::api;
@@ -38,7 +38,7 @@ struct ProvidersStore {
 
 #[component]
 pub fn ProvidersPage() -> impl IntoView {
-    use_page_title(&format!("Ait - {}", ts!(Providers)));
+    use_page_title(move || format!("Ait - {}", t!(Providers)()));
     let modal = RwSignal::new(ProviderModal::Closed);
     let state = Store::new(ProvidersStore::default());
 
@@ -91,7 +91,7 @@ pub fn ProvidersPage() -> impl IntoView {
     view! {
         <h1 class=CLASS_PAGE_TITLE>{tr!(ListTitle, &[("entity", &t!(Providers)())])}</h1>
         <DataTableCard
-            item_count=Signal::derive(move || state.items().get().len())
+            item_count=Signal::derive(move || state.items().read().len())
             on_refresh=do_refetch
             on_add=move || modal.set(ProviderModal::Add)
             add_label=trs!(Add, &[("entity", &ts!(Providers))])
@@ -133,7 +133,7 @@ pub fn ProvidersPage() -> impl IntoView {
                                     <tbody>
                                         <For
                                             each=move || state.items()
-                                            key=|row| row.clone().id().get()
+                                            key=|row| row.clone().id().read_untracked().to_owned()
                                             let:provider
                                         >
                                             <tr class="odd:bg-gray-50 dark:odd:bg-gray-800/50">
@@ -215,7 +215,7 @@ pub fn ProvidersPage() -> impl IntoView {
                     .into_any()
             }
             ProviderModal::Delete(provider) => {
-                let prov_id = provider.id().get();
+                let prov_id = provider.id().read_untracked().to_owned();
                 let item_id = prov_id.clone();
                 let action: Action<(), Result<(), String>> = Action::new_local({
                     let pid = prov_id.clone();
@@ -265,12 +265,16 @@ fn ProviderFormModal(
     #[prop(optional)] edit_model: Option<Field<Provider>>,
 ) -> impl IntoView {
     let is_edit = edit_model.is_some();
-    let edit_id = edit_model.map(|f| f.id().get());
+    let edit_id = edit_model.map(|f| f.id().read_untracked().to_owned());
 
-    let name = RwSignal::new(edit_model.map(|f| f.name().get()).unwrap_or_default());
+    let name = RwSignal::new(
+        edit_model
+            .map(|f| f.name().read_untracked().to_owned())
+            .unwrap_or_default(),
+    );
     let provider_type = RwSignal::new(
         edit_model
-            .map(|f| f.provider_type().get())
+            .map(|f| f.provider_type().read_untracked().to_owned())
             .or_else(|| {
                 provider_types_resource
                     .get_untracked()
@@ -280,11 +284,15 @@ fn ProviderFormModal(
     );
     let base_url = RwSignal::new(
         edit_model
-            .map(|f| f.base_url().get())
+            .map(|f| f.base_url().read_untracked().to_owned())
             .unwrap_or_else(|| "https://".to_string()),
     );
     let api_key = RwSignal::new(String::new());
-    let enabled = RwSignal::new(edit_model.map(|f| f.enabled().get()).unwrap_or(true));
+    let enabled = RwSignal::new(
+        edit_model
+            .map(|f| *f.enabled().read_untracked())
+            .unwrap_or(true),
+    );
     let clear_key = RwSignal::new(false);
     let form_error = RwSignal::new(String::new());
 
@@ -513,14 +521,14 @@ fn ProviderDetailModal(
     provider_types_resource: LocalResource<Vec<(String, String)>>,
     on_close: impl Fn() + 'static + Clone + Send,
 ) -> impl IntoView {
-    let prov_id = provider.id().get();
-    let prov_name = provider.name().get();
-    let prov_base_url = provider.base_url().get();
-    let prov_provider_type = provider.provider_type().get();
-    let prov_enabled = provider.enabled().get();
-    let prov_created = provider.created_at().get();
-    let prov_updated = provider.updated_at().get();
-    let prov_api_key = provider.api_key().get();
+    let prov_id = provider.id().read_untracked().to_owned();
+    let prov_name = provider.name().read_untracked().to_owned();
+    let prov_base_url = provider.base_url().read_untracked().to_owned();
+    let prov_provider_type = provider.provider_type().read_untracked().to_owned();
+    let prov_enabled = *provider.enabled().read_untracked();
+    let prov_created = *provider.created_at().read_untracked();
+    let prov_updated = *provider.updated_at().read_untracked();
+    let prov_api_key = provider.api_key().read_untracked().to_owned();
     let api_key_display = prov_api_key.as_deref().unwrap_or("—").to_string();
     let type_name = provider_types_resource
         .get_untracked()

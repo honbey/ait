@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use reactive_graph::traits::Write;
+use reactive_graph::traits::{IsDisposed, Write};
 use reactive_stores::{Field, Patch, PatchField};
 
 use crate::components::style::{
@@ -169,11 +169,14 @@ pub fn attach_save_effect<T, A>(
             Some(Ok(model)) => {
                 consumed.set(true);
                 if let Some(field) = edit_field {
-                    field.patch(model);
-                } else {
-                    store_items.write().push(model);
+                    if !field.is_disposed() {
+                        field.patch(model);
+                        (on_success)();
+                    }
+                } else if let Some(mut items) = store_items.try_write() {
+                    items.push(model);
+                    (on_success)();
                 }
-                (on_success)();
             }
             Some(Err(e)) => {
                 consumed.set(true);

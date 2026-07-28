@@ -1,16 +1,17 @@
 use crate::app::AppState;
-use crate::db::{AccessEvent, ApiKeyInfo, SessionUser, hash_key};
+use crate::db::{AccessEvent, ApiKeyInfo, RequestId, SessionUser, hash_key};
 use crate::error::{AitError, db_error, internal_error, too_many_requests, unauthorized};
 use axum::{
     Json,
     extract::{ConnectInfo, Request, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     middleware::Next,
     response::Response,
 };
 use chrono::Utc;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
+use uuid::Uuid;
 
 pub(crate) const CACHE_TTL: Duration = Duration::from_secs(300);
 
@@ -243,10 +244,11 @@ pub async fn login_rate_limit_middleware(
 
 pub async fn access_log_middleware(
     State(state): State<AppState>,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> Response {
     let start = Instant::now();
+    let request_id = Uuid::new_v4().to_string();
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
     let username = req
@@ -256,13 +258,20 @@ pub async fn access_log_middleware(
 
     let client_ip =
         get_client_ip(&req, &state.config.server.trusted_proxies).map(|ip| ip.to_string());
-    let response = next.run(req).await;
+    req.extensions_mut().insert(RequestId(request_id.clone()));
+    let mut response = next.run(req).await;
+
+    response.headers_mut().insert(
+        HeaderName::from_static("x-request-id"),
+        HeaderValue::from_str(&request_id).expect("UUID is valid ASCII"),
+    );
 
     let latency = start.elapsed();
     let status = response.status().as_u16() as i32;
 
     state.log_manager.log_access(AccessEvent {
         timestamp: Utc::now(),
+        request_id,
         method,
         path,
         status,

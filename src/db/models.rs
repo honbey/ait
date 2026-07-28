@@ -167,6 +167,7 @@ impl Session {
 
 pub struct AccessEvent {
     pub timestamp: DateTime<Utc>,
+    pub request_id: String,
     pub method: String,
     pub path: String,
     pub status: i32,
@@ -178,6 +179,7 @@ pub struct AccessEvent {
 #[derive(Clone)]
 pub struct ProxyEvent {
     pub timestamp: DateTime<Utc>,
+    pub request_id: String,
     pub username: Option<String>,
     pub api_key_name: Option<String>,
     pub model_name: String,
@@ -200,6 +202,7 @@ pub struct ProxyEvent {
 
 pub struct AuditEvent {
     pub timestamp: DateTime<Utc>,
+    pub request_id: String,
     pub username: String,
     pub action: String,
     pub resource: String,
@@ -278,6 +281,9 @@ pub struct ProxyLogQueryResult {
     pub items: Vec<ProxyLogEntryResponse>,
     pub total: u64,
 }
+
+#[derive(Debug, Clone)]
+pub struct RequestId(pub String);
 
 pub enum LogEvent {
     Access(AccessEvent),

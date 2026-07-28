@@ -10,7 +10,7 @@ use crate::t;
 #[component]
 pub fn Home() -> impl IntoView {
     let auth = use_context::<AuthContext>().expect("AuthContext not provided");
-    use_page_title("Ait");
+    use_page_title(move || format!("Ait - {}", t!(IndexTitle)()));
 
     move || {
         match auth.authenticated.get() {

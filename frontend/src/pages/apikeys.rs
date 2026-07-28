@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use reactive_graph::traits::{Get, Set, Write};
+use reactive_graph::traits::{Get, Read, ReadUntracked, Set, Write};
 use reactive_stores::{Field, Patch, Store};
 
 use crate::api;
@@ -50,7 +50,7 @@ fn expires_at_display(expires_at: Option<i64>) -> String {
 
 #[component]
 pub fn ApiKeysPage() -> impl IntoView {
-    use_page_title(&format!("Ait - {}", ts!(ApiKey)));
+    use_page_title(move || format!("Ait - {}", t!(ApiKey)()));
     let modal = RwSignal::new(ApiKeyModal::Closed);
     let state = Store::new(ApiKeysStore::default());
     let auth = use_context::<AuthContext>().expect("AuthContext not provided");
@@ -85,7 +85,7 @@ pub fn ApiKeysPage() -> impl IntoView {
     view! {
         <h1 class=CLASS_PAGE_TITLE>{tr!(ListTitle, &[("entity", &t!(ApiKey)())])}</h1>
         <DataTableCard
-            item_count=Signal::derive(move || state.items().get().len())
+            item_count=Signal::derive(move || state.items().read().len())
             on_refresh=do_refetch
             on_add=move || modal.set(ApiKeyModal::Add)
             add_label=trs!(Add, &[("entity", &ts!(ApiKey))])
@@ -127,7 +127,7 @@ pub fn ApiKeysPage() -> impl IntoView {
                                     <tbody>
                                         <For
                                             each=move || state.items()
-                                            key=|row| row.clone().id().get()
+                                            key=|row| row.clone().id().read_untracked().to_owned()
                                             let:key
                                         >
                                             <tr class="odd:bg-gray-50 dark:odd:bg-gray-800/50">
@@ -141,7 +141,7 @@ pub fn ApiKeysPage() -> impl IntoView {
                                                             <span class=format!(
                                                                 "font-mono text-xs {}",
                                                                 CLASS_TEXT_MUTED,
-                                                            )>{k.display().get()}</span>
+                                                            )>{k.display().read_untracked().to_owned()}</span>
                                                         </td>
                                                         <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
                                                             {move || expires_at_display(k.expires_at().get())}
@@ -316,8 +316,8 @@ pub fn ApiKeysPage() -> impl IntoView {
                     .into_any()
             }
             (ApiKeyModal::Delete(key), None) => {
-                let key_id = key.id().get();
-                let item_name = key.name().get();
+                let key_id = key.id().read_untracked().to_owned();
+                let item_name = key.name().read_untracked().to_owned();
                 let uname = auth.username.get_untracked().unwrap_or_default();
                 let delete_action: Action<(), Result<(), String>> = Action::new_local({
                     let uname = uname.clone();
@@ -370,14 +370,22 @@ fn ApiKeyFormModal(
     #[prop(optional)] edit_model: Option<Field<ApiKey>>,
 ) -> impl IntoView {
     let is_edit = edit_model.is_some();
-    let edit_id = edit_model.map(|f| f.id().get());
+    let edit_id = edit_model.map(|f| f.id().read_untracked().to_owned());
     let toast = use_toast();
 
-    let name = RwSignal::new(edit_model.map(|f| f.name().get()).unwrap_or_default());
-    let enabled = RwSignal::new(edit_model.map(|f| f.enabled().get()).unwrap_or(true));
+    let name = RwSignal::new(
+        edit_model
+            .map(|f| f.name().read_untracked().to_owned())
+            .unwrap_or_default(),
+    );
+    let enabled = RwSignal::new(
+        edit_model
+            .map(|f| *f.enabled().read_untracked())
+            .unwrap_or(true),
+    );
     let expires_date = RwSignal::new(
         edit_model
-            .and_then(|f| f.expires_at().get())
+            .and_then(|f| f.expires_at().read_untracked().to_owned())
             .map(ts_to_datetime_str)
             .unwrap_or_else(default_expiry_str),
     );
@@ -530,13 +538,13 @@ fn ApiKeyDetailModal(
     key: Field<ApiKey>,
     on_close: impl Fn() + 'static + Clone + Send,
 ) -> impl IntoView {
-    let key_id = key.id().get();
-    let key_name = key.name().get();
-    let key_value = key.display().get();
-    let key_enabled = key.enabled().get();
-    let key_created = key.created_at().get();
-    let key_updated = key.updated_at().get();
-    let key_expires = key.expires_at().get();
+    let key_id = key.id().read_untracked().to_owned();
+    let key_name = key.name().read_untracked().to_owned();
+    let key_value = key.display().read_untracked().to_owned();
+    let key_enabled = *key.enabled().read_untracked();
+    let key_created = *key.created_at().read_untracked();
+    let key_updated = *key.updated_at().read_untracked();
+    let key_expires = key.expires_at().read_untracked().to_owned();
 
     view! {
         <ModalShell

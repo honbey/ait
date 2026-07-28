@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::app::AppState;
-use crate::db::{ApiKey, AuditEvent, SessionUser};
+use crate::db::{ApiKey, AuditEvent, RequestId, SessionUser};
 use crate::error::{AitError, forbidden, internal_error, not_found};
 use crate::handlers::{ident_chars, validate_string};
 
@@ -31,6 +31,7 @@ pub struct ApiKeyResponse {
 pub async fn create_api_key(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(request_id): Extension<RequestId>,
     Path(username): Path<String>,
     Json(input): Json<CreateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<ApiKeyResponse>), (StatusCode, Json<AitError>)> {
@@ -57,6 +58,7 @@ pub async fn create_api_key(
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
+        request_id: request_id.0,
         username: session.username.clone(),
         action: "create".into(),
         resource: "api_key".into(),
@@ -114,6 +116,7 @@ pub async fn list_api_keys(
 pub async fn delete_api_key(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(request_id): Extension<RequestId>,
     Path((username, key)): Path<(String, String)>,
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
     if session.username != username {
@@ -131,6 +134,7 @@ pub async fn delete_api_key(
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
+        request_id: request_id.0,
         username: session.username.clone(),
         action: "delete".into(),
         resource: "api_key".into(),
@@ -164,6 +168,7 @@ impl From<UpdateApiKeyRequest> for ApiKey {
 pub async fn update_api_key(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(request_id): Extension<RequestId>,
     Path((username, key_id)): Path<(String, String)>,
     Json(input): Json<UpdateApiKeyRequest>,
 ) -> Result<Json<ApiKeyResponse>, (StatusCode, Json<AitError>)> {
@@ -201,6 +206,7 @@ pub async fn update_api_key(
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
+        request_id: request_id.0,
         username: session.username.clone(),
         action: "update".into(),
         resource: "api_key".into(),

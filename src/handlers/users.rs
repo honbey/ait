@@ -7,7 +7,7 @@ use chrono::Utc;
 use serde::Deserialize;
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, Database, SessionUser, User};
+use crate::db::{AuditEvent, Database, RequestId, SessionUser, User};
 use crate::error::{AitError, forbidden, internal_error, not_found};
 
 // Single-user mode with a full user model and user-level session and API key management.
@@ -35,6 +35,7 @@ pub struct ChangePasswordRequest {
 pub async fn change_password(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
+    Extension(request_id): Extension<RequestId>,
     Path(username): Path<String>,
     Json(input): Json<ChangePasswordRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
@@ -83,6 +84,7 @@ pub async fn change_password(
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
+        request_id: request_id.0,
         username: session.username.clone(),
         action: "change_password".into(),
         resource: "user".into(),

@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use reactive_graph::traits::{Get, Set, Write};
+use reactive_graph::traits::{Get, Read, ReadUntracked, Set, Write};
 use reactive_stores::{Field, Patch, Store};
 
 use crate::api;
@@ -31,7 +31,7 @@ type ModelModal = EntityModal<Model>;
 
 #[component]
 pub fn ModelsPage() -> impl IntoView {
-    use_page_title(&format!("Ait - {}", ts!(Models)));
+    use_page_title(move || format!("Ait - {}", t!(Models)()));
     let modal = RwSignal::new(ModelModal::Closed);
     let state = Store::new(ModelsStore::default());
 
@@ -65,7 +65,7 @@ pub fn ModelsPage() -> impl IntoView {
     view! {
         <h1 class=CLASS_PAGE_TITLE>{tr!(ListTitle, &[("entity", &t!(Models)())])}</h1>
         <DataTableCard
-            item_count=Signal::derive(move || state.items().get().len())
+            item_count=Signal::derive(move || state.items().read().len())
             on_refresh=do_refetch
             on_add=move || modal.set(ModelModal::Add)
             add_label=trs!(Add, &[("entity", &ts!(Models))])
@@ -107,7 +107,7 @@ pub fn ModelsPage() -> impl IntoView {
                                     <tbody>
                                         <For
                                             each=move || state.items()
-                                            key=|row| row.clone().name().get()
+                                            key=|row| row.clone().name().read_untracked().to_owned()
                                             let:model
                                         >
                                             <tr class="odd:bg-gray-50 dark:odd:bg-gray-800/50">
@@ -115,7 +115,7 @@ pub fn ModelsPage() -> impl IntoView {
                                                     let m: Field<Model> = model.into();
                                                     view! {
                                                         <td class="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">
-                                                            {m.name().get()}
+                                                            {m.name().read_untracked().to_owned()}
                                                         </td>
                                                         <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
                                                             {move || {
@@ -187,7 +187,7 @@ pub fn ModelsPage() -> impl IntoView {
                     .into_any()
             }
             ModelModal::Delete(model) => {
-                let model_name = model.name().get();
+                let model_name = model.name().read_untracked().to_owned();
                 let item_name = model_name.clone();
                 let action: Action<(), Result<(), String>> = Action::new_local({
                     let name = model_name.clone();
@@ -235,12 +235,12 @@ fn ModelFormModal(
     #[prop(optional)] edit_model: Option<Field<Model>>,
 ) -> impl IntoView {
     let is_edit = edit_model.is_some();
-    let edit_name = edit_model.map(|f| f.name().get());
+    let edit_name = edit_model.map(|f| f.name().read_untracked().to_owned());
 
     let name = RwSignal::new(edit_name.clone().unwrap_or_default());
     let provider_id = RwSignal::new(
         edit_model
-            .map(|f| f.provider_id().get())
+            .map(|f| f.provider_id().read_untracked().to_owned())
             .or_else(|| {
                 providers_resource
                     .get_untracked()
@@ -250,10 +250,14 @@ fn ModelFormModal(
     );
     let upstream_model = RwSignal::new(
         edit_model
-            .map(|f| f.upstream_model().get())
+            .map(|f| f.upstream_model().read_untracked().to_owned())
             .unwrap_or_default(),
     );
-    let enabled = RwSignal::new(edit_model.map(|f| f.enabled().get()).unwrap_or(true));
+    let enabled = RwSignal::new(
+        edit_model
+            .map(|f| *f.enabled().read_untracked())
+            .unwrap_or(true),
+    );
     let form_error = RwSignal::new(String::new());
 
     let title = if is_edit {
@@ -420,16 +424,18 @@ fn ModelDetailModal(
     providers_resource: LocalResource<Vec<(String, String)>>,
     on_close: impl Fn() + 'static + Clone + Send,
 ) -> impl IntoView {
-    let model_id = model.id().get();
-    let model_name = model.name().get();
-    let model_upstream = model.upstream_model().get();
-    let model_enabled = model.enabled().get();
-    let model_created = model.created_at().get();
-    let model_updated = model.updated_at().get();
+    let model_id = model.id().read_untracked().to_owned();
+    let model_name = model.name().read_untracked().to_owned();
+    let model_upstream = model.upstream_model().read_untracked().to_owned();
+    let model_enabled = *model.enabled().read_untracked();
+    let model_created = *model.created_at().read_untracked();
+    let model_updated = *model.updated_at().read_untracked();
     let provider_name = providers_resource
         .get_untracked()
-        .map(|ref pairs| provider_display_name(&model.provider_id().get(), pairs).to_string())
-        .unwrap_or_else(|| model.provider_id().get());
+        .map(|ref pairs| {
+            provider_display_name(&model.provider_id().read_untracked(), pairs).to_string()
+        })
+        .unwrap_or_else(|| model.provider_id().read_untracked().to_owned());
 
     view! {
         <ModalShell

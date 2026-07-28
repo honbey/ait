@@ -24,6 +24,7 @@ impl LogManager {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS access_log (
                 timestamp  TIMESTAMP NOT NULL,
+                request_id VARCHAR NOT NULL,
                 method     VARCHAR NOT NULL,
                 path       VARCHAR NOT NULL,
                 status     INT NOT NULL,
@@ -33,6 +34,7 @@ impl LogManager {
             );
             CREATE TABLE IF NOT EXISTS proxy_log (
                 timestamp         TIMESTAMP NOT NULL,
+                request_id        VARCHAR NOT NULL,
                 username          VARCHAR,
                 api_key_name      VARCHAR,
                 model_name        VARCHAR NOT NULL,
@@ -54,6 +56,7 @@ impl LogManager {
             );
             CREATE TABLE IF NOT EXISTS audit_log (
                 timestamp   TIMESTAMP NOT NULL,
+                request_id  VARCHAR NOT NULL,
                 username    VARCHAR NOT NULL,
                 action      VARCHAR NOT NULL,
                 resource    VARCHAR NOT NULL,
@@ -283,12 +286,13 @@ fn flush_accesses(conn: &Connection, events: &[&AccessEvent]) -> Result<()> {
         return Ok(());
     }
     let mut stmt = conn.prepare_cached(
-        "INSERT INTO access_log (timestamp, method, path, status, latency_ms, client_ip, username)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO access_log (timestamp, request_id, method, path, status, latency_ms, client_ip, username)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?;
     for e in events {
         stmt.execute(params![
             e.timestamp.naive_utc(),
+            e.request_id,
             e.method,
             e.path,
             e.status,
@@ -305,16 +309,17 @@ fn flush_proxies(conn: &Connection, events: &[&ProxyEvent]) -> Result<()> {
         return Ok(());
     }
     let mut stmt = conn.prepare_cached(
-        "INSERT INTO proxy_log (timestamp, username, api_key_name, model_name, provider_name,
+        "INSERT INTO proxy_log (timestamp, request_id, username, api_key_name, model_name, provider_name,
          prompt_tokens, completion_tokens, total_tokens, cached_tokens, latency_ms, status,
          endpoint, is_streaming, time_to_first_token_ms, upstream_model, provider_type,
          response_body_size, error_message, client_ip)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
-                 ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                 ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
     )?;
     for e in events {
         stmt.execute(params![
             e.timestamp.naive_utc(),
+            e.request_id,
             e.username,
             e.api_key_name,
             e.model_name,
@@ -343,12 +348,13 @@ fn flush_audits(conn: &Connection, events: &[&AuditEvent]) -> Result<()> {
         return Ok(());
     }
     let mut stmt = conn.prepare_cached(
-        "INSERT INTO audit_log (timestamp, username, action, resource, resource_id, detail)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO audit_log (timestamp, request_id, username, action, resource, resource_id, detail)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
     )?;
     for e in events {
         stmt.execute(params![
             e.timestamp.naive_utc(),
+            e.request_id,
             e.username,
             e.action,
             e.resource,

@@ -18,7 +18,7 @@ use gloo_net::http::Request;
 
 #[component]
 pub fn TextGenPage() -> impl IntoView {
-    use_page_title(&format!("Ait - {}", ts!(TextGeneration)));
+    use_page_title(move || format!("Ait - {}", t!(TextGeneration)()));
     let models_resource = LocalResource::new(|| async move { api::fetch_models().await });
 
     let api_key: RwSignal<String> = RwSignal::new(String::new());
@@ -166,10 +166,10 @@ pub fn TextGenPage() -> impl IntoView {
                     view! { <ErrorCard message=e.to_string() /> }.into_any()
                 }
                 Some(Ok(models)) => {
-                    let opts: Vec<(&str, &str)> = models
+                    let opts: Vec<(String, String)> = models
                         .iter()
                         .filter(|m| m.enabled)
-                        .map(|m| (m.name.as_str(), m.name.as_str()))
+                        .map(|m| (m.name.clone(), m.name.clone()))
                         .collect();
 
                     let detail = view! {
@@ -202,11 +202,15 @@ pub fn TextGenPage() -> impl IntoView {
                                     >
                                         {opts
                                             .iter()
+                                            .cloned()
                                             .map(|(val, label)| {
-                                                let current = selected_model.get_untracked();
+                                                let v = val.clone();
                                                 view! {
-                                                    <option value=*val selected=current == *val>
-                                                        {*label}
+                                                    <option
+                                                        value=v
+                                                        selected=move || { selected_model.get() == val }
+                                                    >
+                                                        {label}
                                                     </option>
                                                 }
                                             })

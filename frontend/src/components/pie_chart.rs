@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::components::echarts;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, PartialEq)]
 pub struct PieData {
     pub name: String,
     pub value: f64,

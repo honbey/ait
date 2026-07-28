@@ -97,7 +97,7 @@ pub fn DeleteConfirmModal(
                     on:click=on_delete
                 >
                     {move || {
-                        if action.pending().get_untracked() {
+                        if action.pending().get() {
                             view! {
                                 <>
                                     <i class="fas fa-spinner fa-spin"></i>

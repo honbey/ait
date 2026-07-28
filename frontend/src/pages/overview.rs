@@ -9,7 +9,7 @@ use crate::components::skeleton::overview_skeleton;
 use crate::components::style::{CLASS_CARD, CLASS_TEXT_MUTED};
 use crate::components::use_page_title;
 use crate::time_utils::{clamp_range, date_str_to_ts, midnight_ts, now_timestamp, ts_to_date_str};
-use crate::{t, tr, ts};
+use crate::{t, tr};
 
 fn aggregate_daily(buckets: &[BucketEntry]) -> Vec<BucketEntry> {
     let mut daily: Vec<BucketEntry> = Vec::new();
@@ -72,6 +72,8 @@ fn fill_daily_range(daily: &[BucketEntry], start_ts: i64, end_ts: i64) -> Vec<Bu
 
 #[derive(Clone)]
 struct OverviewData {
+    start_ts: i64,
+    end_ts: i64,
     provider_count: u64,
     model_count: u64,
     api_request_count: u64,
@@ -108,18 +110,26 @@ fn StatCard(
 }
 
 #[component]
-fn TabButton(active: bool, on_click: impl Fn() + 'static, label: impl IntoView) -> impl IntoView {
-    let cls = if active {
-        "px-4 py-1.5 text-sm font-medium rounded-lg \
-          bg-indigo-600 text-white shadow-sm cursor-pointer"
-    } else {
-        "px-4 py-1.5 text-sm font-medium rounded-lg \
-          bg-gray-100 dark:bg-gray-700 \
-          text-gray-600 dark:text-gray-300 \
-          hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
-    };
+fn TabButton(
+    active: Signal<bool>,
+    on_click: impl Fn() + 'static,
+    label: impl IntoView,
+) -> impl IntoView {
     view! {
-        <button class=cls on:click=move |_| on_click()>
+        <button
+            class=move || {
+                if active.get() {
+                    "px-4 py-1.5 text-sm font-medium rounded-lg \
+                      bg-indigo-600 text-white shadow-sm cursor-pointer"
+                } else {
+                    "px-4 py-1.5 text-sm font-medium rounded-lg \
+                      bg-gray-100 dark:bg-gray-700 \
+                      text-gray-600 dark:text-gray-300 \
+                      hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                }
+            }
+            on:click=move |_| on_click()
+        >
             {label}
         </button>
     }
@@ -127,17 +137,20 @@ fn TabButton(active: bool, on_click: impl Fn() + 'static, label: impl IntoView) 
 
 #[component]
 pub fn Overview() -> impl IntoView {
-    use_page_title(&format!("Ait - {}", ts!(Overview)));
+    use_page_title(move || format!("Ait - {}", t!(Overview)()));
 
     let auth = use_context::<AuthContext>().expect("AuthContext");
 
     let now = now_timestamp();
     let today = midnight_ts(now);
-    let default_end = now;
+    // exclusive backend bound (< end_ts), ~1s gap at 23:59:59 is negligible
+    let default_end = today + 86399;
     let default_start = today - 6 * 86400;
 
     let (start_ts, set_start_ts) = signal(default_start);
     let (end_ts, set_end_ts) = signal(default_end);
+    let (start_dirty, set_start_dirty) = signal(false);
+    let (end_dirty, set_end_dirty) = signal(false);
     let (left_tab, set_left_tab) = signal(0usize);
     let (right_tab, set_right_tab) = signal(0usize);
 
@@ -154,13 +167,15 @@ pub fn Overview() -> impl IntoView {
                     api::fetch_token_dist(s, e),
                 );
                 match (stats, req_b, tok_b, mdl, tok_d) {
-                    (Ok(s), Ok(r), Ok(t), Ok(md), Ok(td)) => Ok(OverviewData {
-                        provider_count: s.provider_count,
-                        model_count: s.model_count,
-                        api_request_count: s.api_request_count,
-                        token_consumption: s.token_consumption,
-                        rpm: s.rpm,
-                        tpm: s.tpm,
+                    (Ok(stats_val), Ok(r), Ok(t), Ok(md), Ok(td)) => Ok(OverviewData {
+                        start_ts: s,
+                        end_ts: e,
+                        provider_count: stats_val.provider_count,
+                        model_count: stats_val.model_count,
+                        api_request_count: stats_val.api_request_count,
+                        token_consumption: stats_val.token_consumption,
+                        rpm: stats_val.rpm,
+                        tpm: stats_val.tpm,
                         request_buckets: r,
                         token_buckets: t,
                         model_dist: md,
@@ -176,11 +191,25 @@ pub fn Overview() -> impl IntoView {
         }
     });
 
+    let try_refetch = move || {
+        if start_dirty.get_untracked() && end_dirty.get_untracked() {
+            let now = now_timestamp();
+            let (start, end) = clamp_range(start_ts.get_untracked(), end_ts.get_untracked(), now);
+            set_start_ts.set(start);
+            set_end_ts.set(end);
+            set_start_dirty.set(false);
+            set_end_dirty.set(false);
+            overview_resource.refetch();
+        }
+    };
+
     let set_range = move |start: i64, end: i64| {
         let now = now_timestamp();
         let (start, end) = clamp_range(start, end, now);
         set_start_ts.set(start);
         set_end_ts.set(end);
+        set_start_dirty.set(false);
+        set_end_dirty.set(false);
         overview_resource.refetch();
     };
 
@@ -189,6 +218,8 @@ pub fn Overview() -> impl IntoView {
         let (start, end) = clamp_range(start_ts.get_untracked(), end_ts.get_untracked(), now);
         set_start_ts.set(start);
         set_end_ts.set(end);
+        set_start_dirty.set(false);
+        set_end_dirty.set(false);
         overview_resource.refetch();
     };
 
@@ -196,6 +227,8 @@ pub fn Overview() -> impl IntoView {
         let val = event_target_value(&ev);
         if let Some(ts) = date_str_to_ts(&val) {
             set_start_ts.set(ts);
+            set_start_dirty.set(true);
+            try_refetch();
         }
     };
 
@@ -203,74 +236,123 @@ pub fn Overview() -> impl IntoView {
         let val = event_target_value(&ev);
         if let Some(ts) = date_str_to_ts(&val) {
             set_end_ts.set(ts);
+            set_end_dirty.set(true);
+            try_refetch();
         }
     };
 
-    // Chart data signals (persistent across data refreshes)
-    let req_x_data = RwSignal::new(Vec::<String>::new());
-    let req_series = RwSignal::new(Vec::<ChartSeries>::new());
-    let tok_x_data = RwSignal::new(Vec::<String>::new());
-    let tok_series = RwSignal::new(Vec::<ChartSeries>::new());
-    let model_pie_data = RwSignal::new(Vec::<PieData>::new());
-    let token_pie_data = RwSignal::new(Vec::<PieData>::new());
-    let has_chart_data = RwSignal::new(false);
-
-    Effect::new(move || {
-        if let Some(Ok(data)) = overview_resource.get() {
-            let req_filled = fill_daily_range(
-                &aggregate_daily(&data.request_buckets),
-                start_ts.get_untracked(),
-                end_ts.get_untracked(),
-            );
-            let tok_filled = fill_daily_range(
-                &aggregate_daily(&data.token_buckets),
-                start_ts.get_untracked(),
-                end_ts.get_untracked(),
-            );
-
-            req_x_data.set(
+    // Chart data signals memoized from overview_resource
+    let req_x_data: Signal<Vec<String>> = Memo::new(move |_| {
+        overview_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|data| {
+                let req_filled = fill_daily_range(
+                    &aggregate_daily(&data.request_buckets),
+                    data.start_ts,
+                    data.end_ts,
+                );
                 req_filled
                     .iter()
                     .map(|r| ts_to_date_str(r.timestamp))
-                    .collect(),
-            );
-            req_series.set(vec![ChartSeries {
-                name: "Requests".to_string(),
-                data: req_filled.iter().map(|r| r.count as f64).collect(),
-            }]);
-            tok_x_data.set(
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    })
+    .into();
+
+    let req_series: Signal<Vec<ChartSeries>> = Memo::new(move |_| {
+        overview_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|data| {
+                let req_filled = fill_daily_range(
+                    &aggregate_daily(&data.request_buckets),
+                    data.start_ts,
+                    data.end_ts,
+                );
+                vec![ChartSeries {
+                    name: "Requests".to_string(),
+                    data: req_filled.iter().map(|r| r.count as f64).collect(),
+                }]
+            })
+            .unwrap_or_default()
+    })
+    .into();
+
+    let tok_x_data: Signal<Vec<String>> = Memo::new(move |_| {
+        overview_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|data| {
+                let tok_filled = fill_daily_range(
+                    &aggregate_daily(&data.token_buckets),
+                    data.start_ts,
+                    data.end_ts,
+                );
                 tok_filled
                     .iter()
                     .map(|r| ts_to_date_str(r.timestamp))
-                    .collect(),
-            );
-            tok_series.set(vec![ChartSeries {
-                name: "Tokens".to_string(),
-                data: tok_filled.iter().map(|r| r.count as f64).collect(),
-            }]);
-            model_pie_data.set(
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    })
+    .into();
+
+    let tok_series: Signal<Vec<ChartSeries>> = Memo::new(move |_| {
+        overview_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|data| {
+                let tok_filled = fill_daily_range(
+                    &aggregate_daily(&data.token_buckets),
+                    data.start_ts,
+                    data.end_ts,
+                );
+                vec![ChartSeries {
+                    name: "Tokens".to_string(),
+                    data: tok_filled.iter().map(|r| r.count as f64).collect(),
+                }]
+            })
+            .unwrap_or_default()
+    })
+    .into();
+
+    let model_pie_data: Signal<Vec<PieData>> = Memo::new(move |_| {
+        overview_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|data| {
                 data.model_dist
                     .iter()
                     .map(|m| PieData {
                         name: m.model.clone(),
                         value: m.count as f64,
                     })
-                    .collect(),
-            );
-            token_pie_data.set(
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    })
+    .into();
+
+    let token_pie_data: Signal<Vec<PieData>> = Memo::new(move |_| {
+        overview_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|data| {
                 data.token_dist
                     .iter()
                     .map(|e| PieData {
                         name: e.category.clone(),
                         value: e.count as f64,
                     })
-                    .collect(),
-            );
-            has_chart_data.set(true);
-        } else {
-            has_chart_data.set(false);
-        }
-    });
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    })
+    .into();
+
+    let has_chart_data = Memo::new(move |_| matches!(overview_resource.get(), Some(Ok(_))));
 
     let content = move || match overview_resource.get() {
         None => overview_skeleton().into_any(),
@@ -375,28 +457,32 @@ pub fn Overview() -> impl IntoView {
                     >
                         {t!(Last30Days)}
                     </button>
-                    <input
-                        type="date"
-                        id="filter-start-date"
-                        name="filter-start-date"
-                        aria-label=t!(StartDate)
-                        prop:value=move || start_str.get()
-                        class="px-2 py-1.5 text-sm border rounded-lg bg-white dark:bg-gray-700 \
-                        border-gray-300 dark:border-gray-600 \
-                        text-gray-700 dark:text-gray-200 cursor-pointer"
-                        on:change=on_start_date
-                    />
-                    <input
-                        type="date"
-                        id="filter-end-date"
-                        name="filter-end-date"
-                        aria-label=t!(EndDate)
-                        prop:value=move || end_str.get()
-                        class="px-2 py-1.5 text-sm border rounded-lg bg-white dark:bg-gray-700 \
-                        border-gray-300 dark:border-gray-600 \
-                        text-gray-700 dark:text-gray-200 cursor-pointer"
-                        on:change=on_end_date
-                    />
+                    <div class="flex items-center border rounded-lg bg-white dark:bg-gray-700 \
+                    border-gray-300 dark:border-gray-600 overflow-hidden">
+                        <input
+                            type="date"
+                            id="filter-start-date"
+                            name="filter-start-date"
+                            aria-label=t!(StartDate)
+                            prop:value=move || start_str.get()
+                            class="px-2 py-1.5 text-sm border-0 bg-transparent \
+                            text-gray-700 dark:text-gray-200 cursor-pointer \
+                            focus:ring-0 focus:outline-none"
+                            on:change=on_start_date
+                        />
+                        <span class="px-1 text-gray-400 dark:text-gray-500 select-none">-</span>
+                        <input
+                            type="date"
+                            id="filter-end-date"
+                            name="filter-end-date"
+                            aria-label=t!(EndDate)
+                            prop:value=move || end_str.get()
+                            class="px-2 py-1.5 text-sm border-0 bg-transparent \
+                            text-gray-700 dark:text-gray-200 cursor-pointer \
+                            focus:ring-0 focus:outline-none"
+                            on:change=on_end_date
+                        />
+                    </div>
                     <button
                         class="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 \
                         text-gray-600 dark:text-gray-300 \
@@ -413,7 +499,7 @@ pub fn Overview() -> impl IntoView {
                     <div class=format!("{} p-6", CLASS_CARD)>
                         <div class="flex items-center gap-2 mb-4">
                             <TabButton
-                                active=left_tab.get() == 0
+                                active=Signal::derive(move || left_tab.get() == 0)
                                 on_click={
                                     let l = set_left_tab;
                                     move || l.set(0)
@@ -421,7 +507,7 @@ pub fn Overview() -> impl IntoView {
                                 label=t!(ApiRequestCountTrendingTableTitle)
                             />
                             <TabButton
-                                active=left_tab.get() == 1
+                                active=Signal::derive(move || left_tab.get() == 1)
                                 on_click={
                                     let l = set_left_tab;
                                     move || l.set(1)
@@ -434,20 +520,20 @@ pub fn Overview() -> impl IntoView {
                         }>
                             <LineChart
                                 id="chart-left-line"
-                                x_data=Signal::from(req_x_data)
-                                series_list=Signal::from(req_series)
+                                x_data=req_x_data
+                                series_list=req_series
                             />
                         </div>
                         <div style:display=move || {
                             if left_tab.get() == 1 { "block" } else { "none" }
                         }>
-                            <PieChart id="chart-left-pie" data=Signal::from(model_pie_data) />
+                            <PieChart id="chart-left-pie" data=model_pie_data />
                         </div>
                     </div>
                     <div class=format!("{} p-6", CLASS_CARD)>
                         <div class="flex items-center gap-2 mb-4">
                             <TabButton
-                                active=right_tab.get() == 0
+                                active=Signal::derive(move || right_tab.get() == 0)
                                 on_click={
                                     let l = set_right_tab;
                                     move || l.set(0)
@@ -455,7 +541,7 @@ pub fn Overview() -> impl IntoView {
                                 label=t!(TokenConsumptionTrendingTableTitle)
                             />
                             <TabButton
-                                active=right_tab.get() == 1
+                                active=Signal::derive(move || right_tab.get() == 1)
                                 on_click={
                                     let l = set_right_tab;
                                     move || l.set(1)
@@ -468,14 +554,14 @@ pub fn Overview() -> impl IntoView {
                         }>
                             <LineChart
                                 id="chart-right-line"
-                                x_data=Signal::from(tok_x_data)
-                                series_list=Signal::from(tok_series)
+                                x_data=tok_x_data
+                                series_list=tok_series
                             />
                         </div>
                         <div style:display=move || {
                             if right_tab.get() == 1 { "block" } else { "none" }
                         }>
-                            <PieChart id="chart-right-pie" data=Signal::from(token_pie_data) />
+                            <PieChart id="chart-right-pie" data=token_pie_data />
                         </div>
                     </div>
                 </div>
