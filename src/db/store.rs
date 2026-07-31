@@ -230,7 +230,7 @@ impl Database {
         Ok(provider)
     }
 
-    pub fn update_provider(&self, updates: &Provider) -> Result<Provider, DbError> {
+    pub fn update_provider(&self, updates: &ProviderUpdate) -> Result<Provider, DbError> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now();
 
@@ -253,15 +253,23 @@ impl Database {
             }
         };
 
-        provider.name = updates.name.clone();
-        provider.provider_type = updates.provider_type.clone();
-        provider.base_url = updates.base_url.clone();
+        if let Some(name) = &updates.name {
+            provider.name = name.clone();
+        }
+        if let Some(provider_type) = &updates.provider_type {
+            provider.provider_type = provider_type.clone();
+        }
+        if let Some(base_url) = &updates.base_url {
+            provider.base_url = base_url.clone();
+        }
         provider.api_key = match &updates.api_key {
             None => provider.api_key,
             Some(s) if s.is_empty() => None,
             Some(s) => Some(s.clone()),
         };
-        provider.enabled = updates.enabled;
+        if let Some(enabled) = updates.enabled {
+            provider.enabled = enabled;
+        }
         provider.updated_at = now;
 
         conn.execute(
@@ -384,7 +392,7 @@ impl Database {
         Ok(model)
     }
 
-    pub fn update_model(&self, updates: &Model) -> Result<Model, DbError> {
+    pub fn update_model(&self, updates: &ModelUpdate) -> Result<Model, DbError> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now();
 
@@ -407,9 +415,15 @@ impl Database {
             }
         };
 
-        model.provider_id = updates.provider_id.clone();
-        model.upstream_model = updates.upstream_model.clone();
-        model.enabled = updates.enabled;
+        if let Some(provider_id) = &updates.provider_id {
+            model.provider_id = provider_id.clone();
+        }
+        if let Some(upstream_model) = &updates.upstream_model {
+            model.upstream_model = upstream_model.clone();
+        }
+        if let Some(enabled) = updates.enabled {
+            model.enabled = enabled;
+        }
         model.updated_at = now;
 
         conn.execute(
@@ -828,7 +842,7 @@ impl Database {
     pub fn update_api_key(
         &self,
         username: &str,
-        updates: &ApiKey,
+        updates: &ApiKeyUpdate,
     ) -> Result<(ApiKey, String), DbError> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now();
@@ -849,12 +863,12 @@ impl Database {
             }
         };
 
-        api_key.name = if updates.name.is_empty() {
-            api_key.name
-        } else {
-            updates.name.clone()
-        };
-        api_key.enabled = updates.enabled;
+        if let Some(name) = &updates.name {
+            api_key.name = name.clone();
+        }
+        if let Some(enabled) = updates.enabled {
+            api_key.enabled = enabled;
+        }
         api_key.expires_at = match updates.expires_at {
             None => api_key.expires_at,
             Some(dt) if dt.timestamp() == 0 => None,
@@ -974,13 +988,34 @@ mod tests {
     fn provider_update() {
         let (db, _dir) = setup();
         let prov = db.insert_provider(make_prov("p1")).unwrap();
-        let mut updated = prov.clone();
-        updated.name = "p1_renamed".to_string();
-        updated.enabled = false;
-        db.update_provider(&updated).unwrap();
+        db.update_provider(&ProviderUpdate {
+            id: prov.id.clone(),
+            name: Some("p1_renamed".to_string()),
+            enabled: Some(false),
+            ..Default::default()
+        })
+        .unwrap();
         let got = db.get_provider("p1").unwrap().unwrap();
         assert_eq!(got.name, "p1_renamed");
         assert!(!got.enabled);
+    }
+
+    #[test]
+    fn provider_partial_update_keeps_other_fields() {
+        let (db, _dir) = setup();
+        let prov = db.insert_provider(make_prov("p1")).unwrap();
+        db.update_provider(&ProviderUpdate {
+            id: prov.id.clone(),
+            enabled: Some(false),
+            ..Default::default()
+        })
+        .unwrap();
+        let got = db.get_provider("p1").unwrap().unwrap();
+        assert!(!got.enabled);
+        assert_eq!(got.name, "p1");
+        assert_eq!(got.provider_type, prov.provider_type);
+        assert_eq!(got.base_url, prov.base_url);
+        assert_eq!(got.api_key, prov.api_key);
     }
 
     #[test]
@@ -1063,13 +1098,35 @@ mod tests {
         let model = db
             .insert_model(crate::test_utils::create_test_model("m1", "p1"))
             .unwrap();
-        let mut updated = model.clone();
-        updated.provider_id = "p2".to_string();
-        updated.enabled = false;
-        db.update_model(&updated).unwrap();
+        db.update_model(&ModelUpdate {
+            name: model.name.clone(),
+            provider_id: Some("p2".to_string()),
+            enabled: Some(false),
+            ..Default::default()
+        })
+        .unwrap();
         let got = db.get_model("m1").unwrap().unwrap();
         assert_eq!(got.provider_id, "p2");
         assert!(!got.enabled);
+    }
+
+    #[test]
+    fn model_partial_update_keeps_other_fields() {
+        let (db, _dir) = setup();
+        db.insert_provider(make_prov("p1")).unwrap();
+        let model = db
+            .insert_model(crate::test_utils::create_test_model("m1", "p1"))
+            .unwrap();
+        db.update_model(&ModelUpdate {
+            name: model.name.clone(),
+            enabled: Some(false),
+            ..Default::default()
+        })
+        .unwrap();
+        let got = db.get_model("m1").unwrap().unwrap();
+        assert!(!got.enabled);
+        assert_eq!(got.provider_id, "p1");
+        assert_eq!(got.upstream_model, model.upstream_model);
     }
 
     #[test]
@@ -1305,9 +1362,9 @@ mod tests {
         let (stored, raw) = db.insert_api_key(&user.username, "test-key", None).unwrap();
         db.update_api_key(
             &user.username,
-            &ApiKey {
+            &ApiKeyUpdate {
                 id: stored.id.clone(),
-                enabled: false,
+                enabled: Some(false),
                 ..Default::default()
             },
         )
@@ -1316,6 +1373,26 @@ mod tests {
         let u = db.get_user(&user.username).unwrap().unwrap();
         let key = u.api_keys.iter().find(|k| k.id == info.id).unwrap();
         assert!(!key.enabled);
+    }
+
+    #[test]
+    fn api_key_partial_update_keeps_other_fields() {
+        let (db, _dir) = setup();
+        let user = db.insert_user(make_user()).unwrap();
+        let (stored, raw) = db.insert_api_key(&user.username, "test-key", None).unwrap();
+        db.update_api_key(
+            &user.username,
+            &ApiKeyUpdate {
+                id: stored.id.clone(),
+                enabled: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let u = db.get_user(&user.username).unwrap().unwrap();
+        let key = u.api_keys.iter().find(|k| k.id == stored.id).unwrap();
+        assert!(!key.enabled);
+        assert_eq!(key.name, "test-key");
     }
 
     #[test]

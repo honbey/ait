@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::app::AppState;
-use crate::db::{ApiKey, AuditEvent, RequestId, SessionUser};
+use crate::db::{ApiKeyUpdate, AuditEvent, RequestId, SessionUser};
 use crate::error::{AitError, forbidden, internal_error, not_found};
 use crate::handlers::{ident_chars, validate_string};
 
@@ -153,19 +153,6 @@ pub struct UpdateApiKeyRequest {
     pub enabled: Option<bool>,
 }
 
-impl From<UpdateApiKeyRequest> for ApiKey {
-    fn from(r: UpdateApiKeyRequest) -> Self {
-        ApiKey {
-            name: r.name.unwrap_or_default(),
-            enabled: r.enabled.unwrap_or(true),
-            expires_at: r
-                .expires_at
-                .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or(DateTime::UNIX_EPOCH)),
-            ..Default::default()
-        }
-    }
-}
-
 pub async fn update_api_key(
     State(state): State<AppState>,
     Extension(session): Extension<SessionUser>,
@@ -188,14 +175,13 @@ pub async fn update_api_key(
         }
         None => None,
     };
-    let updates = ApiKey {
+    let updates = ApiKeyUpdate {
         id: key_id.clone(),
-        name: name.unwrap_or_default(),
-        enabled: input.enabled.unwrap_or(true),
+        name,
+        enabled: input.enabled,
         expires_at: input
             .expires_at
             .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or(DateTime::UNIX_EPOCH)),
-        ..Default::default()
     };
     let db = state.db.clone();
     let username_clone = username.clone();

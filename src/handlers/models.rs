@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, Model, RequestId, SessionUser};
+use crate::db::{AuditEvent, Model, ModelUpdate, RequestId, SessionUser};
 use crate::error::{AitError, internal_error, not_found};
 use crate::handlers::{model_name_chars, upstream_model_chars, uuid_chars, validate_string};
 
@@ -55,20 +55,6 @@ pub struct UpdateModelRequest {
     pub provider_id: Option<String>,
     pub upstream_model: Option<String>,
     pub enabled: Option<bool>,
-}
-
-impl From<UpdateModelRequest> for Model {
-    fn from(r: UpdateModelRequest) -> Self {
-        Model {
-            id: String::new(),
-            name: String::new(),
-            provider_id: r.provider_id.unwrap_or_default(),
-            upstream_model: r.upstream_model.unwrap_or_default(),
-            enabled: r.enabled.unwrap_or(true),
-            created_at: chrono::DateTime::default(),
-            updated_at: chrono::DateTime::default(),
-        }
-    }
 }
 
 impl From<CreateModelRequest> for Model {
@@ -203,14 +189,11 @@ pub async fn update_model(
         .upstream_model
         .map(|v| validate_string(&v, "upstream_model", 128, upstream_model_chars))
         .transpose()?;
-    let updates = Model {
-        id: String::new(),
+    let updates = ModelUpdate {
         name: model_name.clone(),
-        provider_id: provider_id.unwrap_or_default(),
-        upstream_model: upstream_model.unwrap_or_default(),
-        enabled: input.enabled.unwrap_or(true),
-        created_at: chrono::DateTime::default(),
-        updated_at: chrono::DateTime::default(),
+        provider_id,
+        upstream_model,
+        enabled: input.enabled,
     };
     let db = state.db.clone();
     let model = crate::run_blocking(move || db.update_model(&updates))

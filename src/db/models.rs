@@ -116,6 +116,37 @@ impl ApiKey {
     }
 }
 
+/// Partial update patch for a provider: `None` fields are left unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct ProviderUpdate {
+    pub id: String,
+    pub name: Option<String>,
+    pub provider_type: Option<ProviderType>,
+    pub base_url: Option<String>,
+    /// `None` keeps the stored value, `Some("")` clears it.
+    pub api_key: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+/// Partial update patch for a model: `None` fields are left unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct ModelUpdate {
+    pub name: String,
+    pub provider_id: Option<String>,
+    pub upstream_model: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+/// Partial update patch for an API key: `None` fields are left unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct ApiKeyUpdate {
+    pub id: String,
+    pub name: Option<String>,
+    pub enabled: Option<bool>,
+    /// `None` keeps the stored value, `Some(dt)` with `dt.timestamp() == 0` clears it.
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeyInfo {
     pub id: String,

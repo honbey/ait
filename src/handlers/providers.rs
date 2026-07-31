@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use strum::{EnumMessage, IntoEnumIterator};
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, Provider, ProviderType, RequestId, SessionUser};
+use crate::db::{AuditEvent, Provider, ProviderType, ProviderUpdate, RequestId, SessionUser};
 use crate::error::{AitError, internal_error, not_found};
 use crate::handlers::{ident_chars, validate_string};
 use crate::ssrf;
@@ -70,21 +70,6 @@ pub struct UpdateProviderRequest {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub enabled: Option<bool>,
-}
-
-impl From<UpdateProviderRequest> for Provider {
-    fn from(r: UpdateProviderRequest) -> Self {
-        Provider {
-            id: String::new(),
-            name: r.name.unwrap_or_default(),
-            provider_type: r.provider_type.unwrap_or_default(),
-            base_url: r.base_url.unwrap_or_default(),
-            api_key: r.api_key,
-            enabled: r.enabled.unwrap_or(true),
-            created_at: chrono::DateTime::default(),
-            updated_at: chrono::DateTime::default(),
-        }
-    }
 }
 
 impl From<CreateProviderRequest> for Provider {
@@ -303,20 +288,14 @@ pub async fn update_provider(
         .await
         .map_err(|e| e.into_response())?;
     }
-    let mut updates = Provider {
-        id: String::new(),
-        name: name.unwrap_or_default(),
-        provider_type: input.provider_type.unwrap_or_default(),
-        base_url: parsed_url
-            .as_ref()
-            .map(|u| u.to_string())
-            .unwrap_or_default(),
+    let updates = ProviderUpdate {
+        id: id.clone(),
+        name,
+        provider_type: input.provider_type,
+        base_url: parsed_url.map(|u| u.to_string()),
         api_key,
-        enabled: input.enabled.unwrap_or(true),
-        created_at: chrono::DateTime::default(),
-        updated_at: chrono::DateTime::default(),
+        enabled: input.enabled,
     };
-    updates.id = id.clone();
     let db = state.db.clone();
     let provider = crate::run_blocking(move || db.update_provider(&updates))
         .await
