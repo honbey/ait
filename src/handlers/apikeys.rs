@@ -41,6 +41,7 @@ pub async fn create_api_key(
 
     let expires_at: Option<DateTime<Utc>> = input
         .expires_at
+        .filter(|&ts| ts != 0)
         .map(|ts| {
             DateTime::from_timestamp(ts, 0)
                 .ok_or_else(|| AitError::bad_request("Invalid expires_at").into_response())
