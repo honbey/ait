@@ -532,7 +532,9 @@ pub struct PaginatedResponse<T> {
 
 fn push_qs(parts: &mut Vec<String>, key: &str, value: Option<impl std::fmt::Display>) {
     if let Some(v) = value {
-        parts.push(format!("{}={}", key, v));
+        let s = v.to_string();
+        let encoded = js_sys::encode_uri_component(&s);
+        parts.push(format!("{}={}", key, encoded.as_string().unwrap_or(s)));
     }
 }
 
