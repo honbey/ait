@@ -16,6 +16,11 @@ use uuid::Uuid;
 pub(crate) const CACHE_TTL: Duration = Duration::from_secs(300);
 
 /// Build a `Set-Cookie` header value for the session key.
+///
+/// `Secure` is intentionally always set: direct HTTP access only happens
+/// against 127.0.0.1/localhost for local dev, production runs behind nginx
+/// which terminates TLS. No plain-HTTP remote deployment is supported, so
+/// no config toggle is provided.
 pub(crate) fn set_cookie_header(session_key: &str, max_age: i64) -> String {
     format!(
         "session_key={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
