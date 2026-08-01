@@ -12,6 +12,11 @@ use crate::providers::UpstreamProvider;
 
 use super::guard::{UsageTokens, parse_usage};
 
+/// Cap for the event buffer. Standard SSE events are small; a buffer that
+/// exceeds this without an event boundary is either an NDJSON-style stream
+/// (split at the last newline) or a broken upstream (fail the stream).
+const MAX_SSE_BUFFER_BYTES: usize = 1024 * 1024;
+
 pub(crate) struct SseTransformStream<S> {
     pub(crate) inner: S,
     pub(crate) buf: bytes::BytesMut,
@@ -36,6 +41,39 @@ impl<S> SseTransformStream<S> {
             .windows(2)
             .position(|w| w == b"\n\n")
             .map(|i| i + 2)
+    }
+
+    /// If the buffer exceeds the cap without an event boundary, split at the
+    /// last newline (NDJSON-style streams) or fail if there is no newline at all.
+    fn force_split_oversized(&mut self) -> Result<Option<usize>, String> {
+        if self.buf.len() <= MAX_SSE_BUFFER_BYTES {
+            return Ok(None);
+        }
+        match self.buf.iter().rposition(|&b| b == b'\n') {
+            Some(i) => Ok(Some(i + 1)),
+            None => Err("SSE buffer exceeded cap without a line boundary".to_string()),
+        }
+    }
+
+    /// Fail the stream with a status and message, discarding the buffered bytes.
+    fn fail_stream(
+        &mut self,
+        status: &str,
+        msg: &str,
+    ) -> Poll<Option<Result<bytes::Bytes, std::io::Error>>> {
+        self.event.status = status.to_string();
+        self.event.error_message = Some(msg.to_string());
+        self.done = true;
+        self.finalize_log();
+        Poll::Ready(None)
+    }
+
+    fn split_event(&mut self, event_end: usize) -> bytes::Bytes {
+        let event = self.buf.split_to(event_end);
+        let transformed = self.transform_event(&event);
+        self.event.response_body_size =
+            Some(self.event.response_body_size.unwrap_or(0) + transformed.len() as i64);
+        bytes::Bytes::from(transformed)
     }
 
     fn try_extract_usage_from(&mut self, payload: &[u8]) {
@@ -132,11 +170,20 @@ where
         }
 
         if let Some(event_end) = this.find_event_boundary() {
-            let event = this.buf.split_to(event_end);
-            let transformed = this.transform_event(&event);
-            this.event.response_body_size =
-                Some(this.event.response_body_size.unwrap_or(0) + transformed.len() as i64);
-            return Poll::Ready(Some(Ok(bytes::Bytes::from(transformed))));
+            return Poll::Ready(Some(Ok(this.split_event(event_end))));
+        }
+        match this.force_split_oversized() {
+            Ok(Some(event_end)) => return Poll::Ready(Some(Ok(this.split_event(event_end)))),
+            Ok(None) => {}
+            Err(msg) => {
+                tracing::warn!(
+                    model = this.event.model_name,
+                    provider = this.event.provider_name,
+                    "{}",
+                    msg
+                );
+                return this.fail_stream("502", &msg);
+            }
         }
 
         if Pin::new(&mut this.shutdown_fut).poll(cx).is_ready() {
@@ -150,12 +197,22 @@ where
                     this.buf.extend_from_slice(&bytes);
                     this.record_ttfb();
                     if let Some(event_end) = this.find_event_boundary() {
-                        let event = this.buf.split_to(event_end);
-                        let transformed = this.transform_event(&event);
-                        this.event.response_body_size = Some(
-                            this.event.response_body_size.unwrap_or(0) + transformed.len() as i64,
-                        );
-                        return Poll::Ready(Some(Ok(bytes::Bytes::from(transformed))));
+                        return Poll::Ready(Some(Ok(this.split_event(event_end))));
+                    }
+                    match this.force_split_oversized() {
+                        Ok(Some(event_end)) => {
+                            return Poll::Ready(Some(Ok(this.split_event(event_end))));
+                        }
+                        Ok(None) => {}
+                        Err(msg) => {
+                            tracing::warn!(
+                                model = this.event.model_name,
+                                provider = this.event.provider_name,
+                                "{}",
+                                msg
+                            );
+                            return this.fail_stream("502", &msg);
+                        }
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {

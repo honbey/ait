@@ -68,6 +68,7 @@ pub struct ProxyConfig {
     pub stream: bool,
     pub sse_idle_timeout_secs: u64,
     pub connect_timeout_secs: u64,
+    pub max_response_body_bytes: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -115,6 +116,7 @@ impl ConfigApp {
             .set_default("proxy.stream", true)?
             .set_default("proxy.sse_idle_timeout_secs", 60u64)?
             .set_default("proxy.connect_timeout_secs", 30u64)?
+            .set_default("proxy.max_response_body_bytes", 8u64 * 1024 * 1024)?
             .set_default("security.ssrf_allowed_cidrs", Vec::<String>::new())?
             .set_default("security.cors_allowed_origins", Vec::<String>::new())?
             .add_source(File::new(config_file, FileFormat::Toml).required(false))
@@ -190,6 +192,7 @@ max_api_keys_per_user = 20
         assert_eq!(config.database.path, "./data/ait.db");
         assert_eq!(config.proxy.timeout_secs, 300);
         assert!(config.proxy.stream);
+        assert_eq!(config.proxy.max_response_body_bytes, 8 * 1024 * 1024);
     }
 
     #[test]
@@ -200,6 +203,7 @@ max_api_keys_per_user = 20
         assert_eq!(config.auth.max_api_keys_per_user, 10);
         assert_eq!(config.log.retention_days, 30);
         assert_eq!(config.log.analytics_timeout_secs, 10);
+        assert_eq!(config.proxy.max_response_body_bytes, 8 * 1024 * 1024);
         assert!(config.security.ssrf_allowed_cidrs.is_empty());
         assert!(config.security.cors_allowed_origins.is_empty());
     }
