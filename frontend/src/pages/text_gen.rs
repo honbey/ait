@@ -453,8 +453,9 @@ fn poll_sse(buf: &mut Vec<u8>) -> Option<SsePoll> {
 
     let event_str = String::from_utf8_lossy(&event_bytes);
     for line in event_str.lines() {
-        let payload = match line.strip_prefix("data: ") {
-            Some(p) => p.trim(),
+        // Accept both "data: value" and "data:value" per the SSE spec.
+        let payload = match line.strip_prefix("data:") {
+            Some(p) => p.strip_prefix(' ').unwrap_or(p).trim(),
             None => continue,
         };
         if payload == "[DONE]" {

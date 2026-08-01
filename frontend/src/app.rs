@@ -34,9 +34,22 @@ pub fn App() -> impl IntoView {
         let auth_clone = auth.clone();
         async move {
             match api::check_session().await {
-                Ok(Some(uname)) => auth_clone.set_logged_in(uname),
-                Ok(None) => auth_clone.set_logged_out(),
-                Err(_) => auth_clone.authenticated.set(AuthStatus::NotAuthenticated),
+                Ok(Some(uname)) => {
+                    // Apply only while status is still Unknown; a login or
+                    // logout that raced this request must not be overwritten
+                    // by a stale snapshot.
+                    if auth_clone.authenticated.get_untracked() == AuthStatus::Unknown {
+                        auth_clone.set_logged_in(uname);
+                    }
+                }
+                Ok(None) => {
+                    if auth_clone.authenticated.get_untracked() == AuthStatus::Unknown {
+                        auth_clone.set_logged_out();
+                    }
+                }
+                // Network errors must not flip the status; the app may be
+                // offline or the request may have raced a login.
+                Err(_) => {}
             }
         }
     });
@@ -62,6 +75,13 @@ pub fn App() -> impl IntoView {
             && let Some(html) = doc.document_element()
         {
             let _ = html.set_attribute("lang", if lang == "zh" { "zh-CN" } else { "en" });
+            // The dark class must live on <html> (not a child div) so the
+            // body background picks it up via the .dark variant.
+            if dark.get() {
+                let _ = html.class_list().add_1("dark");
+            } else {
+                let _ = html.class_list().remove_1("dark");
+            }
         }
     });
 

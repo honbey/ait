@@ -298,7 +298,7 @@ pub fn ApiKeysPage() -> impl IntoView {
                         username=auth.username.get_untracked().unwrap_or_default()
                         created_raw_key
                         on_close
-                        on_refetch=do_refetch.clone()
+                        on_refetch=do_refetch
                     />
                 }
                     .into_any()
@@ -309,7 +309,7 @@ pub fn ApiKeysPage() -> impl IntoView {
                         username=auth.username.get_untracked().unwrap_or_default()
                         created_raw_key
                         on_close
-                        on_refetch=do_refetch.clone()
+                        on_refetch=do_refetch
                         edit_model=key
                     />
                 }

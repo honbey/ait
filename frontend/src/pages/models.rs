@@ -380,22 +380,24 @@ fn ModelFormModal(
                     class=CLASS_INPUT
                     on:change=move |ev| provider_id.set(event_target_value(&ev))
                 >
-                    {providers_resource
-                        .get_untracked()
-                        .map(|providers| {
-                            let current = provider_id.get_untracked();
-                            providers
-                                .iter()
-                                .map(|(id, name)| {
-                                    view! {
-                                        <option value=id.clone() selected=current == *id>
-                                            {name.clone()}
-                                        </option>
-                                    }
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default()}
+                    {move || {
+                        let current = provider_id.get_untracked();
+                        providers_resource
+                            .get()
+                            .map(|providers| {
+                                providers
+                                    .iter()
+                                    .map(|(id, name)| {
+                                        view! {
+                                            <option value=id.clone() selected=current == *id>
+                                                {name.clone()}
+                                            </option>
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default()
+                    }}
                 </select>
             </div>
 

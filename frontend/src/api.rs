@@ -19,6 +19,13 @@ thread_local! {
     static BASE_URL: OnceCell<String> = const { OnceCell::new() };
 }
 
+/// 30s cap for admin API requests. Streaming /v1 calls bypass this.
+const REQUEST_TIMEOUT_MS: u32 = 30_000;
+
+fn timeout_signal() -> web_sys::AbortSignal {
+    web_sys::AbortSignal::timeout_with_u32(REQUEST_TIMEOUT_MS)
+}
+
 struct CachedResponse {
     json: String,
     cached_at: f64,
@@ -115,6 +122,7 @@ async fn api_post<T: DeserializeOwned>(
     let url = format!("{}/{}", get_base_url(), path);
     let resp = Request::post(&url)
         .header("Content-Type", "application/json")
+        .abort_signal(Some(&timeout_signal()))
         .body(body.to_string())
         .map_err(|e| NetError::GlooError(e.to_string()))?
         .send()
@@ -133,6 +141,7 @@ async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> R
     let url = format!("{}/{}", get_base_url(), path);
     let resp = Request::put(&url)
         .header("Content-Type", "application/json")
+        .abort_signal(Some(&timeout_signal()))
         .body(body.to_string())
         .map_err(|e| NetError::GlooError(e.to_string()))?
         .send()
@@ -149,7 +158,10 @@ async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> R
 
 async fn api_delete(path: &str) -> Result<(), NetError> {
     let url = format!("{}/{}", get_base_url(), path);
-    let resp = Request::delete(&url).send().await?;
+    let resp = Request::delete(&url)
+        .abort_signal(Some(&timeout_signal()))
+        .send()
+        .await?;
     if resp.ok() {
         Ok(())
     } else {
@@ -162,7 +174,10 @@ async fn api_delete(path: &str) -> Result<(), NetError> {
 
 async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
     let url = format!("{}/{}", get_base_url(), path);
-    let resp = Request::get(&url).send().await?;
+    let resp = Request::get(&url)
+        .abort_signal(Some(&timeout_signal()))
+        .send()
+        .await?;
     if resp.ok() {
         resp.json().await
     } else {
@@ -192,7 +207,10 @@ async fn api_get_cached<T: DeserializeOwned>(path: &str, force: bool) -> Result<
     }
 
     let url = format!("{}/{}", get_base_url(), path);
-    let resp = Request::get(&url).send().await?;
+    let resp = Request::get(&url)
+        .abort_signal(Some(&timeout_signal()))
+        .send()
+        .await?;
     if !resp.ok() {
         let status = resp.status();
         let err = response_to_error(resp).await;

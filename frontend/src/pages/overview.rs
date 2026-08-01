@@ -35,8 +35,20 @@ fn aggregate_daily(buckets: &[BucketEntry]) -> Vec<BucketEntry> {
     daily
 }
 
+/// Advances `cur` to the next local midnight. Uses the calendar date rather
+/// than a fixed 86400s step so DST days (23h/25h) stay aligned with
+/// `aggregate_daily`'s local-midnight bucket keys.
+fn next_local_midnight(cur: i64) -> i64 {
+    let d = js_sys::Date::new(&((cur as f64) * 1000.0).into());
+    let next = js_sys::Date::new_with_year_month_day(
+        d.get_full_year(),
+        d.get_month() as i32,
+        d.get_date() as i32 + 1,
+    );
+    (next.get_time() / 1000.0) as i64
+}
+
 fn fill_daily_range(daily: &[BucketEntry], start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
-    let day_secs = 86400i64;
     let sd = js_sys::Date::new(&((start_ts as f64) * 1000.0).into());
     let ed = js_sys::Date::new(&((end_ts as f64) * 1000.0).into());
     let start_day = js_sys::Date::new_with_year_month_day(
@@ -65,7 +77,7 @@ fn fill_daily_range(daily: &[BucketEntry], start_ts: i64, end_ts: i64) -> Vec<Bu
                 count: 0,
             });
         }
-        cur += day_secs;
+        cur = next_local_midnight(cur);
     }
     result
 }
