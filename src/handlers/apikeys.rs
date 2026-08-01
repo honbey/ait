@@ -218,3 +218,178 @@ pub async fn update_api_key(
         expires_at: updated.expires_at.map(|dt| dt.timestamp()),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{
+        create_test_state, insert_test_user, login_and_cookie, send_request, test_router,
+    };
+    use axum::Router;
+    use axum::http::Method;
+
+    async fn setup() -> (Router, String) {
+        let (state, _dir) = create_test_state();
+        insert_test_user(&state.db, "alice", "secret123");
+        let router = test_router(state);
+        let cookie = login_and_cookie(&router, "alice", "secret123").await;
+        (router, cookie)
+    }
+
+    async fn create_key(router: &Router, cookie: &str, name: &str) -> serde_json::Value {
+        let resp = send_request(
+            router,
+            Method::POST,
+            "/api/users/alice/api-keys",
+            Some(cookie),
+            None,
+            Some(serde_json::json!({"name": name})),
+        )
+        .await;
+        assert_eq!(
+            resp.status,
+            StatusCode::CREATED,
+            "create key should succeed"
+        );
+        resp.json
+    }
+
+    #[tokio::test]
+    async fn create_api_key_returns_raw_key() {
+        let (router, cookie) = setup().await;
+        let json = create_key(&router, &cookie, "test-key").await;
+        assert_eq!(json["name"], "test-key");
+        assert_eq!(json["enabled"], serde_json::Value::Bool(true));
+        let key = json["key"].as_str().expect("raw key should be returned");
+        assert!(!key.is_empty());
+        assert!(!key.contains('*'), "create should return the raw key");
+    }
+
+    #[tokio::test]
+    async fn create_api_key_empty_name_bad_request() {
+        let (router, cookie) = setup().await;
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/api/users/alice/api-keys",
+            Some(&cookie),
+            None,
+            Some(serde_json::json!({"name": "   "})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+        assert_eq!(resp.json["code"], 400);
+    }
+
+    #[tokio::test]
+    async fn create_api_key_cross_user_forbidden() {
+        let (state, _dir) = create_test_state();
+        insert_test_user(&state.db, "alice", "secret123");
+        insert_test_user(&state.db, "bob", "bobpass");
+        let router = test_router(state);
+        let cookie = login_and_cookie(&router, "alice", "secret123").await;
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/api/users/bob/api-keys",
+            Some(&cookie),
+            None,
+            Some(serde_json::json!({"name": "test-key"})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn list_api_keys_returns_created() {
+        let (router, cookie) = setup().await;
+        create_key(&router, &cookie, "test-key").await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/users/alice/api-keys",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        let keys = resp.json.as_array().expect("list should return an array");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0]["name"], "test-key");
+        assert_eq!(keys[0]["enabled"], serde_json::Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn update_api_key_disabled_key_rejected_by_proxy() {
+        let (router, cookie) = setup().await;
+        let json = create_key(&router, &cookie, "test-key").await;
+        let key_id = json["id"].as_str().unwrap();
+        let raw_key = json["key"].as_str().unwrap();
+
+        let resp = send_request(
+            &router,
+            Method::PUT,
+            &format!("/api/users/alice/api-keys/{key_id}"),
+            Some(&cookie),
+            None,
+            Some(serde_json::json!({"enabled": false})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["enabled"], serde_json::Value::Bool(false));
+
+        // The disabled key must no longer pass the proxy auth middleware.
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/v1/models",
+            None,
+            Some(raw_key),
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn delete_api_key_removes_key() {
+        let (router, cookie) = setup().await;
+        let json = create_key(&router, &cookie, "test-key").await;
+        let key_id = json["id"].as_str().unwrap();
+        let raw_key = json["key"].as_str().unwrap();
+
+        let resp = send_request(
+            &router,
+            Method::DELETE,
+            &format!("/api/users/alice/api-keys/{key_id}"),
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::NO_CONTENT);
+
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/users/alice/api-keys",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.json.as_array().unwrap().len(), 0);
+
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/v1/models",
+            None,
+            Some(raw_key),
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+    }
+}

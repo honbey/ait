@@ -220,3 +220,139 @@ fn dummy_hash() -> &'static str {
     static HASH: OnceLock<String> = OnceLock::new();
     HASH.get_or_init(|| bcrypt::hash("dummy", bcrypt::DEFAULT_COST).expect("dummy hash"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{
+        create_test_state, insert_test_user, login_and_cookie, send_request, test_router,
+    };
+    use axum::Router;
+    use axum::http::Method;
+
+    async fn setup() -> (Router, String) {
+        let (state, _dir) = create_test_state();
+        insert_test_user(&state.db, "alice", "secret123");
+        let router = test_router(state);
+        let cookie = login_and_cookie(&router, "alice", "secret123").await;
+        (router, cookie)
+    }
+
+    #[tokio::test]
+    async fn login_success_sets_cookie_and_ok() {
+        let (state, _dir) = create_test_state();
+        insert_test_user(&state.db, "alice", "secret123");
+        let router = test_router(state);
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/auth/login",
+            None,
+            None,
+            Some(serde_json::json!({"username": "alice", "password": "secret123"})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["ok"], serde_json::Value::Bool(true));
+        let cookie = resp
+            .headers
+            .get(header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .expect("login should set a session cookie");
+        assert!(cookie.starts_with("session_key="));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("Secure"));
+    }
+
+    #[tokio::test]
+    async fn login_wrong_password_unauthorized() {
+        let (state, _dir) = create_test_state();
+        insert_test_user(&state.db, "alice", "secret123");
+        let router = test_router(state);
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/auth/login",
+            None,
+            None,
+            Some(serde_json::json!({"username": "alice", "password": "wrong"})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.json["code"], 401);
+    }
+
+    #[tokio::test]
+    async fn login_unknown_user_unauthorized() {
+        let (state, _dir) = create_test_state();
+        insert_test_user(&state.db, "alice", "secret123");
+        let router = test_router(state);
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/auth/login",
+            None,
+            None,
+            Some(serde_json::json!({"username": "nobody", "password": "secret123"})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.json["code"], 401);
+    }
+
+    #[tokio::test]
+    async fn session_check_with_cookie_authenticated() {
+        let (router, cookie) = setup().await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/auth/session",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["authenticated"], serde_json::Value::Bool(true));
+        assert_eq!(resp.json["username"], "alice");
+    }
+
+    #[tokio::test]
+    async fn session_check_without_cookie_unauthenticated() {
+        let (router, _cookie) = setup().await;
+        let resp = send_request(&router, Method::GET, "/auth/session", None, None, None).await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["authenticated"], serde_json::Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn logout_invalidates_session() {
+        let (router, cookie) = setup().await;
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/auth/logout",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        let clear = resp
+            .headers
+            .get(header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .expect("logout should clear the session cookie");
+        assert!(clear.contains("Max-Age=0"));
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/auth/session",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.json["authenticated"], serde_json::Value::Bool(false));
+    }
+}

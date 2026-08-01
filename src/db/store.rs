@@ -1408,7 +1408,7 @@ mod tests {
     fn api_key_partial_update_keeps_other_fields() {
         let (db, _dir) = setup();
         let user = db.insert_user(make_user()).unwrap();
-        let (stored, raw) = db.insert_api_key(&user.username, "test-key", None).unwrap();
+        let (stored, _raw) = db.insert_api_key(&user.username, "test-key", None).unwrap();
         db.update_api_key(
             &user.username,
             &ApiKeyUpdate {

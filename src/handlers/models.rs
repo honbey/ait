@@ -214,3 +214,204 @@ pub async fn update_model(
 
     Ok(Json(ModelResponse::from(model)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{
+        create_test_state, insert_test_user, login_and_cookie, send_request, test_router,
+    };
+    use axum::Router;
+    use axum::http::Method;
+
+    async fn setup() -> (Router, String) {
+        let (state, _dir) = create_test_state();
+        insert_test_user(&state.db, "alice", "secret123");
+        let router = test_router(state);
+        let cookie = login_and_cookie(&router, "alice", "secret123").await;
+        (router, cookie)
+    }
+
+    /// Create a provider and return its id, so models have a valid provider.
+    async fn create_provider(router: &Router, cookie: &str) -> String {
+        let resp = send_request(
+            router,
+            Method::POST,
+            "/api/providers",
+            Some(cookie),
+            None,
+            Some(serde_json::json!({
+                "name": "test-provider",
+                "type": "openai_compat",
+                "base_url": "http://127.0.0.1:8080",
+                "enabled": true,
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::CREATED);
+        resp.json["id"].as_str().unwrap().to_string()
+    }
+
+    async fn create_model(
+        router: &Router,
+        cookie: &str,
+        provider_id: &str,
+        name: &str,
+    ) -> serde_json::Value {
+        let resp = send_request(
+            router,
+            Method::POST,
+            "/api/models",
+            Some(cookie),
+            None,
+            Some(serde_json::json!({
+                "name": name,
+                "provider_id": provider_id,
+                "upstream_model": name,
+                "enabled": true,
+            })),
+        )
+        .await;
+        assert_eq!(
+            resp.status,
+            StatusCode::CREATED,
+            "create model should succeed"
+        );
+        resp.json
+    }
+
+    #[tokio::test]
+    async fn create_model_returns_created() {
+        let (router, cookie) = setup().await;
+        let provider_id = create_provider(&router, &cookie).await;
+        let json = create_model(&router, &cookie, &provider_id, "gpt-test").await;
+        assert_eq!(json["name"], "gpt-test");
+        assert_eq!(json["provider_id"], provider_id);
+        assert_eq!(json["upstream_model"], "gpt-test");
+        assert_eq!(json["enabled"], serde_json::Value::Bool(true));
+    }
+
+    #[tokio::test]
+    async fn create_model_invalid_name_bad_request() {
+        let (router, cookie) = setup().await;
+        let provider_id = create_provider(&router, &cookie).await;
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/api/models",
+            Some(&cookie),
+            None,
+            Some(serde_json::json!({
+                "name": "bad#name",
+                "provider_id": provider_id,
+                "upstream_model": "bad#name",
+                "enabled": true,
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+        assert_eq!(resp.json["code"], 400);
+    }
+
+    #[tokio::test]
+    async fn create_model_unknown_provider_not_found() {
+        let (router, cookie) = setup().await;
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/api/models",
+            Some(&cookie),
+            None,
+            Some(serde_json::json!({
+                "name": "gpt-test",
+                "provider_id": "00000000-0000-0000-0000-000000000000",
+                "upstream_model": "gpt-test",
+                "enabled": true,
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn list_and_get_model() {
+        let (router, cookie) = setup().await;
+        let provider_id = create_provider(&router, &cookie).await;
+        create_model(&router, &cookie, &provider_id, "gpt-test").await;
+
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/models",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        let models = resp.json.as_array().expect("list should return an array");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["name"], "gpt-test");
+
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/models/gpt-test",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["upstream_model"], "gpt-test");
+    }
+
+    #[tokio::test]
+    async fn update_model_changes_upstream() {
+        let (router, cookie) = setup().await;
+        let provider_id = create_provider(&router, &cookie).await;
+        create_model(&router, &cookie, &provider_id, "gpt-test").await;
+        let resp = send_request(
+            &router,
+            Method::PUT,
+            "/api/models/gpt-test",
+            Some(&cookie),
+            None,
+            Some(serde_json::json!({
+                "upstream_model": "gpt-upstream-v2",
+                "enabled": false,
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["upstream_model"], "gpt-upstream-v2");
+        assert_eq!(resp.json["enabled"], serde_json::Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn delete_model_removes_and_get_returns_404() {
+        let (router, cookie) = setup().await;
+        let provider_id = create_provider(&router, &cookie).await;
+        create_model(&router, &cookie, &provider_id, "gpt-test").await;
+        let resp = send_request(
+            &router,
+            Method::DELETE,
+            "/api/models/gpt-test",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::NO_CONTENT);
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/models/gpt-test",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::NOT_FOUND);
+    }
+}

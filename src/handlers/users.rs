@@ -103,3 +103,117 @@ pub async fn change_password(
 
     Ok(Json(serde_json::json!({"ok": true})))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{
+        create_test_state, insert_test_user, login_and_cookie, send_request, test_router,
+    };
+    use axum::Router;
+    use axum::http::Method;
+
+    async fn setup() -> (Router, String) {
+        let (state, _dir) = create_test_state();
+        insert_test_user(&state.db, "alice", "secret123");
+        let router = test_router(state);
+        let cookie = login_and_cookie(&router, "alice", "secret123").await;
+        (router, cookie)
+    }
+
+    #[tokio::test]
+    async fn change_password_success_invalidates_session() {
+        let (router, cookie) = setup().await;
+        let resp = send_request(
+            &router,
+            Method::PUT,
+            "/api/users/alice/password",
+            Some(&cookie),
+            None,
+            Some(serde_json::json!({
+                "current_password": "secret123",
+                "new_password": "newsecret456"
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["ok"], serde_json::Value::Bool(true));
+        // All sessions (including the current one) are invalidated, so the
+        // old cookie must no longer authenticate against admin routes.
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/providers",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+        // The new password works for a fresh login.
+        let new_cookie = login_and_cookie(&router, "alice", "newsecret456").await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/providers",
+            Some(&new_cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn change_password_wrong_current_password_forbidden() {
+        let (router, cookie) = setup().await;
+        let resp = send_request(
+            &router,
+            Method::PUT,
+            "/api/users/alice/password",
+            Some(&cookie),
+            None,
+            Some(serde_json::json!({
+                "current_password": "wrong",
+                "new_password": "newsecret456"
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::FORBIDDEN);
+        assert_eq!(resp.json["code"], 403);
+    }
+
+    #[tokio::test]
+    async fn change_password_cross_user_forbidden() {
+        let (state, _dir) = create_test_state();
+        insert_test_user(&state.db, "alice", "secret123");
+        insert_test_user(&state.db, "bob", "bobpass");
+        let router = test_router(state);
+        let cookie = login_and_cookie(&router, "alice", "secret123").await;
+        let resp = send_request(
+            &router,
+            Method::PUT,
+            "/api/users/bob/password",
+            Some(&cookie),
+            None,
+            Some(serde_json::json!({
+                "current_password": "secret123",
+                "new_password": "newsecret456"
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::FORBIDDEN);
+        // Bob's credentials are unchanged.
+        let bob_cookie = login_and_cookie(&router, "bob", "bobpass").await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/providers",
+            Some(&bob_cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+    }
+}

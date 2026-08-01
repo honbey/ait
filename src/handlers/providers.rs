@@ -366,3 +366,177 @@ pub async fn list_provider_types() -> Json<&'static Vec<serde_json::Value>> {
             .collect()
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{
+        create_test_state, insert_test_user, login_and_cookie, send_request, test_router,
+    };
+    use axum::Router;
+    use axum::http::Method;
+
+    const BASE_URL: &str = "http://127.0.0.1:8080/";
+
+    async fn setup() -> (Router, String) {
+        let (state, _dir) = create_test_state();
+        insert_test_user(&state.db, "alice", "secret123");
+        let router = test_router(state);
+        let cookie = login_and_cookie(&router, "alice", "secret123").await;
+        (router, cookie)
+    }
+
+    fn create_body(name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "type": "openai_compat",
+            "base_url": BASE_URL,
+            "enabled": true,
+        })
+    }
+
+    async fn create_provider(router: &Router, cookie: &str, name: &str) -> serde_json::Value {
+        let resp = send_request(
+            router,
+            Method::POST,
+            "/api/providers",
+            Some(cookie),
+            None,
+            Some(create_body(name)),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::CREATED, "create should succeed");
+        resp.json
+    }
+
+    #[tokio::test]
+    async fn create_provider_returns_created() {
+        let (router, cookie) = setup().await;
+        let json = create_provider(&router, &cookie, "test-provider").await;
+        assert_eq!(json["name"], "test-provider");
+        assert_eq!(json["type"], "openai_compat");
+        assert_eq!(json["base_url"], BASE_URL);
+        assert_eq!(json["enabled"], serde_json::Value::Bool(true));
+        assert!(!json["id"].as_str().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_provider_empty_name_bad_request() {
+        let (router, cookie) = setup().await;
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/api/providers",
+            Some(&cookie),
+            None,
+            Some(create_body("   ")),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+        assert_eq!(resp.json["code"], 400);
+    }
+
+    #[tokio::test]
+    async fn create_provider_invalid_base_url_bad_request() {
+        let (router, cookie) = setup().await;
+        let mut body = create_body("test-provider");
+        body["base_url"] = serde_json::json!("not-a-url");
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/api/providers",
+            Some(&cookie),
+            None,
+            Some(body),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn list_providers_includes_created() {
+        let (router, cookie) = setup().await;
+        create_provider(&router, &cookie, "test-provider").await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/providers",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        let providers = resp.json.as_array().expect("list should return an array");
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0]["name"], "test-provider");
+        assert_eq!(providers[0]["base_url"], BASE_URL);
+    }
+
+    #[tokio::test]
+    async fn update_provider_changes_fields() {
+        let (router, cookie) = setup().await;
+        let json = create_provider(&router, &cookie, "test-provider").await;
+        let id = json["id"].as_str().unwrap();
+        let resp = send_request(
+            &router,
+            Method::PUT,
+            &format!("/api/providers/{id}"),
+            Some(&cookie),
+            None,
+            Some(serde_json::json!({
+                "base_url": "http://127.0.0.1:9090/",
+                "enabled": false,
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["base_url"], "http://127.0.0.1:9090/");
+        assert_eq!(resp.json["enabled"], serde_json::Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn delete_provider_removes_and_get_returns_404() {
+        let (router, cookie) = setup().await;
+        let json = create_provider(&router, &cookie, "test-provider").await;
+        let id = json["id"].as_str().unwrap();
+        let resp = send_request(
+            &router,
+            Method::DELETE,
+            &format!("/api/providers/{id}"),
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::NO_CONTENT);
+        let resp = send_request(
+            &router,
+            Method::GET,
+            &format!("/api/providers/{id}"),
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn list_provider_types_non_empty() {
+        let (router, cookie) = setup().await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/provider-types",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        let types = resp.json.as_array().expect("types should be an array");
+        assert!(!types.is_empty());
+        assert!(types.iter().any(|t| t["type"] == "openai_compat"));
+    }
+}
