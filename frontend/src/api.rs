@@ -258,6 +258,24 @@ pub async fn logout_api() -> Result<(), NetError> {
     Ok(())
 }
 
+pub async fn change_password_api(
+    current_password: &str,
+    new_password: &str,
+) -> Result<(), NetError> {
+    let username = use_context::<AuthContext>()
+        .and_then(|auth| auth.username.get_untracked())
+        .ok_or_else(|| NetError::GlooError("not logged in".into()))?;
+    api_put::<serde_json::Value>(
+        &format!("api/users/{}/password", username),
+        &serde_json::json!({
+            "current_password": current_password,
+            "new_password": new_password,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn check_session() -> Result<Option<String>, NetError> {
     let _guard = Suppress401Guard::new();
     let json: serde_json::Value = api_get("auth/session").await?;
