@@ -178,15 +178,16 @@ async fn api_get_cached<T: DeserializeOwned>(path: &str, force: bool) -> Result<
 
     if !force
         && let Some(cached) = FETCH_CACHE.with(|c| {
-        let map = c.borrow();
-        map.get(&key).and_then(|entry| {
-            if js_sys::Date::now() - entry.cached_at < CACHE_TTL_MS {
-                Some(entry.json.clone())
-            } else {
-                None
-            }
+            let map = c.borrow();
+            map.get(&key).and_then(|entry| {
+                if js_sys::Date::now() - entry.cached_at < CACHE_TTL_MS {
+                    Some(entry.json.clone())
+                } else {
+                    None
+                }
+            })
         })
-    }) {
+    {
         return serde_json::from_str(&cached).map_err(|e| NetError::GlooError(e.to_string()));
     }
 
@@ -460,10 +461,7 @@ pub async fn fetch_overview_stats(
     force: bool,
 ) -> Result<OverviewStats, NetError> {
     api_get_cached(
-        &format!(
-            "api/stats?start_ts={}&end_ts={}",
-            start_ts, end_ts
-        ),
+        &format!("api/stats?start_ts={}&end_ts={}", start_ts, end_ts),
         force,
     )
     .await
@@ -505,10 +503,7 @@ pub async fn fetch_request_buckets(
     force: bool,
 ) -> Result<Vec<BucketEntry>, NetError> {
     api_get_cached(
-        &format!(
-            "api/data/requests?start_ts={}&end_ts={}",
-            start_ts, end_ts
-        ),
+        &format!("api/data/requests?start_ts={}&end_ts={}", start_ts, end_ts),
         force,
     )
     .await
@@ -520,10 +515,7 @@ pub async fn fetch_token_buckets(
     force: bool,
 ) -> Result<Vec<BucketEntry>, NetError> {
     api_get_cached(
-        &format!(
-            "api/data/tokens?start_ts={}&end_ts={}",
-            start_ts, end_ts
-        ),
+        &format!("api/data/tokens?start_ts={}&end_ts={}", start_ts, end_ts),
         force,
     )
     .await
