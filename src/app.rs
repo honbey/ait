@@ -16,8 +16,12 @@ use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 type SessionCacheEntry = (SessionUser, DateTime<Utc>, Instant);
-type ModelCacheEntry = (Option<(Model, Provider)>, Instant);
+pub(crate) type ModelCacheEntry = (Option<(Model, Provider)>, Instant);
 type ProviderCacheEntry = (Arc<dyn UpstreamProvider>, Instant);
+
+/// Negative-cache entries (unknown models) expire fast and never slide,
+/// so spraying bogus model names cannot grow the model_cache unbounded.
+pub(crate) const NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -169,6 +173,8 @@ fn spawn_session_cleanup(db: Arc<Database>, shutdown: CancellationToken, interva
 /// Evict expired in-memory cache entries at a configurable interval.
 /// Applies a shorter TTL when a cache exceeds 90% of max_entries.
 /// Covers session, api_key, model, provider, and SSRF DNS caches in one task.
+/// Note: `max_entries` is only a soft threshold here; the model cache also
+/// enforces it as a hard cap at insertion time (see insert_model_cache).
 #[allow(clippy::too_many_arguments)]
 fn spawn_caches_cleanup(
     session_cache: Arc<DashMap<String, SessionCacheEntry>>,
@@ -201,7 +207,14 @@ fn spawn_caches_cleanup(
                         let ttl = aggressive(caches.1.len());
                         caches.1.retain(|_, v| v.1.elapsed() < ttl);
                         let ttl = aggressive(caches.2.len());
-                        caches.2.retain(|_, v| v.1.elapsed() < ttl);
+                        // compute before retain: calling len() inside the retain
+                        // closure would take a read lock while holding the write
+                        // lock and deadlock (parking_lot is not reentrant)
+                        caches.2.retain(|_, v| {
+                            let entry_ttl =
+                                if v.0.is_none() { NEGATIVE_CACHE_TTL } else { ttl };
+                            v.1.elapsed() < entry_ttl
+                        });
                         let ttl = aggressive(caches.3.len());
                         caches.3.retain(|_, v| v.1.elapsed() < ttl);
                         let ttl = aggressive(caches.4.len());

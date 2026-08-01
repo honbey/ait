@@ -11,12 +11,26 @@ use axum::{
 use chrono::Utc;
 use tracing::{debug, trace};
 
-use crate::app::AppState;
+use crate::app::{AppState, ModelCacheEntry, NEGATIVE_CACHE_TTL};
 use crate::db::{Model, Provider, ProxyEvent, RequestId, SessionUser};
 use crate::error::{AitError, internal_error, not_found};
 use crate::middleware::CACHE_TTL;
 use crate::providers::create_provider;
 use crate::ssrf;
+
+/// Insert into the model cache only while under the entry cap; beyond it the
+/// entry is not cached at all. `DashMap::len` is approximate under concurrency,
+/// so the map stays bounded within a small multiple of `cache_max_entries`.
+fn insert_model_cache(
+    map: &dashmap::DashMap<String, ModelCacheEntry>,
+    name: &str,
+    entry: ModelCacheEntry,
+    max_entries: usize,
+) {
+    if map.len() < max_entries {
+        map.insert(name.to_string(), entry);
+    }
+}
 
 mod exec;
 mod guard;
@@ -212,22 +226,28 @@ pub async fn proxy_request(
         ) -> Result<(Model, Provider), (StatusCode, Json<AitError>)> {
             let db = state.db.clone();
             let name = model_name.to_string();
+            let max_entries = state.config.server.cache_max_entries as usize;
             match crate::run_blocking(move || db.resolve_model(&name)).await {
                 Ok(Ok(Some((m, p)))) => {
                     let upstream = create_provider(&p, state.http_client.clone());
                     state
                         .provider_cache
                         .insert(p.id.clone(), (upstream, Instant::now()));
-                    state.model_cache.insert(
-                        model_name.to_string(),
+                    insert_model_cache(
+                        &state.model_cache,
+                        model_name,
                         (Some((m.clone(), p.clone())), Instant::now()),
+                        max_entries,
                     );
                     Ok((m, p))
                 }
                 Ok(Ok(None)) => {
-                    state
-                        .model_cache
-                        .insert(model_name.to_string(), (None, Instant::now()));
+                    insert_model_cache(
+                        &state.model_cache,
+                        model_name,
+                        (None, Instant::now()),
+                        max_entries,
+                    );
                     Err(not_found(format!(
                         "Model '{}' not found or disabled",
                         model_name
@@ -239,8 +259,16 @@ pub async fn proxy_request(
         }
 
         let cached = state.model_cache.get_mut(model_name).and_then(|mut entry| {
-            if entry.1.elapsed() < CACHE_TTL {
-                entry.1 = Instant::now();
+            let ttl = if entry.0.is_none() {
+                NEGATIVE_CACHE_TTL
+            } else {
+                CACHE_TTL
+            };
+            if entry.1.elapsed() < ttl {
+                // slide only positive entries; negative ones expire for real
+                if entry.0.is_some() {
+                    entry.1 = Instant::now();
+                }
                 Some(entry.0.clone())
             } else {
                 None
@@ -445,5 +473,29 @@ fn count_prompt_tokens(body_len: usize) -> Option<i64> {
         None
     } else {
         Some(body_len as i64 / 3)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insert_model_cache_respects_cap() {
+        let map = dashmap::DashMap::new();
+        let entry = (None, Instant::now());
+        for i in 0..5 {
+            insert_model_cache(&map, &format!("m{i}"), entry.clone(), 5);
+        }
+        assert_eq!(map.len(), 5);
+        insert_model_cache(&map, "m6", entry.clone(), 5);
+        assert_eq!(map.len(), 5);
+    }
+
+    #[test]
+    fn insert_model_cache_zero_cap_caches_nothing() {
+        let map = dashmap::DashMap::new();
+        insert_model_cache(&map, "m0", (None, Instant::now()), 0);
+        assert!(map.is_empty());
     }
 }
