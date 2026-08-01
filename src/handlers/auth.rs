@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppState;
 use crate::db::{AuditEvent, RequestId, hash_key};
 use crate::error::{AitError, internal_error, unauthorized};
-use crate::middleware::{CACHE_TTL, extract_session_key};
+use crate::middleware::{CACHE_TTL, extract_session_key, set_cookie_header};
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -30,14 +30,6 @@ pub struct LoginResponse {
 pub struct SessionResponse {
     pub authenticated: bool,
     pub username: Option<String>,
-}
-
-/// Build a `Set-Cookie` header value for the session key.
-fn set_cookie_header(session_key: &str, max_age: i64) -> String {
-    format!(
-        "session_key={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
-        session_key, max_age
-    )
 }
 
 pub async fn login(
@@ -141,51 +133,68 @@ pub async fn logout(
     Ok((resp_headers, Json(serde_json::json!({"ok": true}))))
 }
 
-pub async fn session_check(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Json<SessionResponse> {
+pub async fn session_check(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let session_key = match extract_session_key(&headers) {
         Some(k) => k,
         None => {
-            return Json(SessionResponse {
-                authenticated: false,
-                username: None,
-            });
+            return (
+                HeaderMap::new(),
+                Json(SessionResponse {
+                    authenticated: false,
+                    username: None,
+                }),
+            );
         }
     };
 
     let session_key = session_key.to_string();
     let hash = hash_key(&session_key);
+    let ttl = state.config.auth.session_ttl_secs;
 
     if let Some(mut entry) = state.session_cache.get_mut(&hash) {
         if entry.1 > Utc::now() && entry.2.elapsed() < CACHE_TTL {
             entry.2 = Instant::now();
             let user = entry.0.clone();
             drop(entry);
-            return Json(SessionResponse {
-                authenticated: true,
-                username: Some(user.username),
+            let db = state.db.clone();
+            let hash_clone = hash.clone();
+            tokio::spawn(async move {
+                let _ = crate::run_blocking(move || db.renew_session(&hash_clone, ttl)).await;
             });
+            let mut resp_headers = HeaderMap::new();
+            resp_headers.insert(
+                header::SET_COOKIE,
+                set_cookie_header(&session_key, ttl as i64).parse().unwrap(),
+            );
+            return (
+                resp_headers,
+                Json(SessionResponse {
+                    authenticated: true,
+                    username: Some(user.username),
+                }),
+            );
         }
         drop(entry);
     }
 
+    let session_key_for_db = session_key.clone();
     let db = state.db.clone();
-    let session = match crate::run_blocking(move || db.get_session(&session_key)).await {
+    let session = match crate::run_blocking(move || db.get_session(&session_key_for_db)).await {
         Ok(Ok(Some(s))) if !s.is_expired() => s,
         _ => {
-            return Json(SessionResponse {
-                authenticated: false,
-                username: None,
-            });
+            return (
+                HeaderMap::new(),
+                Json(SessionResponse {
+                    authenticated: false,
+                    username: None,
+                }),
+            );
         }
     };
 
     // Fire-and-forget session renewal so active sessions do not expire
     let db = state.db.clone();
     let hash_clone = hash.clone();
-    let ttl = state.config.auth.session_ttl_secs;
     tokio::spawn(async move {
         let _ = crate::run_blocking(move || db.renew_session(&hash_clone, ttl)).await;
     });
@@ -199,10 +208,19 @@ pub async fn session_check(
         .session_cache
         .insert(hash, (user, session.expires_at, Instant::now()));
 
-    Json(SessionResponse {
-        authenticated: true,
-        username: Some(session.username),
-    })
+    let mut resp_headers = HeaderMap::new();
+    resp_headers.insert(
+        header::SET_COOKIE,
+        set_cookie_header(&session_key, ttl as i64).parse().unwrap(),
+    );
+
+    (
+        resp_headers,
+        Json(SessionResponse {
+            authenticated: true,
+            username: Some(session.username),
+        }),
+    )
 }
 
 fn dummy_hash() -> &'static str {
