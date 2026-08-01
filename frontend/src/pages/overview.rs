@@ -151,6 +151,7 @@ pub fn Overview() -> impl IntoView {
     let (end_ts, set_end_ts) = signal(default_end);
     let (start_dirty, set_start_dirty) = signal(false);
     let (end_dirty, set_end_dirty) = signal(false);
+    let (force_refresh, set_force_refresh) = signal(false);
     let (left_tab, set_left_tab) = signal(0usize);
     let (right_tab, set_right_tab) = signal(0usize);
 
@@ -158,13 +159,14 @@ pub fn Overview() -> impl IntoView {
         move || {
             let s = start_ts.get_untracked();
             let e = end_ts.get_untracked();
+            let force = force_refresh.get_untracked();
             async move {
                 let (stats, req_b, tok_b, mdl, tok_d) = futures_util::join!(
-                    api::fetch_overview_stats(s, e),
-                    api::fetch_request_buckets(s, e),
-                    api::fetch_token_buckets(s, e),
-                    api::fetch_model_dist(s, e),
-                    api::fetch_token_dist(s, e),
+                    api::fetch_overview_stats(s, e, force),
+                    api::fetch_request_buckets(s, e, force),
+                    api::fetch_token_buckets(s, e, force),
+                    api::fetch_model_dist(s, e, force),
+                    api::fetch_token_dist(s, e, force),
                 );
                 match (stats, req_b, tok_b, mdl, tok_d) {
                     (Ok(stats_val), Ok(r), Ok(t), Ok(md), Ok(td)) => Ok(OverviewData {
@@ -199,6 +201,7 @@ pub fn Overview() -> impl IntoView {
             set_end_ts.set(end);
             set_start_dirty.set(false);
             set_end_dirty.set(false);
+            set_force_refresh.set(true);
             overview_resource.refetch();
         }
     };
@@ -210,6 +213,7 @@ pub fn Overview() -> impl IntoView {
         set_end_ts.set(end);
         set_start_dirty.set(false);
         set_end_dirty.set(false);
+        set_force_refresh.set(true);
         overview_resource.refetch();
     };
 
@@ -220,6 +224,7 @@ pub fn Overview() -> impl IntoView {
         set_end_ts.set(end);
         set_start_dirty.set(false);
         set_end_dirty.set(false);
+        set_force_refresh.set(true);
         overview_resource.refetch();
     };
 

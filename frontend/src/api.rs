@@ -173,10 +173,11 @@ async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
     }
 }
 
-async fn api_get_cached<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
+async fn api_get_cached<T: DeserializeOwned>(path: &str, force: bool) -> Result<T, NetError> {
     let key = path.to_string();
 
-    if let Some(cached) = FETCH_CACHE.with(|c| {
+    if !force
+        && let Some(cached) = FETCH_CACHE.with(|c| {
         let map = c.borrow();
         map.get(&key).and_then(|entry| {
             if js_sys::Date::now() - entry.cached_at < CACHE_TTL_MS {
@@ -453,46 +454,78 @@ pub async fn delete_api_key(username: &str, key_id: &str) -> Result<(), NetError
     api_delete(&format!("api/users/{}/api-keys/{}", username, key_id)).await
 }
 
-pub async fn fetch_overview_stats(start_ts: i64, end_ts: i64) -> Result<OverviewStats, NetError> {
-    api_get_cached(&format!(
-        "api/stats?start_ts={}&end_ts={}",
-        start_ts, end_ts
-    ))
+pub async fn fetch_overview_stats(
+    start_ts: i64,
+    end_ts: i64,
+    force: bool,
+) -> Result<OverviewStats, NetError> {
+    api_get_cached(
+        &format!(
+            "api/stats?start_ts={}&end_ts={}",
+            start_ts, end_ts
+        ),
+        force,
+    )
     .await
 }
 
-pub async fn fetch_model_dist(start_ts: i64, end_ts: i64) -> Result<Vec<ModelDistEntry>, NetError> {
-    api_get_cached(&format!(
-        "api/data/model-dist?start_ts={}&end_ts={}",
-        start_ts, end_ts
-    ))
+pub async fn fetch_model_dist(
+    start_ts: i64,
+    end_ts: i64,
+    force: bool,
+) -> Result<Vec<ModelDistEntry>, NetError> {
+    api_get_cached(
+        &format!(
+            "api/data/model-dist?start_ts={}&end_ts={}",
+            start_ts, end_ts
+        ),
+        force,
+    )
     .await
 }
 
-pub async fn fetch_token_dist(start_ts: i64, end_ts: i64) -> Result<Vec<TokenDistEntry>, NetError> {
-    api_get_cached(&format!(
-        "api/data/token-dist?start_ts={}&end_ts={}",
-        start_ts, end_ts
-    ))
+pub async fn fetch_token_dist(
+    start_ts: i64,
+    end_ts: i64,
+    force: bool,
+) -> Result<Vec<TokenDistEntry>, NetError> {
+    api_get_cached(
+        &format!(
+            "api/data/token-dist?start_ts={}&end_ts={}",
+            start_ts, end_ts
+        ),
+        force,
+    )
     .await
 }
 
 pub async fn fetch_request_buckets(
     start_ts: i64,
     end_ts: i64,
+    force: bool,
 ) -> Result<Vec<BucketEntry>, NetError> {
-    api_get_cached(&format!(
-        "api/data/requests?start_ts={}&end_ts={}",
-        start_ts, end_ts
-    ))
+    api_get_cached(
+        &format!(
+            "api/data/requests?start_ts={}&end_ts={}",
+            start_ts, end_ts
+        ),
+        force,
+    )
     .await
 }
 
-pub async fn fetch_token_buckets(start_ts: i64, end_ts: i64) -> Result<Vec<BucketEntry>, NetError> {
-    api_get_cached(&format!(
-        "api/data/tokens?start_ts={}&end_ts={}",
-        start_ts, end_ts
-    ))
+pub async fn fetch_token_buckets(
+    start_ts: i64,
+    end_ts: i64,
+    force: bool,
+) -> Result<Vec<BucketEntry>, NetError> {
+    api_get_cached(
+        &format!(
+            "api/data/tokens?start_ts={}&end_ts={}",
+            start_ts, end_ts
+        ),
+        force,
+    )
     .await
 }
 
