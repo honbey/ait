@@ -33,14 +33,15 @@ impl RateLimiter {
     ) -> Result<(), Duration> {
         let now = Instant::now();
 
-        if !self.inner.contains_key(&ip)
-            && self.inner.len() >= self.max_entries
-            && let Some(entry) = self.inner.iter().next()
-        {
-            let key = *entry.key();
-            drop(entry);
-            tracing::warn!(evicted = %key, size = %self.inner.len(), "rate limiter at capacity, evicting entry");
-            self.inner.remove(&key);
+        if !self.inner.contains_key(&ip) && self.inner.len() >= self.max_entries {
+            // Extract the eviction key first: the DashMap iterator holds a read
+            // lock, and parking_lot locks are not reentrant, so removing while
+            // the iterator is still in scope would deadlock.
+            let evict = self.inner.iter().next().map(|entry| *entry.key());
+            if let Some(key) = evict {
+                tracing::warn!(evicted = %key, size = %self.inner.len(), "rate limiter at capacity, evicting entry");
+                self.inner.remove(&key);
+            }
         }
 
         let mut entry = self.inner.entry(ip).or_insert(RateEntry {
