@@ -296,9 +296,9 @@ pub fn ApiKeysPage() -> impl IntoView {
                 view! {
                     <ApiKeyFormModal
                         username=auth.username.get_untracked().unwrap_or_default()
-                        state
                         created_raw_key
                         on_close
+                        on_refetch=do_refetch.clone()
                     />
                 }
                     .into_any()
@@ -307,9 +307,9 @@ pub fn ApiKeysPage() -> impl IntoView {
                 view! {
                     <ApiKeyFormModal
                         username=auth.username.get_untracked().unwrap_or_default()
-                        state
                         created_raw_key
                         on_close
+                        on_refetch=do_refetch.clone()
                         edit_model=key
                     />
                 }
@@ -364,9 +364,9 @@ struct ApiKeyFormInput {
 #[component]
 fn ApiKeyFormModal(
     username: String,
-    state: Store<ApiKeysStore>,
     created_raw_key: RwSignal<Option<(String, String)>>,
     on_close: impl Fn() + 'static + Clone + Send,
+    on_refetch: impl Fn() + 'static + Clone + Send,
     #[prop(optional)] edit_model: Option<Field<ApiKey>>,
 ) -> impl IntoView {
     let is_edit = edit_model.is_some();
@@ -444,10 +444,11 @@ fn ApiKeyFormModal(
                     field.patch(api_key);
                 } else {
                     created_raw_key.set(Some((api_key.display.clone(), api_key.name.clone())));
-                    let mut masked = api_key;
-                    let k = masked.display.clone();
-                    masked.display = format!("{}******{}", &k[..6], &k[k.len() - 3..]);
-                    state.items().write().push(masked);
+                    // Decision: refetch the list after create instead of masking
+                    // locally. Masking is the backend's job (mask_api_key);
+                    // duplicating it here risks format drift and byte-slice
+                    // panics on non-ASCII keys.
+                    on_refetch();
                 }
                 let action_label = if is_edit {
                     ts!(ActionUpdated)
