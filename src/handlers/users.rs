@@ -87,6 +87,10 @@ pub async fn change_password(
         ChangeError::Internal(msg) => internal_error(msg),
     })?;
 
+    // Drop cached sessions for this user too, otherwise the in-memory cache
+    // would still authenticate old cookies for the rest of the cache TTL.
+    state.session_cache.retain(|_, v| v.0.username != username);
+
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
