@@ -692,6 +692,17 @@ impl Database {
         Ok(rows)
     }
 
+    pub fn delete_sessions_for_user(&self, username: &str) -> Result<usize, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn
+            .execute(
+                "DELETE FROM sessions WHERE username = ?1",
+                params![username],
+            )
+            .map_err(to_storage)?;
+        Ok(rows)
+    }
+
     pub fn renew_session(&self, hash: &str, ttl_secs: u64) -> Result<(), DbError> {
         let new_expiry = Utc::now() + chrono::Duration::seconds(ttl_secs as i64);
         let conn = self.conn.lock().unwrap();
@@ -1295,6 +1306,24 @@ mod tests {
         assert!(db.delete_session(&raw_key).unwrap());
         assert!(db.get_session(&raw_key).unwrap().is_none());
         assert!(!db.delete_session(&stored.session_key).unwrap());
+    }
+
+    #[test]
+    fn session_delete_for_user() {
+        let (db, _dir) = setup();
+        let expires_at = Utc::now() + chrono::Duration::hours(1);
+        db.insert_session("alice", expires_at).unwrap();
+        db.insert_session("alice", expires_at).unwrap();
+        db.insert_session("bob", expires_at).unwrap();
+        let deleted = db.delete_sessions_for_user("alice").unwrap();
+        assert_eq!(deleted, 2);
+        assert_eq!(db.delete_sessions_for_user("alice").unwrap(), 0);
+        assert!(
+            db.list_sessions()
+                .unwrap()
+                .iter()
+                .all(|s| s.username == "bob")
+        );
     }
 
     #[test]

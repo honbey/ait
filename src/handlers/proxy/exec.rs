@@ -126,7 +126,14 @@ pub(crate) async fn proxy_non_streamed(
             body_str.to_string()
         };
         warn!("[proxy] upstream error {}: {}", status, truncated);
-        return Err(AitError::upstream_error(status.as_u16(), truncated).into_response());
+        // Keep the upstream error body out of the client response; it may
+        // contain internal paths or stack traces.  Only the status message
+        // reaches the client, the body is recorded in the request log.
+        return Err(
+            AitError::upstream_error(status.as_u16(), "upstream request failed")
+                .with_detail(truncated)
+                .into_response(),
+        );
     }
 
     let body_size = bytes.len();

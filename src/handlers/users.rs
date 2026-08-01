@@ -72,7 +72,12 @@ pub async fn change_password(
         user.password_hash = new_hash;
         user.updated_at = Utc::now();
         db.update_user(&user)
-            .map_err(|e| ChangeError::Internal(e.to_string()))
+            .map_err(|e| ChangeError::Internal(e.to_string()))?;
+        // Invalidate all sessions (including the current one) so that
+        // previously issued session cookies cannot authenticate anymore.
+        db.delete_sessions_for_user(&username_clone)
+            .map_err(|e| ChangeError::Internal(e.to_string()))?;
+        Ok(user)
     })
     .await
     .map_err(internal_error)?

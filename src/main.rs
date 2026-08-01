@@ -105,10 +105,12 @@ async fn main() {
         tokio::select! {
             _ = tokio::time::sleep(graceful_timeout) => {
                 tracing::warn!("Graceful shutdown timeout, forcing exit");
+                log_manager.shutdown();
                 std::process::exit(0);
             }
             _ = tokio::signal::ctrl_c() => {
                 tracing::warn!("Forced shutdown via Ctrl+C");
+                log_manager.shutdown();
                 std::process::exit(0);
             }
         }

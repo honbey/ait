@@ -181,7 +181,14 @@ pub async fn update_api_key(
         enabled: input.enabled,
         expires_at: input
             .expires_at
-            .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or(DateTime::UNIX_EPOCH)),
+            .map(|ts| {
+                if ts == 0 {
+                    return Ok(DateTime::UNIX_EPOCH);
+                }
+                DateTime::from_timestamp(ts, 0)
+                    .ok_or_else(|| AitError::bad_request("Invalid expires_at").into_response())
+            })
+            .transpose()?,
     };
     let db = state.db.clone();
     let username_clone = username.clone();

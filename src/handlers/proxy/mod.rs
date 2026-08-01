@@ -135,23 +135,12 @@ pub async fn health(State(state): State<AppState>) -> AxumJson<serde_json::Value
         let mins = (total_secs % 3600) / 60;
         let secs = total_secs % 60;
 
-        let db = state.db.clone();
-        let (providers_count, models_count) = crate::run_blocking(move || {
-            let p = db.count_providers().unwrap_or(0);
-            let m = db.count_models().unwrap_or(0);
-            (p, m)
-        })
-        .await
-        .unwrap_or((0, 0));
-
         AxumJson(serde_json::json!({
             "status": "ok",
             "version": env!("CARGO_PKG_VERSION"),
             "uptime": format!("{}h{}m{}s", hours, mins, secs),
             "uptime_secs": total_secs,
             "start_time": state.start_time.timestamp(),
-            "providers_count": providers_count,
-            "models_count": models_count,
         }))
     } else {
         AxumJson(serde_json::json!({
@@ -408,7 +397,7 @@ pub async fn proxy_request(
             total_tokens: None,
             cached_tokens: None,
             latency_ms: 0,
-            status: "200".to_string(),
+            status: "pending".to_string(),
             endpoint,
             is_streaming: false,
             time_to_first_token_ms: None,
@@ -459,7 +448,12 @@ pub async fn proxy_request(
                 "proxy_request: non-streamed error, elapsed={}ms",
                 start.elapsed().as_millis()
             );
-            guard.event.error_message = Some(e.1.0.message.clone());
+            guard.event.error_message = Some(
+                e.1.0
+                    .detail
+                    .clone()
+                    .unwrap_or_else(|| e.1.0.message.clone()),
+            );
             guard.finalize(&UsageTokens::default(), &e.0.as_u16().to_string());
             Err(e)
         }

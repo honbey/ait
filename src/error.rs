@@ -53,6 +53,10 @@ pub struct AitError {
     pub message: String,
     pub code: u16,
     pub r#type: String,
+    /// Internal detail (e.g. upstream error body) recorded in logs only;
+    /// never serialized to clients.
+    #[serde(skip_serializing)]
+    pub detail: Option<String>,
 }
 
 impl AitError {
@@ -61,6 +65,7 @@ impl AitError {
             message: msg.into(),
             code: 400,
             r#type: "invalid_request_error".to_string(),
+            detail: None,
         }
     }
 
@@ -69,7 +74,13 @@ impl AitError {
             message: msg.into(),
             code: status,
             r#type: "upstream_error".to_string(),
+            detail: None,
         }
+    }
+
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
     }
 
     pub fn status_code(&self) -> StatusCode {
@@ -82,21 +93,25 @@ impl AitError {
                 message: msg,
                 code: 404,
                 r#type: "not_found_error".to_string(),
+                detail: None,
             },
             DbError::LimitExceeded(msg) => Self {
                 message: msg,
                 code: 409,
                 r#type: "invalid_request_error".to_string(),
+                detail: None,
             },
             DbError::Duplicate(msg) => Self {
                 message: msg,
                 code: 409,
                 r#type: "invalid_request_error".to_string(),
+                detail: None,
             },
             DbError::Storage(msg) => Self {
                 message: msg,
                 code: 500,
                 r#type: "internal_error".to_string(),
+                detail: None,
             },
         }
     }
@@ -128,6 +143,7 @@ pub fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<AitError>)
             message: "Internal server error".to_string(),
             code: 500,
             r#type: "internal_error".to_string(),
+            detail: None,
         }),
     )
 }
@@ -139,6 +155,7 @@ pub fn not_found(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
             message: msg.into(),
             code: 404,
             r#type: "not_found_error".to_string(),
+            detail: None,
         }),
     )
 }
@@ -150,6 +167,7 @@ pub fn forbidden(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
             message: msg.into(),
             code: 403,
             r#type: "forbidden".to_string(),
+            detail: None,
         }),
     )
 }
@@ -161,6 +179,7 @@ pub fn unauthorized(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
             message: msg.into(),
             code: 401,
             r#type: "auth_error".to_string(),
+            detail: None,
         }),
     )
 }
@@ -172,6 +191,7 @@ pub fn too_many_requests(msg: impl Into<String>) -> (StatusCode, Json<AitError>)
             message: msg.into(),
             code: 429,
             r#type: "rate_limit_error".to_string(),
+            detail: None,
         }),
     )
 }

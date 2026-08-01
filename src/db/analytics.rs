@@ -205,10 +205,10 @@ impl Analytics {
 
 fn ts_range(start_ts: i64, end_ts: i64) -> (chrono::NaiveDateTime, chrono::NaiveDateTime) {
     let start = DateTime::from_timestamp(start_ts, 0)
-        .expect("start_ts validated by caller")
+        .unwrap_or(DateTime::UNIX_EPOCH)
         .naive_utc();
     let end = DateTime::from_timestamp(end_ts, 0)
-        .expect("end_ts validated by caller")
+        .unwrap_or(DateTime::UNIX_EPOCH)
         .naive_utc();
     (start, end)
 }
@@ -382,7 +382,7 @@ fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> Prox
 
     let push_naive = |values: &mut Vec<Box<dyn ToSql>>, ts: i64| {
         let naive = DateTime::from_timestamp(ts, 0)
-            .expect("ts validated by caller")
+            .unwrap_or(DateTime::UNIX_EPOCH)
             .naive_utc();
         values.push(Box::new(naive));
     };
