@@ -10,7 +10,9 @@ use crate::components::console_layout::ConsoleShell;
 use crate::components::toast::{ToastContainer, ToastManager};
 use crate::components::topbar::Topbar;
 use crate::i18n::I18n;
+use crate::pages::about::AboutPage;
 use crate::pages::apikeys::ApiKeysPage;
+use crate::pages::docs::DocsPage;
 use crate::pages::home::Home;
 use crate::pages::login::LoginPage;
 use crate::pages::logs::LogsPage;
@@ -93,6 +95,8 @@ pub fn App() -> impl IntoView {
                     <Routes fallback=|| view! { <NotFoundPage /> }>
                         <Route path=StaticSegment("") view=Home />
                         <Route path=StaticSegment("login") view=LoginPage />
+                        <Route path=StaticSegment("docs") view=DocsPage />
+                        <Route path=StaticSegment("about") view=AboutPage />
                         <ParentRoute path=StaticSegment("console") view=ConsoleShell>
                             <Route path=StaticSegment("") view=Overview />
                             <Route path=StaticSegment("overview") view=Overview />

@@ -1,5 +1,6 @@
 {
   "about": "关于",
+  "about_desc": "统一管理大模型提供商、模型与 API 密钥的代理服务",
   "action_created": "创建",
   "action_deleted": "删除",
   "action_updated": "更新",
@@ -25,11 +26,17 @@
   "delete_confirm_title": "确认删除",
   "detail_title": "{{ entity }}详情",
   "docs": "文档",
+  "docs_desc": "文档托管在 GitHub 仓库中，点击卡片前往查看",
+  "docs_frontend_readme": "前端文档",
+  "docs_frontend_readme_desc": "前端技术栈、页面结构与构建说明",
+  "docs_project_readme": "项目文档",
+  "docs_project_readme_desc": "项目介绍、特性、快速开始与配置说明",
   "edit": "编辑 {{ entity }}",
   "end_date": "结束日期",
   "entity_action": "{{ entity }}已{{ action }}",
   "expires_at": "过期时间",
   "first_page": "第一页",
+  "github": "GitHub 仓库",
   "greeting": "你好啊，{{ username }}",
   "index": "主页",
   "index_subtitle": "统一管理大模型提供商、模型与 API 密钥",
@@ -39,6 +46,7 @@
   "last_30_days": "最近 30 天",
   "last_page": "最后一页",
   "last_7_days": "最近 7 天",
+  "license": "许可证",
   "list_title": "{{ entity }}列表",
   "load_failed": "加载失败",
   "log_api_key_name": "API 密钥名称",
@@ -110,5 +118,6 @@
   "total_count": "共 {{ count }} 个",
   "updated_at": "更新时间",
   "upstream_model": "上游模型",
-  "username": "用户名"
+  "username": "用户名",
+  "version": "版本"
 }

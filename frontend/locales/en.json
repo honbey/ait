@@ -1,5 +1,6 @@
 {
   "about": "About",
+  "about_desc": "A proxy service for aggregating LLM provider APIs",
   "action_created": "created",
   "action_deleted": "deleted",
   "action_updated": "updated",
@@ -25,12 +26,18 @@
   "delete_confirm_title": "Confirm Delete",
   "detail_title": "{{ entity }} Detail",
   "docs": "Docs",
+  "docs_desc": "Documentation is hosted in the GitHub repository",
+  "docs_frontend_readme": "Frontend Docs",
+  "docs_frontend_readme_desc": "Frontend stack, pages, and build instructions",
+  "docs_project_readme": "Project Docs",
+  "docs_project_readme_desc": "Introduction, features, quick start, and configuration",
   "edit": "Edit {{ entity }}",
   "end_date": "End Date",
   "entity_action": "{{ entity }} {{ action }}",
   "expires_at": "Expires At",
   "first_page": "First page",
   "greeting": "Hello, {{ username }}",
+  "github": "GitHub Repository",
   "index": "Home",
   "index_subtitle": "Unified management of LLM providers, models, and API keys",
   "index_title": "Large Model Provider Aggregation Management",
@@ -39,6 +46,7 @@
   "last_30_days": "Last 30 Days",
   "last_page": "Last page",
   "last_7_days": "Last 7 Days",
+  "license": "License",
   "list_title": "{{ entity }} List",
   "load_failed": "Load Failed",
   "log_api_key_name": "API Key Name",
@@ -110,5 +118,6 @@
   "total_count": "{{ count }} total",
   "updated_at": "Updated At",
   "upstream_model": "Upstream Model",
-  "username": "Username"
+  "username": "Username",
+  "version": "Version"
 }
