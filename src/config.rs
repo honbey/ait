@@ -246,4 +246,37 @@ retention_every = 0
         let err = ConfigApp::new(Some(&path)).unwrap_err();
         assert!(err.to_string().contains("retention_every"));
     }
+
+    #[test]
+    fn invalid_toml_rejected() {
+        let (_dir, path) = write_toml("this is not [ valid toml");
+        assert!(ConfigApp::new(Some(&path)).is_err());
+    }
+
+    #[test]
+    fn proxy_and_security_toml_override() {
+        let (_dir, path) = write_toml(
+            r#"
+[proxy]
+timeout_secs = 60
+stream = false
+max_response_body_bytes = 1048576
+
+[security]
+ssrf_allowed_cidrs = ["10.0.0.0/8"]
+cors_allowed_origins = ["https://app.example.com"]
+cors_allow_credentials = true
+"#,
+        );
+        let config = ConfigApp::new(Some(&path)).unwrap();
+        assert_eq!(config.proxy.timeout_secs, 60);
+        assert!(!config.proxy.stream);
+        assert_eq!(config.proxy.max_response_body_bytes, 1048576);
+        assert_eq!(config.security.ssrf_allowed_cidrs, vec!["10.0.0.0/8"]);
+        assert_eq!(
+            config.security.cors_allowed_origins,
+            vec!["https://app.example.com"]
+        );
+        assert!(config.security.cors_allow_credentials);
+    }
 }

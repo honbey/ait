@@ -199,3 +199,132 @@ pub fn too_many_requests(msg: impl Into<String>) -> (StatusCode, Json<AitError>)
 pub fn db_error() -> (StatusCode, Json<AitError>) {
     internal_error("Database error")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_constructors_have_correct_shape() {
+        type ErrorCtor = fn(&str) -> (StatusCode, Json<AitError>);
+        let cases: Vec<(ErrorCtor, StatusCode, u16, &str)> = vec![
+            (
+                |m| AitError::bad_request(m).into_response(),
+                StatusCode::BAD_REQUEST,
+                400,
+                "invalid_request_error",
+            ),
+            (
+                |m| not_found(m),
+                StatusCode::NOT_FOUND,
+                404,
+                "not_found_error",
+            ),
+            (|m| forbidden(m), StatusCode::FORBIDDEN, 403, "forbidden"),
+            (
+                |m| unauthorized(m),
+                StatusCode::UNAUTHORIZED,
+                401,
+                "auth_error",
+            ),
+            (
+                |m| too_many_requests(m),
+                StatusCode::TOO_MANY_REQUESTS,
+                429,
+                "rate_limit_error",
+            ),
+        ];
+        for (ctor, status, code, ty) in cases {
+            let (s, body) = ctor("some message");
+            assert_eq!(s, status);
+            assert_eq!(body.0.code, code);
+            assert_eq!(body.0.r#type, ty);
+            assert_eq!(body.0.message, "some message");
+            assert_eq!(body.0.status_code(), status);
+        }
+    }
+
+    #[test]
+    fn internal_error_uses_generic_message() {
+        let (s, body) = internal_error("secret detail");
+        assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body.0.code, 500);
+        assert_eq!(body.0.message, "Internal server error");
+        assert_eq!(body.0.r#type, "internal_error");
+    }
+
+    #[test]
+    fn db_error_maps_to_internal_error() {
+        let (s, body) = db_error();
+        assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body.0.code, 500);
+    }
+
+    #[test]
+    fn from_db_error_maps_all_variants() {
+        let cases = vec![
+            (DbError::NotFound("gone".into()), 404, "not_found_error"),
+            (
+                DbError::LimitExceeded("too many".into()),
+                409,
+                "invalid_request_error",
+            ),
+            (
+                DbError::Duplicate("dup".into()),
+                409,
+                "invalid_request_error",
+            ),
+            (DbError::Storage("boom".into()), 500, "internal_error"),
+        ];
+        for (e, code, ty) in cases {
+            let err = AitError::from_db_error(e);
+            assert_eq!(err.code, code);
+            assert_eq!(err.r#type, ty);
+            assert_eq!(err.status_code().as_u16(), code);
+        }
+    }
+
+    #[test]
+    fn app_init_error_display_variants() {
+        let db_err = AppInitError::Database(Box::new(std::io::Error::other("disk full")));
+        assert!(db_err.to_string().contains("failed to open database"));
+
+        let bootstrap = AppInitError::BootstrapUser("no password".into());
+        assert!(
+            bootstrap
+                .to_string()
+                .contains("failed to bootstrap initial user")
+        );
+
+        let log_err = AppInitError::LogManager(duckdb::Error::InvalidParameterName("bad".into()));
+        assert!(
+            log_err
+                .to_string()
+                .contains("failed to initialize log database")
+        );
+    }
+
+    #[tokio::test]
+    async fn app_init_error_http_client_display() {
+        // Connection refused on a closed local port yields a real reqwest::Error.
+        let err = reqwest::Client::new()
+            .get("http://127.0.0.1:1/")
+            .send()
+            .await
+            .unwrap_err();
+        let http_err = AppInitError::HttpClient(err);
+        assert!(http_err.to_string().contains("failed to build HTTP client"));
+    }
+
+    #[test]
+    fn blocking_error_timeout_display() {
+        assert!(BlockingError::Timeout.to_string().contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn blocking_error_join_display() {
+        let handle = tokio::task::spawn(async { panic!("boom") });
+        let join = BlockingError::Join(handle.await.unwrap_err());
+        assert!(join.to_string().contains("panicked"));
+    }
+}

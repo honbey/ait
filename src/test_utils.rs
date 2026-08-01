@@ -65,7 +65,7 @@ pub fn create_test_model(name: &str, provider_id: &str) -> Model {
 
 /// Config with temp DB/log paths and SSRF allowed for localhost, so tests can
 /// create providers with a `http://127.0.0.1` base URL without real DNS.
-fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
+pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
     ConfigApp {
         server: ServerConfig {
             host: "127.0.0.1".to_string(),

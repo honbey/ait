@@ -251,3 +251,88 @@ fn spawn_rate_limiter_cleanup(
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::AppInitError;
+    use crate::test_utils::test_config;
+    use tempfile::TempDir;
+
+    fn temp_config(with_bootstrap: bool) -> (ConfigApp, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let log_path = dir.path().join("logs.duckdb");
+        let mut config = test_config(db_path.to_str().unwrap(), log_path.to_str().unwrap());
+        if with_bootstrap {
+            config.auth.bootstrap_password = Some("admin123".to_string());
+        }
+        (config, dir)
+    }
+
+    fn bootstrap_config(with_password: bool) -> (crate::config::AuthConfig, TempDir) {
+        let (config, dir) = temp_config(false);
+        let mut auth = config.auth;
+        if with_password {
+            auth.bootstrap_password = Some("admin123".to_string());
+        }
+        (auth, dir)
+    }
+
+    #[test]
+    fn bootstrap_empty_db_without_password_errors() {
+        let (auth, _dir) = bootstrap_config(false);
+        let (db, _dir2) = crate::test_utils::create_test_db(10);
+        let err = bootstrap_user_if_needed(&db, &auth).unwrap_err();
+        assert!(matches!(err, AppInitError::BootstrapUser(_)));
+    }
+
+    #[test]
+    fn bootstrap_empty_db_with_password_creates_user() {
+        let (auth, _dir) = bootstrap_config(true);
+        let (db, _dir2) = crate::test_utils::create_test_db(10);
+        bootstrap_user_if_needed(&db, &auth).unwrap();
+        let user = db.get_user(&auth.bootstrap_username).unwrap().unwrap();
+        assert_eq!(user.username, auth.bootstrap_username);
+        assert!(bcrypt::verify("admin123", &user.password_hash).unwrap());
+    }
+
+    #[test]
+    fn bootstrap_existing_user_skips_creation() {
+        let (auth, _dir) = bootstrap_config(true);
+        let (db, _dir2) = crate::test_utils::create_test_db(10);
+        crate::test_utils::insert_test_user(&db, "existing", "pw");
+        bootstrap_user_if_needed(&db, &auth).unwrap();
+        // The configured bootstrap user was not created.
+        assert!(db.get_user(&auth.bootstrap_username).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn app_state_new_success_with_bootstrap() {
+        let (config, _dir) = temp_config(true);
+        let state = AppState::new(config).unwrap();
+        assert_eq!(state.config.auth.bootstrap_username, "admin");
+        // The bootstrap user exists in the state's database.
+        let username = state.config.auth.bootstrap_username.clone();
+        let db = state.db.clone();
+        assert!(
+            crate::run_blocking(move || db.get_user(&username))
+                .await
+                .unwrap()
+                .unwrap()
+                .is_some()
+        );
+        state.shutdown_token.cancel();
+        state.log_manager.shutdown();
+    }
+
+    #[tokio::test]
+    async fn app_state_new_missing_bootstrap_password_fails() {
+        let (config, _dir) = temp_config(false);
+        let err = match AppState::new(config) {
+            Ok(_) => panic!("AppState::new should fail without bootstrap password"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, AppInitError::BootstrapUser(_)));
+    }
+}
