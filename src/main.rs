@@ -130,7 +130,12 @@ async fn main() {
 }
 
 fn parse_config_path() -> Option<String> {
-    let mut args = std::env::args();
+    parse_config_path_from(std::env::args())
+}
+
+/// Testable core of `parse_config_path`: walk the argument list and return the
+/// value following `-c`/`--config`, if present.
+fn parse_config_path_from<I: Iterator<Item = String>>(mut args: I) -> Option<String> {
     args.next(); // skip program name
     while let Some(arg) = args.next() {
         match arg.as_str() {
