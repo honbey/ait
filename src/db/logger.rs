@@ -230,7 +230,7 @@ fn flush_buffer(
 ) {
     if flush_events(conn, buffer) {
         *flush_count += 1;
-        if flush_count.is_multiple_of(retention_every) {
+        if retention_every > 0 && flush_count.is_multiple_of(retention_every) {
             let _ = conn.execute_batch("CHECKPOINT");
             cleanup_expired(conn, retention_days);
         }

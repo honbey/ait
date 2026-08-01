@@ -124,6 +124,13 @@ impl ConfigApp {
             .build()?
             .try_deserialize()?;
 
+        // `is_multiple_of(0)` panics and would kill the log worker thread
+        if app.log.retention_every == 0 {
+            return Err(ConfigError::Message(
+                "log.retention_every must be >= 1 (0 crashes the log worker)".to_string(),
+            ));
+        }
+
         Ok(app)
     }
 }
@@ -206,5 +213,17 @@ max_api_keys_per_user = 20
         assert_eq!(config.proxy.max_response_body_bytes, 8 * 1024 * 1024);
         assert!(config.security.ssrf_allowed_cidrs.is_empty());
         assert!(config.security.cors_allowed_origins.is_empty());
+    }
+
+    #[test]
+    fn retention_every_zero_rejected() {
+        let (_dir, path) = write_toml(
+            r#"
+[log]
+retention_every = 0
+"#,
+        );
+        let err = ConfigApp::new(Some(&path)).unwrap_err();
+        assert!(err.to_string().contains("retention_every"));
     }
 }
