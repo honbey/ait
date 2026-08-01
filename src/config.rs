@@ -75,6 +75,7 @@ pub struct ProxyConfig {
 pub struct SecurityConfig {
     pub ssrf_allowed_cidrs: Vec<String>,
     pub cors_allowed_origins: Vec<String>,
+    pub cors_allow_credentials: bool,
 }
 
 impl ConfigApp {
@@ -119,6 +120,7 @@ impl ConfigApp {
             .set_default("proxy.max_response_body_bytes", 8u64 * 1024 * 1024)?
             .set_default("security.ssrf_allowed_cidrs", Vec::<String>::new())?
             .set_default("security.cors_allowed_origins", Vec::<String>::new())?
+            .set_default("security.cors_allow_credentials", false)?
             .add_source(File::new(config_file, FileFormat::Toml).required(false))
             .add_source(Environment::with_prefix("AIT").separator("_"))
             .build()?
@@ -213,6 +215,24 @@ max_api_keys_per_user = 20
         assert_eq!(config.proxy.max_response_body_bytes, 8 * 1024 * 1024);
         assert!(config.security.ssrf_allowed_cidrs.is_empty());
         assert!(config.security.cors_allowed_origins.is_empty());
+        assert!(!config.security.cors_allow_credentials);
+    }
+
+    #[test]
+    fn cors_allow_credentials_override() {
+        let (_dir, path) = write_toml(
+            r#"
+[security]
+cors_allow_credentials = true
+cors_allowed_origins = ["https://app.example.com"]
+"#,
+        );
+        let config = ConfigApp::new(Some(&path)).unwrap();
+        assert!(config.security.cors_allow_credentials);
+        assert_eq!(
+            config.security.cors_allowed_origins,
+            vec!["https://app.example.com"]
+        );
     }
 
     #[test]

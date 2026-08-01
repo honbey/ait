@@ -62,8 +62,12 @@ timeout_secs = 300
 stream = true
 
 [security]
-# 允许的跨域来源域名，空列表则允许所有
+# 允许的跨域来源域名，空列表则拒绝所有跨域请求（同源部署不需要配置）
 cors_allowed_origins = []
+# 是否允许跨域请求携带凭证（cookie 会话认证）。
+# 跨域部署（前端与后端不同域名）时设为 true；配 "*" 时会自动镜像请求 Origin。
+# 注意：仅在没有 TLS 的本地环境或已确认安全时才开启
+cors_allow_credentials = false
 # SSRF 白名单 CIDR（空列表则阻断所有私有 IP 出站请求）
 # 例如 ssrf_allowed_cidrs = ["127.0.0.1/32", "::1/128"] 允许本机 Ollama/LocalAI
 # 支持单 IP（自动 /32 或 /128）和 CIDR 段

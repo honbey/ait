@@ -164,7 +164,7 @@ fn init_logging(cfg: &config::LogConfig) {
         .init();
 }
 
-fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
+fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer {
     let methods = [Method::GET, Method::POST, Method::PUT, Method::DELETE];
     let headers = [
         header::AUTHORIZATION,
@@ -182,9 +182,19 @@ fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
     }
 
     if allowed_origins.iter().any(|o| o == "*") {
-        return CorsLayer::permissive()
-            .allow_methods(methods)
-            .allow_headers(headers);
+        return if allow_credentials {
+            // `*` combined with credentials is rejected by browsers; mirror the
+            // request origin instead so cross-origin cookie auth can work
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::mirror_request())
+                .allow_methods(methods)
+                .allow_headers(headers)
+                .allow_credentials(true)
+        } else {
+            CorsLayer::permissive()
+                .allow_methods(methods)
+                .allow_headers(headers)
+        };
     }
 
     let origins: Vec<_> = allowed_origins
@@ -198,6 +208,7 @@ fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
         .allow_origin(origins)
         .allow_methods(methods)
         .allow_headers(headers)
+        .allow_credentials(allow_credentials)
 }
 
 fn build_app(state: app::AppState) -> Router {
@@ -288,7 +299,10 @@ fn build_app(state: app::AppState) -> Router {
         .fallback(ServeFile::new("frontend/dist/index.html"));
 
     let trace_level = parse_level(&state.config.log.tower_http_trace);
-    let cors = cors_layer(&state.config.security.cors_allowed_origins);
+    let cors = cors_layer(
+        &state.config.security.cors_allowed_origins,
+        state.config.security.cors_allow_credentials,
+    );
 
     Router::new()
         .nest_service("/static", frontend_root)
