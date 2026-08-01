@@ -23,7 +23,6 @@ pub struct LoginRequest {
 #[derive(Serialize)]
 pub struct LoginResponse {
     pub ok: bool,
-    pub session_key: String,
 }
 
 #[derive(Serialize)]
@@ -101,13 +100,7 @@ pub async fn login(
         detail: None,
     });
 
-    Ok((
-        headers,
-        Json(LoginResponse {
-            ok: true,
-            session_key,
-        }),
-    ))
+    Ok((headers, Json(LoginResponse { ok: true })))
 }
 
 pub async fn logout(

@@ -439,14 +439,10 @@ enum SsePoll {
 
 fn poll_sse(buf: &mut Vec<u8>) -> Option<SsePoll> {
     let (boundary, n) = buf
-        .windows(2)
-        .position(|w| w == b"\n\n")
-        .map(|p| (p, 2))
-        .or_else(|| {
-            buf.windows(4)
-                .position(|w| w == b"\r\n\r\n")
-                .map(|p| (p, 4))
-        })?;
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|p| (p, 4))
+        .or_else(|| buf.windows(2).position(|w| w == b"\n\n").map(|p| (p, 2)))?;
 
     let event_bytes: Vec<u8> = buf.drain(..boundary).collect();
     buf.drain(..n);

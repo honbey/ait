@@ -493,7 +493,10 @@ fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> Prox
     let items: Vec<ProxyLogEntryResponse> = match conn.prepare(&data_sql).and_then(|mut stmt| {
         let rows = stmt.query_map(params_from_iter(data_params), |row| {
             Ok(ProxyLogEntryResponse {
-                timestamp: row.get::<_, i64>(0)?,
+                timestamp: row
+                    .get::<_, chrono::NaiveDateTime>(0)?
+                    .and_utc()
+                    .timestamp(),
                 username: row.get(1)?,
                 api_key_name: row.get(2)?,
                 model_name: row.get(3)?,
