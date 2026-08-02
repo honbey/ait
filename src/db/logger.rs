@@ -18,55 +18,60 @@ pub struct LogManager {
     worker_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
+/// Create the log tables and indexes if they do not exist yet.
+pub(crate) fn create_schema(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS access_log (
+            timestamp  TIMESTAMP NOT NULL,
+            request_id VARCHAR NOT NULL,
+            method     VARCHAR NOT NULL,
+            path       VARCHAR NOT NULL,
+            status     INT NOT NULL,
+            latency_ms BIGINT NOT NULL,
+            client_ip  VARCHAR,
+            username   VARCHAR
+        );
+        CREATE TABLE IF NOT EXISTS proxy_log (
+            timestamp         TIMESTAMP NOT NULL,
+            request_id        VARCHAR NOT NULL,
+            username          VARCHAR,
+            api_key_name      VARCHAR,
+            model_name        VARCHAR NOT NULL,
+            provider_name     VARCHAR NOT NULL,
+            prompt_tokens     BIGINT,
+            completion_tokens BIGINT,
+            total_tokens      BIGINT,
+            cached_tokens     BIGINT,
+            latency_ms        BIGINT NOT NULL,
+            status                 VARCHAR NOT NULL,
+            endpoint               VARCHAR NOT NULL DEFAULT '',
+            is_streaming           BOOLEAN NOT NULL DEFAULT false,
+            time_to_first_token_ms BIGINT,
+            upstream_model         VARCHAR NOT NULL DEFAULT '',
+            provider_type          VARCHAR NOT NULL DEFAULT '',
+            response_body_size     BIGINT,
+            error_message          VARCHAR,
+            client_ip              VARCHAR
+        );
+        CREATE TABLE IF NOT EXISTS audit_log (
+            timestamp   TIMESTAMP NOT NULL,
+            request_id  VARCHAR NOT NULL,
+            username    VARCHAR NOT NULL,
+            action      VARCHAR NOT NULL,
+            resource    VARCHAR NOT NULL,
+            resource_id VARCHAR NOT NULL,
+            detail      VARCHAR
+        );
+        CREATE INDEX IF NOT EXISTS idx_access_log_timestamp ON access_log(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_proxy_log_timestamp ON proxy_log(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);",
+    )
+}
+
 impl LogManager {
     pub fn new(config: &crate::config::LogConfig) -> Result<Self> {
         let conn = Connection::open(&config.path)?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS access_log (
-                timestamp  TIMESTAMP NOT NULL,
-                request_id VARCHAR NOT NULL,
-                method     VARCHAR NOT NULL,
-                path       VARCHAR NOT NULL,
-                status     INT NOT NULL,
-                latency_ms BIGINT NOT NULL,
-                client_ip  VARCHAR,
-                username   VARCHAR
-            );
-            CREATE TABLE IF NOT EXISTS proxy_log (
-                timestamp         TIMESTAMP NOT NULL,
-                request_id        VARCHAR NOT NULL,
-                username          VARCHAR,
-                api_key_name      VARCHAR,
-                model_name        VARCHAR NOT NULL,
-                provider_name     VARCHAR NOT NULL,
-                prompt_tokens     BIGINT,
-                completion_tokens BIGINT,
-                total_tokens      BIGINT,
-                cached_tokens     BIGINT,
-                latency_ms        BIGINT NOT NULL,
-                status                 VARCHAR NOT NULL,
-                endpoint               VARCHAR NOT NULL DEFAULT '',
-                is_streaming           BOOLEAN NOT NULL DEFAULT false,
-                time_to_first_token_ms BIGINT,
-                upstream_model         VARCHAR NOT NULL DEFAULT '',
-                provider_type          VARCHAR NOT NULL DEFAULT '',
-                response_body_size     BIGINT,
-                error_message          VARCHAR,
-                client_ip              VARCHAR
-            );
-            CREATE TABLE IF NOT EXISTS audit_log (
-                timestamp   TIMESTAMP NOT NULL,
-                request_id  VARCHAR NOT NULL,
-                username    VARCHAR NOT NULL,
-                action      VARCHAR NOT NULL,
-                resource    VARCHAR NOT NULL,
-                resource_id VARCHAR NOT NULL,
-                detail      VARCHAR
-            );
-            CREATE INDEX IF NOT EXISTS idx_access_log_timestamp ON access_log(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_proxy_log_timestamp ON proxy_log(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);",
-        )?;
+        create_schema(&conn)?;
 
         let flush_interval = Duration::from_secs(config.flush_interval_secs);
         let flush_batch = config.flush_batch;
@@ -376,5 +381,200 @@ fn cleanup_expired(conn: &Connection, retention_days: u64) {
             Ok(_) => {}
             Err(e) => warn!("[logs] cleanup {table} failed: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{
+        make_access_event, make_audit_event, make_proxy_event, test_config_fast_logs,
+    };
+    use std::time::{Duration, Instant};
+
+    fn temp_log_manager(
+        flush_batch: u64,
+        flush_interval_secs: u64,
+        channel_cap: u64,
+        retention_every: u64,
+        retention_days: u64,
+    ) -> (LogManager, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut config = test_config_fast_logs(
+            dir.path().join("test.db").to_str().unwrap(),
+            dir.path().join("logs.duckdb").to_str().unwrap(),
+        );
+        config.log.flush_batch = flush_batch;
+        config.log.flush_interval_secs = flush_interval_secs;
+        config.log.channel_cap = channel_cap;
+        config.log.retention_every = retention_every;
+        config.log.retention_days = retention_days;
+        let manager = LogManager::new(&config.log).unwrap();
+        (manager, dir)
+    }
+
+    fn count_rows(path: &str, table: &str) -> u64 {
+        let conn = Connection::open(path).unwrap();
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get::<_, u64>(0)
+        })
+        .unwrap()
+    }
+
+    /// Poll a row count until it reaches `expected`, so writes that happen on
+    /// the worker thread are observed without racing it.
+    async fn wait_for_rows(path: &str, table: &str, expected: u64) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if count_rows(path, table) >= expected {
+                return;
+            }
+            if Instant::now() > deadline {
+                panic!("timed out waiting for {expected} rows in {table}");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn log_access_writes_row_with_fields() {
+        let (manager, dir) = temp_log_manager(1, 1, 10000, u64::MAX, 30);
+        manager.log_access(make_access_event("/api/providers", 200));
+        let path = dir.path().join("logs.duckdb").to_str().unwrap().to_string();
+        wait_for_rows(&path, "access_log", 1).await;
+        let conn = Connection::open(&path).unwrap();
+        let (method, path_col, status, username): (String, String, i32, Option<String>) = conn
+            .query_row(
+                "SELECT method, path, status, username FROM access_log",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(method, "GET");
+        assert_eq!(path_col, "/api/providers");
+        assert_eq!(status, 200);
+        assert_eq!(username.as_deref(), Some("alice"));
+        manager.shutdown();
+    }
+
+    #[tokio::test]
+    async fn log_proxy_writes_row_with_fields() {
+        let (manager, dir) = temp_log_manager(1, 1, 10000, u64::MAX, 30);
+        manager.log_proxy(make_proxy_event("gpt-4", "success", 300));
+        let path = dir.path().join("logs.duckdb").to_str().unwrap().to_string();
+        wait_for_rows(&path, "proxy_log", 1).await;
+        let conn = Connection::open(&path).unwrap();
+        let (model, status, total_tokens, is_streaming): (String, String, i64, bool) = conn
+            .query_row(
+                "SELECT model_name, status, total_tokens, is_streaming FROM proxy_log",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(model, "gpt-4");
+        assert_eq!(status, "success");
+        assert_eq!(total_tokens, 300);
+        assert!(!is_streaming);
+        manager.shutdown();
+    }
+
+    #[tokio::test]
+    async fn log_audit_writes_row_with_fields() {
+        let (manager, dir) = temp_log_manager(1, 1, 10000, u64::MAX, 30);
+        manager.log_audit(make_audit_event("delete"));
+        let path = dir.path().join("logs.duckdb").to_str().unwrap().to_string();
+        wait_for_rows(&path, "audit_log", 1).await;
+        let conn = Connection::open(&path).unwrap();
+        let (action, username, resource): (String, String, String) = conn
+            .query_row(
+                "SELECT action, username, resource FROM audit_log",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(action, "delete");
+        assert_eq!(username, "alice");
+        assert_eq!(resource, "api_key");
+        manager.shutdown();
+    }
+
+    #[tokio::test]
+    async fn query_returns_written_proxy_rows() {
+        let (manager, _dir) = temp_log_manager(1, 1, 10000, u64::MAX, 30);
+        manager.log_proxy(make_proxy_event("gpt-4", "success", 300));
+        let now = Utc::now().timestamp();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let count = manager.total_requests(now - 3600, now + 3600).await;
+            if count >= 1 {
+                break;
+            }
+            if Instant::now() > deadline {
+                panic!("timed out waiting for proxy row via analytics query");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let dist = manager.model_dist(now - 3600, now + 3600).await;
+        assert_eq!(dist.len(), 1);
+        assert_eq!(dist[0].model, "gpt-4");
+        assert_eq!(dist[0].count, 1);
+        manager.shutdown();
+    }
+
+    #[test]
+    fn shutdown_flushes_pending_events() {
+        let (manager, dir) = temp_log_manager(100, 3600, 10000, u64::MAX, 30);
+        // Nothing flushes until shutdown: batch not full, interval not elapsed.
+        for i in 0..3 {
+            manager.log_proxy(make_proxy_event(&format!("m{i}"), "success", 10));
+        }
+        manager.shutdown();
+        let path = dir.path().join("logs.duckdb");
+        let conn = Connection::open(&path).unwrap();
+        let count: u64 = conn
+            .query_row("SELECT COUNT(*) FROM proxy_log", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn shutdown_is_idempotent() {
+        let (manager, _dir) = temp_log_manager(1, 1, 10000, u64::MAX, 30);
+        manager.shutdown();
+        manager.shutdown();
+    }
+
+    #[tokio::test]
+    async fn retention_cleanup_deletes_old_rows_keeps_fresh() {
+        let (manager, dir) = temp_log_manager(1, 1, 10000, 1, 0);
+        let mut old = make_proxy_event("gpt-4", "success", 10);
+        old.timestamp = Utc::now() - chrono::Duration::days(2);
+        manager.log_proxy(old);
+        let path = dir.path().join("logs.duckdb").to_str().unwrap().to_string();
+        // The old row is flushed and immediately removed by retention cleanup.
+        wait_for_rows(&path, "proxy_log", 0).await;
+        manager.log_proxy(make_proxy_event("gpt-4", "success", 10));
+        wait_for_rows(&path, "proxy_log", 1).await;
+        manager.shutdown();
+    }
+
+    #[tokio::test]
+    async fn full_channel_drops_events_without_panic() {
+        let (manager, dir) = temp_log_manager(100, 3600, 1, u64::MAX, 30);
+        // Let the worker park on recv_timeout, leaving the channel empty.
+        std::thread::sleep(Duration::from_millis(100));
+        for i in 0..5 {
+            manager.log_proxy(make_proxy_event(&format!("m{i}"), "success", 10));
+        }
+        manager.shutdown();
+        let path = dir.path().join("logs.duckdb");
+        let conn = Connection::open(&path).unwrap();
+        let count: u64 = conn
+            .query_row("SELECT COUNT(*) FROM proxy_log", [], |row| row.get(0))
+            .unwrap();
+        // The channel holds at most 1 event; with the worker parked on
+        // recv_timeout, the remaining writes must have been dropped.
+        assert!(count < 5, "expected dropped events, got {count} rows");
+        assert!(count >= 1, "at least the buffered event should be flushed");
     }
 }

@@ -3,7 +3,9 @@ use crate::config::{
     AuthConfig, ConfigApp, DatabaseConfig, LogConfig, ProxyConfig, RateLimitConfig, SecurityConfig,
     ServerConfig,
 };
-use crate::db::{Database, LogManager, Model, Provider, ProviderType, User};
+use crate::db::{
+    AccessEvent, AuditEvent, Database, LogManager, Model, Provider, ProviderType, ProxyEvent, User,
+};
 use crate::rate_limiter::RateLimiter;
 use axum::Router;
 use axum::body::Body;
@@ -121,14 +123,19 @@ pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
     }
 }
 
-/// Build an AppState without spawning the background cleanup tasks, so tests
-/// leave no running tasks behind. Returns the state together with the TempDir
-/// that keeps the DB files alive for the duration of the test.
-pub fn create_test_state() -> (AppState, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let db_path = dir.path().join("test.db");
-    let log_path = dir.path().join("test-logs.duckdb");
-    let config = test_config(db_path.to_str().unwrap(), log_path.to_str().unwrap());
+/// Variant of `test_config` that flushes every log event immediately, so tests
+/// can read back written events without waiting for the flush interval.
+/// Retention cleanup is disabled (`retention_every` maxed) to keep tests
+/// deterministic.
+pub(crate) fn test_config_fast_logs(db_path: &str, log_path: &str) -> ConfigApp {
+    let mut config = test_config(db_path, log_path);
+    config.log.flush_batch = 1;
+    config.log.flush_interval_secs = 1;
+    config.log.retention_every = u64::MAX;
+    config
+}
+
+fn build_state(config: ConfigApp, dir: TempDir) -> (AppState, TempDir) {
     let db =
         Arc::new(Database::new(&config.database.path, config.auth.max_api_keys_per_user).unwrap());
     let log_manager = LogManager::new(&config.log).unwrap();
@@ -147,6 +154,81 @@ pub fn create_test_state() -> (AppState, TempDir) {
         ssrf_dns_cache: Arc::new(DashMap::new()),
     };
     (state, dir)
+}
+
+/// Build an AppState without spawning the background cleanup tasks, so tests
+/// leave no running tasks behind. Returns the state together with the TempDir
+/// that keeps the DB files alive for the duration of the test.
+pub fn create_test_state() -> (AppState, TempDir) {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(
+        dir.path().join("test.db").to_str().unwrap(),
+        dir.path().join("test-logs.duckdb").to_str().unwrap(),
+    );
+    build_state(config, dir)
+}
+
+/// Like `create_test_state`, but with the fast-flush log config for tests that
+/// assert on written log events.
+pub fn create_test_state_fast_logs() -> (AppState, TempDir) {
+    let dir = TempDir::new().unwrap();
+    let config = test_config_fast_logs(
+        dir.path().join("test.db").to_str().unwrap(),
+        dir.path().join("test-logs.duckdb").to_str().unwrap(),
+    );
+    build_state(config, dir)
+}
+
+// ── Log event factory helpers ──
+
+pub fn make_proxy_event(model: &str, status: &str, total_tokens: i64) -> ProxyEvent {
+    ProxyEvent {
+        timestamp: Utc::now(),
+        request_id: uuid::Uuid::new_v4().to_string(),
+        username: Some("alice".to_string()),
+        api_key_name: Some("test-key".to_string()),
+        model_name: model.to_string(),
+        provider_name: "test-provider".to_string(),
+        prompt_tokens: Some(10),
+        completion_tokens: Some(20),
+        total_tokens: Some(total_tokens),
+        cached_tokens: Some(5),
+        latency_ms: 100,
+        status: status.to_string(),
+        endpoint: "/v1/chat/completions".to_string(),
+        is_streaming: false,
+        time_to_first_token_ms: None,
+        upstream_model: model.to_string(),
+        provider_type: "openai_compat".to_string(),
+        response_body_size: Some(1024),
+        error_message: None,
+        client_ip: Some("127.0.0.1".to_string()),
+    }
+}
+
+pub fn make_audit_event(action: &str) -> AuditEvent {
+    AuditEvent {
+        timestamp: Utc::now(),
+        request_id: uuid::Uuid::new_v4().to_string(),
+        username: "alice".to_string(),
+        action: action.to_string(),
+        resource: "api_key".to_string(),
+        resource_id: "key-1".to_string(),
+        detail: None,
+    }
+}
+
+pub fn make_access_event(path: &str, status: i32) -> AccessEvent {
+    AccessEvent {
+        timestamp: Utc::now(),
+        request_id: uuid::Uuid::new_v4().to_string(),
+        method: "GET".to_string(),
+        path: path.to_string(),
+        status,
+        latency_ms: 42,
+        username: Some("alice".to_string()),
+        client_ip: Some("127.0.0.1".to_string()),
+    }
 }
 
 /// The full router as built by `main`, middleware included.

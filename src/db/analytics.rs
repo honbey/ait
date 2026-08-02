@@ -532,3 +532,236 @@ fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> Prox
 
     ProxyLogQueryResult { items, total }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::logger::create_schema;
+    use chrono::{DateTime, Utc};
+
+    fn setup() -> (tempfile::TempDir, Connection, Analytics) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("analytics.duckdb");
+        let conn = Connection::open(&path).unwrap();
+        create_schema(&conn).unwrap();
+        let analytics = Analytics::new(conn.try_clone().unwrap(), 5);
+        (dir, conn, analytics)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_proxy(
+        conn: &Connection,
+        ts: i64,
+        model: &str,
+        status: &str,
+        prompt: i64,
+        completion: i64,
+        cached: i64,
+        username: &str,
+    ) {
+        let naive = DateTime::from_timestamp(ts, 0).unwrap().naive_utc();
+        conn.execute(
+            "INSERT INTO proxy_log (timestamp, request_id, username, api_key_name, model_name,
+             provider_name, prompt_tokens, completion_tokens, total_tokens, cached_tokens,
+             latency_ms, status, endpoint, is_streaming, upstream_model, provider_type, client_ip)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+            params![
+                naive,
+                "req-1",
+                username,
+                "test-key",
+                model,
+                "test-provider",
+                prompt,
+                completion,
+                prompt + completion,
+                cached,
+                50,
+                status,
+                "/v1/chat/completions",
+                false,
+                model,
+                "openai_compat",
+                "127.0.0.1"
+            ],
+        )
+        .unwrap();
+    }
+
+    fn hour_floor() -> i64 {
+        Utc::now().timestamp() / 3600 * 3600
+    }
+
+    #[tokio::test]
+    async fn total_requests_and_tokens_filter_by_range() {
+        let (_dir, conn, analytics) = setup();
+        insert_proxy(
+            &conn,
+            hour_floor() + 100,
+            "gpt-4",
+            "success",
+            10,
+            20,
+            5,
+            "alice",
+        );
+        insert_proxy(
+            &conn,
+            hour_floor() - 3000,
+            "llama",
+            "success",
+            30,
+            40,
+            0,
+            "bob",
+        );
+
+        let requests = analytics
+            .total_requests(hour_floor() - 7200, hour_floor() + 7200)
+            .await;
+        assert_eq!(requests, 2);
+        let tokens = analytics
+            .total_tokens(hour_floor() - 7200, hour_floor() + 7200)
+            .await;
+        assert_eq!(tokens, 100);
+
+        // Narrow range excludes the second event.
+        let requests = analytics
+            .total_requests(hour_floor() - 1800, hour_floor() + 1800)
+            .await;
+        assert_eq!(requests, 1);
+    }
+
+    #[tokio::test]
+    async fn empty_range_returns_zero() {
+        let (_dir, _conn, analytics) = setup();
+        assert_eq!(analytics.total_requests(0, 1).await, 0);
+        assert_eq!(analytics.total_tokens(0, 1).await, 0);
+        assert!(analytics.requests(0, 1).await.is_empty());
+        assert!(analytics.model_dist(0, 1).await.is_empty());
+        let dist = analytics.token_dist(0, 1).await;
+        assert!(dist.iter().all(|e| e.count == 0));
+    }
+
+    #[tokio::test]
+    async fn requests_buckets_by_hour() {
+        let (_dir, conn, analytics) = setup();
+        let h = hour_floor();
+        insert_proxy(&conn, h + 120, "gpt-4", "success", 1, 1, 0, "alice");
+        insert_proxy(&conn, h + 1800, "llama", "success", 1, 1, 0, "bob");
+        insert_proxy(&conn, h - 3600 + 900, "gpt-4", "success", 1, 1, 0, "alice");
+
+        let buckets = analytics.requests(h - 7200, h + 7200).await;
+        assert_eq!(buckets.len(), 2);
+        assert_eq!(buckets[0].timestamp, h - 3600);
+        assert_eq!(buckets[0].count, 1);
+        assert_eq!(buckets[1].timestamp, h);
+        assert_eq!(buckets[1].count, 2);
+
+        let tokens = analytics.tokens(h - 7200, h + 7200).await;
+        assert_eq!(tokens[1].count, 4);
+    }
+
+    #[tokio::test]
+    async fn model_dist_groups_and_orders_desc() {
+        let (_dir, conn, analytics) = setup();
+        let h = hour_floor();
+        insert_proxy(&conn, h + 10, "gpt-4", "success", 1, 1, 0, "alice");
+        insert_proxy(&conn, h + 20, "gpt-4", "success", 1, 1, 0, "bob");
+        insert_proxy(&conn, h + 30, "llama", "success", 1, 1, 0, "alice");
+
+        let dist = analytics.model_dist(h - 3600, h + 3600).await;
+        assert_eq!(dist.len(), 2);
+        assert_eq!(dist[0].model, "gpt-4");
+        assert_eq!(dist[0].count, 2);
+        assert_eq!(dist[1].model, "llama");
+        assert_eq!(dist[1].count, 1);
+    }
+
+    #[tokio::test]
+    async fn token_dist_splits_categories() {
+        let (_dir, conn, analytics) = setup();
+        let h = hour_floor();
+        insert_proxy(&conn, h + 10, "gpt-4", "success", 100, 30, 20, "alice");
+
+        let dist = analytics.token_dist(h - 3600, h + 3600).await;
+        let get = |cat: &str| {
+            dist.iter()
+                .find(|e| e.category == cat)
+                .map(|e| e.count)
+                .unwrap_or(0)
+        };
+        assert_eq!(get("uncached_input"), 80);
+        assert_eq!(get("cached_input"), 20);
+        assert_eq!(get("output"), 30);
+
+        // cached > prompt is clamped to prompt. Aggregation sums columns
+        // first, then splits: prompt=150, completion=35, cached=120.
+        insert_proxy(&conn, h + 20, "llama", "success", 50, 5, 100, "bob");
+        let dist = analytics.token_dist(h - 3600, h + 3600).await;
+        let get = |cat: &str| {
+            dist.iter()
+                .find(|e| e.category == cat)
+                .map(|e| e.count)
+                .unwrap_or(0)
+        };
+        assert_eq!(get("uncached_input"), 30);
+        assert_eq!(get("cached_input"), 120);
+        assert_eq!(get("output"), 35);
+    }
+
+    #[tokio::test]
+    async fn query_proxy_logs_filters_and_paginates() {
+        let (_dir, conn, analytics) = setup();
+        let h = hour_floor();
+        for i in 0..5 {
+            let (model, status) = if i % 2 == 0 {
+                ("gpt-4", "success")
+            } else {
+                ("llama", "error")
+            };
+            insert_proxy(&conn, h + i * 60, model, status, 10, 10, 0, "alice");
+        }
+
+        let params = ProxyLogQueryParams {
+            page: 1,
+            per_page: 10,
+            start_ts: Some(h - 3600),
+            end_ts: Some(h + 3600),
+            model_name: Some("gpt-4".to_string()),
+            ..Default::default()
+        };
+        let result = analytics.query_proxy_logs(params).await;
+        assert_eq!(result.total, 3);
+        assert_eq!(result.items.len(), 3);
+        assert!(result.items.iter().all(|e| e.model_name == "gpt-4"));
+
+        // Pagination: page 2 of 2 rows per page (5 rows total).
+        let params = ProxyLogQueryParams {
+            page: 2,
+            per_page: 2,
+            start_ts: Some(h - 3600),
+            end_ts: Some(h + 3600),
+            ..Default::default()
+        };
+        let result = analytics.query_proxy_logs(params).await;
+        assert_eq!(result.total, 5);
+        assert_eq!(result.items.len(), 2);
+        // Ordered by timestamp DESC: items are at h+240, h+180.
+        assert!(result.items[0].timestamp > result.items[1].timestamp);
+
+        // Combined filters.
+        let params = ProxyLogQueryParams {
+            page: 1,
+            per_page: 10,
+            start_ts: Some(h - 3600),
+            end_ts: Some(h + 3600),
+            model_name: Some("llama".to_string()),
+            status: Some("error".to_string()),
+            username: Some("alice".to_string()),
+            ..Default::default()
+        };
+        let result = analytics.query_proxy_logs(params).await;
+        assert_eq!(result.total, 2);
+    }
+}

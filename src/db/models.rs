@@ -292,6 +292,7 @@ pub struct PaginatedResponse<T: Serialize> {
     pub per_page: u64,
 }
 
+#[derive(Default)]
 pub struct ProxyLogQueryParams {
     pub page: u64,
     pub per_page: u64,
