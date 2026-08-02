@@ -200,25 +200,7 @@ fn spawn_caches_cleanup(
                         ssrf_dns_cache.clone(),
                     );
                     if let Err(e) = crate::run_blocking(move || {
-                        let threshold = max_entries.saturating_mul(9) / 10;
-                        let aggressive = |len: usize| if len > threshold { CACHE_TTL / 2 } else { CACHE_TTL };
-                        let ttl = aggressive(caches.0.len());
-                        caches.0.retain(|_, v| v.2.elapsed() < ttl);
-                        let ttl = aggressive(caches.1.len());
-                        caches.1.retain(|_, v| v.1.elapsed() < ttl);
-                        let ttl = aggressive(caches.2.len());
-                        // compute before retain: calling len() inside the retain
-                        // closure would take a read lock while holding the write
-                        // lock and deadlock (parking_lot is not reentrant)
-                        caches.2.retain(|_, v| {
-                            let entry_ttl =
-                                if v.0.is_none() { NEGATIVE_CACHE_TTL } else { ttl };
-                            v.1.elapsed() < entry_ttl
-                        });
-                        let ttl = aggressive(caches.3.len());
-                        caches.3.retain(|_, v| v.1.elapsed() < ttl);
-                        let ttl = aggressive(caches.4.len());
-                        caches.4.retain(|_, v| v.1.elapsed() < ttl);
+                        cleanup_caches(&caches.0, &caches.1, &caches.2, &caches.3, &caches.4, max_entries)
                     }).await {
                         tracing::warn!("Cache cleanup error: {e}");
                     }
@@ -226,6 +208,49 @@ fn spawn_caches_cleanup(
             }
         }
     });
+}
+
+/// Evict expired in-memory cache entries. Extracted from the cleanup task so
+/// tests can exercise the retain patterns without a running background task.
+/// Note: `max_entries` is only a soft threshold here; the model cache also
+/// enforces it as a hard cap at insertion time (see insert_model_cache).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cleanup_caches(
+    session_cache: &DashMap<String, SessionCacheEntry>,
+    api_key_cache: &DashMap<String, (ApiKeyInfo, Instant)>,
+    model_cache: &DashMap<String, ModelCacheEntry>,
+    provider_cache: &DashMap<String, ProviderCacheEntry>,
+    ssrf_dns_cache: &DashMap<String, (Vec<IpAddr>, Instant)>,
+    max_entries: usize,
+) {
+    let threshold = max_entries.saturating_mul(9) / 10;
+    let aggressive = |len: usize| {
+        if len > threshold {
+            CACHE_TTL / 2
+        } else {
+            CACHE_TTL
+        }
+    };
+    let ttl = aggressive(session_cache.len());
+    session_cache.retain(|_, v| v.2.elapsed() < ttl);
+    let ttl = aggressive(api_key_cache.len());
+    api_key_cache.retain(|_, v| v.1.elapsed() < ttl);
+    let ttl = aggressive(model_cache.len());
+    // compute before retain: calling len() inside the retain
+    // closure would take a read lock while holding the write
+    // lock and deadlock (parking_lot is not reentrant)
+    model_cache.retain(|_, v| {
+        let entry_ttl = if v.0.is_none() {
+            NEGATIVE_CACHE_TTL
+        } else {
+            ttl
+        };
+        v.1.elapsed() < entry_ttl
+    });
+    let ttl = aggressive(provider_cache.len());
+    provider_cache.retain(|_, v| v.1.elapsed() < ttl);
+    let ttl = aggressive(ssrf_dns_cache.len());
+    ssrf_dns_cache.retain(|_, v| v.1.elapsed() < ttl);
 }
 
 fn spawn_rate_limiter_cleanup(
