@@ -326,3 +326,28 @@ pub async fn login_and_cookie(router: &Router, username: &str, password: &str) -
         .unwrap()
         .to_string()
 }
+
+/// Run a blocking closure on a separate thread and fail the test if it does
+/// not complete within `timeout`. A timeout means the closure deadlocked on a
+/// non-reentrant lock (e.g. DashMap with parking_lot); a disconnect means the
+/// closure panicked. The thread is deliberately not joined: a stuck thread is
+/// reclaimed when the test process exits instead of hanging the test runner.
+pub fn assert_no_deadlock<T: Send + 'static>(
+    timeout: std::time::Duration,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    let (tx, rx) = std::sync::mpsc::channel::<T>();
+    std::thread::spawn(move || {
+        let result = f();
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("potential deadlock: operation did not complete within {timeout:?}")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("operation panicked before sending a result")
+        }
+    }
+}

@@ -360,4 +360,409 @@ mod tests {
         };
         assert!(matches!(err, AppInitError::BootstrapUser(_)));
     }
+
+    // ── DashMap deadlock prevention tests ──
+    //
+    // parking_lot RwLock is not reentrant: holding a Ref/RefMut and calling
+    // insert/retain/remove on the same map deadlocks, including sneaky cases
+    // where match scrutinee temporaries keep the guard alive. These tests
+    // exercise the production access patterns and detect regressions via
+    // assert_no_deadlock (separate thread + recv_timeout).
+
+    use crate::test_utils::{assert_no_deadlock, create_test_model, create_test_provider};
+
+    struct MockProvider;
+
+    #[async_trait::async_trait]
+    impl UpstreamProvider for MockProvider {
+        async fn build_request(
+            &self,
+            _client: &reqwest::Client,
+            _body: serde_json::Value,
+            _stream: bool,
+            _upstream_model: &str,
+            _upstream_path: &str,
+        ) -> Result<reqwest::Request, String> {
+            Err("mock provider is not usable".to_string())
+        }
+    }
+
+    fn test_session_user() -> SessionUser {
+        SessionUser {
+            username: "alice".to_string(),
+            api_key_name: None,
+        }
+    }
+
+    fn test_api_key_info() -> ApiKeyInfo {
+        ApiKeyInfo {
+            id: "key-1".to_string(),
+            username: "alice".to_string(),
+            name: "test-key".to_string(),
+            enabled: true,
+            expires_at: None,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    fn new_session_cache() -> Arc<DashMap<String, SessionCacheEntry>> {
+        Arc::new(DashMap::new())
+    }
+
+    fn new_api_key_cache() -> Arc<DashMap<String, (ApiKeyInfo, Instant)>> {
+        Arc::new(DashMap::new())
+    }
+
+    fn new_model_cache() -> Arc<DashMap<String, ModelCacheEntry>> {
+        Arc::new(DashMap::new())
+    }
+
+    fn new_provider_cache() -> Arc<DashMap<String, ProviderCacheEntry>> {
+        Arc::new(DashMap::new())
+    }
+
+    fn new_ssrf_cache() -> Arc<DashMap<String, (Vec<IpAddr>, Instant)>> {
+        Arc::new(DashMap::new())
+    }
+
+    fn stale() -> Instant {
+        Instant::now() - Duration::from_secs(3600)
+    }
+
+    fn fresh() -> Instant {
+        Instant::now()
+    }
+
+    #[test]
+    fn middleware_cache_pattern_get_mut_then_drop_then_mutate() {
+        // Mirrors auth_middleware/admin_auth_middleware: read-modify the
+        // entry, drop the guard, then mutate the same map.
+        let session_cache = new_session_cache();
+        let api_key_cache = new_api_key_cache();
+        session_cache.insert("s1".to_string(), (test_session_user(), Utc::now(), fresh()));
+        api_key_cache.insert("k1".to_string(), (test_api_key_info(), fresh()));
+
+        assert_no_deadlock(Duration::from_secs(5), {
+            let session_cache = session_cache.clone();
+            let api_key_cache = api_key_cache.clone();
+            move || {
+                if let Some(mut entry) = session_cache.get_mut("s1") {
+                    entry.2 = Instant::now();
+                }
+                session_cache.remove("s1");
+                session_cache.insert("s2".to_string(), (test_session_user(), Utc::now(), fresh()));
+
+                if let Some(mut entry) = api_key_cache.get_mut("k1") {
+                    entry.1 = Instant::now();
+                }
+                api_key_cache.remove("k1");
+                api_key_cache.insert("k2".to_string(), (test_api_key_info(), fresh()));
+            }
+        });
+
+        assert!(session_cache.contains_key("s2"));
+        assert!(!session_cache.contains_key("s1"));
+        assert!(api_key_cache.contains_key("k2"));
+        assert!(!api_key_cache.contains_key("k1"));
+    }
+
+    #[test]
+    fn handler_cache_patterns_insert_remove_retain() {
+        // Mirrors handlers/providers.rs update/delete: provider_cache.remove
+        // and model_cache.retain on a populated map.
+        let model_cache = new_model_cache();
+        let provider_cache = new_provider_cache();
+        let ssrf_cache = new_ssrf_cache();
+        let provider = create_test_provider(
+            "p1",
+            crate::db::ProviderType::OpenAICompat,
+            "http://127.0.0.1:8080",
+        );
+        let model = create_test_model("m1", "p1");
+        model_cache.insert("m1".to_string(), (Some((model, provider)), fresh()));
+        provider_cache.insert("p1".to_string(), (Arc::new(MockProvider), fresh()));
+        ssrf_cache.insert(
+            "host1".to_string(),
+            (vec!["1.2.3.4".parse().unwrap()], fresh()),
+        );
+
+        assert_no_deadlock(Duration::from_secs(5), {
+            let model_cache = model_cache.clone();
+            let provider_cache = provider_cache.clone();
+            let ssrf_cache = ssrf_cache.clone();
+            move || {
+                provider_cache.remove("p1");
+                model_cache.retain(|_, v| v.0.as_ref().is_none_or(|(_, p)| p.id != "p1"));
+                ssrf_cache.retain(|_, v| v.1.elapsed() < Duration::from_secs(300));
+            }
+        });
+
+        assert!(model_cache.is_empty());
+        assert!(provider_cache.is_empty());
+        assert!(!ssrf_cache.is_empty());
+    }
+
+    #[test]
+    fn cleanup_caches_evicts_expired_keeps_fresh() {
+        let session_cache = new_session_cache();
+        let api_key_cache = new_api_key_cache();
+        let model_cache = new_model_cache();
+        let provider_cache = new_provider_cache();
+        let ssrf_cache = new_ssrf_cache();
+
+        session_cache.insert(
+            "s-old".to_string(),
+            (test_session_user(), Utc::now(), stale()),
+        );
+        session_cache.insert(
+            "s-new".to_string(),
+            (test_session_user(), Utc::now(), fresh()),
+        );
+        api_key_cache.insert("k-old".to_string(), (test_api_key_info(), stale()));
+        api_key_cache.insert("k-new".to_string(), (test_api_key_info(), fresh()));
+        // Negative model cache entry (unknown model) and a positive one.
+        model_cache.insert("neg".to_string(), (None, stale()));
+        model_cache.insert(
+            "pos-old".to_string(),
+            (
+                Some((
+                    create_test_model("m", "p"),
+                    create_test_provider(
+                        "p",
+                        crate::db::ProviderType::OpenAICompat,
+                        "http://127.0.0.1:8080",
+                    ),
+                )),
+                stale(),
+            ),
+        );
+        model_cache.insert(
+            "pos-new".to_string(),
+            (
+                Some((
+                    create_test_model("m2", "p"),
+                    create_test_provider(
+                        "p",
+                        crate::db::ProviderType::OpenAICompat,
+                        "http://127.0.0.1:8080",
+                    ),
+                )),
+                fresh(),
+            ),
+        );
+        provider_cache.insert("p-old".to_string(), (Arc::new(MockProvider), stale()));
+        provider_cache.insert("p-new".to_string(), (Arc::new(MockProvider), fresh()));
+        ssrf_cache.insert(
+            "d-old".to_string(),
+            (vec!["1.2.3.4".parse().unwrap()], stale()),
+        );
+        ssrf_cache.insert(
+            "d-new".to_string(),
+            (vec!["1.2.3.4".parse().unwrap()], fresh()),
+        );
+
+        assert_no_deadlock(Duration::from_secs(5), {
+            let session_cache = session_cache.clone();
+            let api_key_cache = api_key_cache.clone();
+            let model_cache = model_cache.clone();
+            let provider_cache = provider_cache.clone();
+            let ssrf_cache = ssrf_cache.clone();
+            move || {
+                cleanup_caches(
+                    &session_cache,
+                    &api_key_cache,
+                    &model_cache,
+                    &provider_cache,
+                    &ssrf_cache,
+                    1000,
+                );
+            }
+        });
+
+        assert_eq!(session_cache.len(), 1);
+        assert!(session_cache.contains_key("s-new"));
+        assert_eq!(api_key_cache.len(), 1);
+        assert!(api_key_cache.contains_key("k-new"));
+        // Negative entries use NEGATIVE_CACHE_TTL; both old entries gone.
+        assert_eq!(model_cache.len(), 1);
+        assert!(model_cache.contains_key("pos-new"));
+        assert_eq!(provider_cache.len(), 1);
+        assert!(provider_cache.contains_key("p-new"));
+        assert_eq!(ssrf_cache.len(), 1);
+        assert!(ssrf_cache.contains_key("d-new"));
+    }
+
+    #[test]
+    fn cleanup_caches_uses_aggressive_ttl_over_threshold() {
+        let session_cache = new_session_cache();
+        let api_key_cache = new_api_key_cache();
+        let model_cache = new_model_cache();
+        let provider_cache = new_provider_cache();
+        let ssrf_cache = new_ssrf_cache();
+
+        // 200s-old entries survive the normal 300s TTL but not the aggressive
+        // 150s TTL triggered when len() > 90% of max_entries.
+        let mid_old = Instant::now() - Duration::from_secs(200);
+        for i in 0..10 {
+            session_cache.insert(format!("s{i}"), (test_session_user(), Utc::now(), mid_old));
+        }
+        api_key_cache.insert("k0".to_string(), (test_api_key_info(), mid_old));
+        model_cache.insert("m0".to_string(), (None, mid_old));
+        provider_cache.insert("p0".to_string(), (Arc::new(MockProvider), mid_old));
+        ssrf_cache.insert(
+            "d0".to_string(),
+            (vec!["1.2.3.4".parse().unwrap()], mid_old),
+        );
+
+        assert_no_deadlock(Duration::from_secs(5), {
+            let session_cache = session_cache.clone();
+            let api_key_cache = api_key_cache.clone();
+            let model_cache = model_cache.clone();
+            let provider_cache = provider_cache.clone();
+            let ssrf_cache = ssrf_cache.clone();
+            move || {
+                cleanup_caches(
+                    &session_cache,
+                    &api_key_cache,
+                    &model_cache,
+                    &provider_cache,
+                    &ssrf_cache,
+                    10,
+                );
+            }
+        });
+
+        // len was 10 > threshold 9, so session_cache used CACHE_TTL/2 = 150s
+        // and dropped the 200s-old entries. The other caches hold a single
+        // entry each and keep the normal 300s TTL, except the negative model
+        // cache entry which always expires after NEGATIVE_CACHE_TTL (30s).
+        assert!(session_cache.is_empty());
+        assert_eq!(api_key_cache.len(), 1);
+        assert!(model_cache.is_empty());
+        assert_eq!(provider_cache.len(), 1);
+        assert_eq!(ssrf_cache.len(), 1);
+    }
+
+    #[test]
+    fn cleanup_caches_with_concurrent_writers_no_deadlock() {
+        let session_cache = new_session_cache();
+        let api_key_cache = new_api_key_cache();
+        let model_cache = new_model_cache();
+        let provider_cache = new_provider_cache();
+        let ssrf_cache = new_ssrf_cache();
+        // Seed entries so the cleanup task has something to walk.
+        for i in 0..50 {
+            session_cache.insert(format!("s{i}"), (test_session_user(), Utc::now(), fresh()));
+        }
+        for i in 0..50 {
+            api_key_cache.insert(format!("k{i}"), (test_api_key_info(), fresh()));
+        }
+
+        let cleanup_cache = session_cache.clone();
+        let cleanup_api = api_key_cache.clone();
+        let cleanup_model = model_cache.clone();
+        let cleanup_provider = provider_cache.clone();
+        let cleanup_ssrf = ssrf_cache.clone();
+
+        assert_no_deadlock(Duration::from_secs(10), move || {
+            let mut handles = Vec::new();
+            // One thread running the periodic cleanup (retain on all caches).
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..100 {
+                    cleanup_caches(
+                        &cleanup_cache,
+                        &cleanup_api,
+                        &cleanup_model,
+                        &cleanup_provider,
+                        &cleanup_ssrf,
+                        1000,
+                    );
+                }
+            }));
+            // Four writers inserting/removing concurrently with the cleanup.
+            for _ in 0..4 {
+                let session_cache = session_cache.clone();
+                let api_key_cache = api_key_cache.clone();
+                let model_cache = model_cache.clone();
+                let provider_cache = provider_cache.clone();
+                let ssrf_cache = ssrf_cache.clone();
+                handles.push(std::thread::spawn(move || {
+                    for i in 0..200 {
+                        let key = format!("w{i}");
+                        session_cache
+                            .insert(key.clone(), (test_session_user(), Utc::now(), fresh()));
+                        api_key_cache.insert(key.clone(), (test_api_key_info(), fresh()));
+                        model_cache.insert(key.clone(), (None, fresh()));
+                        provider_cache.insert(key.clone(), (Arc::new(MockProvider), fresh()));
+                        ssrf_cache.insert(key.clone(), (vec!["1.2.3.4".parse().unwrap()], fresh()));
+                        session_cache.remove(&key);
+                        api_key_cache.remove(&key);
+                    }
+                }));
+            }
+            for handle in handles {
+                handle.join().unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn concurrent_mixed_operations_no_deadlock() {
+        // 4 threads hammering a shared cache with the full mix of operations
+        // used across the codebase: get, get_mut (guard dropped), insert,
+        // remove, retain.
+        let cache: Arc<DashMap<String, (i64, Instant)>> = Arc::new(DashMap::new());
+        for i in 0..20 {
+            cache.insert(format!("k{i}"), (i, fresh()));
+        }
+
+        let mut handles = Vec::new();
+        for t in 0..4 {
+            let cache = cache.clone();
+            handles.push(std::thread::spawn(move || {
+                for i in 0..500 {
+                    let key = format!("k{}", (i + t) % 24);
+                    let _ = cache.get(&key);
+                    if let Some(mut entry) = cache.get_mut(&key) {
+                        entry.1 = Instant::now();
+                    }
+                    cache.insert(format!("t{t}-{i}"), (i, fresh()));
+                    if i % 3 == 0 {
+                        cache.remove(&key);
+                    }
+                    if i % 7 == 0 {
+                        cache.retain(|_, v| v.1.elapsed() < Duration::from_secs(300));
+                    }
+                }
+            }));
+        }
+        assert_no_deadlock(Duration::from_secs(10), move || {
+            for handle in handles {
+                handle.join().unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn positive_control_detects_held_guard_deadlock() {
+        // Deliberately reproduce the banned pattern (insert while a RefMut is
+        // still alive) to prove assert_no_deadlock can detect a deadlock.
+        // The stuck thread leaks until process exit; that is the point.
+        let cache: Arc<DashMap<String, i64>> = Arc::new(DashMap::new());
+        cache.insert("k".to_string(), 0);
+        let cache_clone = cache.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            assert_no_deadlock(Duration::from_millis(500), move || {
+                let mut entry = cache_clone.get_mut("k").unwrap();
+                *entry = 1;
+                // Deadlock: insert on the same key while the RefMut guard is
+                // alive re-enters the same shard's write lock.
+                cache_clone.insert("k".to_string(), 2);
+            });
+        }));
+        assert!(
+            result.is_err(),
+            "assert_no_deadlock must report the held-guard deadlock"
+        );
+    }
 }

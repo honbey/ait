@@ -159,10 +159,15 @@ mod tests {
 
     #[test]
     fn evicts_entry_when_at_capacity() {
-        let limiter = RateLimiter::new(1);
-        assert!(limiter.check_and_record(ip(1), 5, 60, 60).is_ok());
-        // New IP at capacity evicts the old entry instead of failing.
-        assert!(limiter.check_and_record(ip(2), 5, 60, 60).is_ok());
-        assert_eq!(limiter.inner.len(), 1);
+        use crate::test_utils::assert_no_deadlock;
+        // Wrapped in assert_no_deadlock: the eviction path once deadlocked by
+        // removing while the DashMap iterator still held the read lock.
+        assert_no_deadlock(std::time::Duration::from_secs(5), || {
+            let limiter = RateLimiter::new(1);
+            assert!(limiter.check_and_record(ip(1), 5, 60, 60).is_ok());
+            // New IP at capacity evicts the old entry instead of failing.
+            assert!(limiter.check_and_record(ip(2), 5, 60, 60).is_ok());
+            assert_eq!(limiter.inner.len(), 1);
+        });
     }
 }
