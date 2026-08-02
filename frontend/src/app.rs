@@ -23,6 +23,12 @@ use crate::pages::providers::ProvidersPage;
 use crate::pages::text_gen::TextGenPage;
 use crate::storage;
 
+fn prefers_dark_scheme() -> bool {
+    web_sys::window()
+        .and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten())
+        .is_some_and(|mql| mql.matches())
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     let initial_lang = storage::get_item(storage::LANG_KEY).unwrap_or_else(|| "zh".to_string());
@@ -56,19 +62,20 @@ pub fn App() -> impl IntoView {
         }
     });
 
-    let initial_dark = matches!(
-        storage::get_item(storage::THEME_KEY).as_deref(),
-        Some("dark")
-    );
-    let dark = RwSignal::new(initial_dark);
+    let stored_theme = match storage::get_item(storage::THEME_KEY).as_deref() {
+        Some("dark") => Some(true),
+        Some("light") => Some(false),
+        _ => None,
+    };
+    let theme = RwSignal::new(stored_theme);
+    // Falls back to the OS preference once at startup; only an explicit
+    // toggle writes the preference to storage.
+    let dark = Memo::new(move |_| theme.get().unwrap_or_else(prefers_dark_scheme));
+    provide_context(theme);
     provide_context(dark);
 
     let i18n_clone = i18n.clone();
     Effect::new(move |_| {
-        storage::set_item(
-            storage::THEME_KEY,
-            if dark.get() { "dark" } else { "light" },
-        );
         storage::set_item(storage::LANG_KEY, &i18n_clone.lang());
 
         // Sync <html lang> with current language
@@ -90,7 +97,7 @@ pub fn App() -> impl IntoView {
     view! {
         <div class=move || if dark.get() { "dark" } else { "" }>
             <Router>
-                <Topbar dark=dark />
+                <Topbar dark=dark theme=theme />
                 <main class="min-h-[calc(100vh-3.5rem)]">
                     <Routes fallback=|| view! { <NotFoundPage /> }>
                         <Route path=StaticSegment("") view=Home />

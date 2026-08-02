@@ -252,7 +252,7 @@ fn LoginButton() -> impl IntoView {
 }
 
 #[component]
-pub fn Topbar(dark: RwSignal<bool>) -> impl IntoView {
+pub fn Topbar(dark: Memo<bool>, theme: RwSignal<Option<bool>>) -> impl IntoView {
     let i18n = use_context::<I18n>().expect("I18n");
     let auth = use_context::<AuthContext>().expect("AuthContext");
 
@@ -304,7 +304,14 @@ pub fn Topbar(dark: RwSignal<bool>) -> impl IntoView {
                         "px-2 py-2 {} hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer transition-colors active:scale-95",
                         CLASS_TEXT_MUTED,
                     )
-                    on:click=move |_| dark.set(!dark.get_untracked())
+                    on:click=move |_| {
+                        let next = !dark.get_untracked();
+                        theme.set(Some(next));
+                        crate::storage::set_item(
+                            crate::storage::THEME_KEY,
+                            if next { "dark" } else { "light" },
+                        );
+                    }
                 >
                     <i class=move || {
                         if dark.get() {
