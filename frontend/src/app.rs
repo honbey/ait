@@ -29,9 +29,20 @@ fn prefers_dark_scheme() -> bool {
         .is_some_and(|mql| mql.matches())
 }
 
+fn system_lang() -> &'static str {
+    match web_sys::window()
+        .and_then(|w| w.navigator().language())
+        .as_deref()
+    {
+        Some(l) if l.starts_with("zh") => "zh",
+        Some(l) if l.starts_with("en") => "en",
+        _ => "zh",
+    }
+}
+
 #[component]
 pub fn App() -> impl IntoView {
-    let initial_lang = storage::get_item(storage::LANG_KEY).unwrap_or_else(|| "zh".to_string());
+    let initial_lang = storage::get_item(storage::LANG_KEY).unwrap_or_else(|| system_lang().to_string());
     let i18n = I18n::new(&initial_lang);
     provide_context(i18n.clone());
 
@@ -76,8 +87,6 @@ pub fn App() -> impl IntoView {
 
     let i18n_clone = i18n.clone();
     Effect::new(move |_| {
-        storage::set_item(storage::LANG_KEY, &i18n_clone.lang());
-
         // Sync <html lang> with current language
         let lang = i18n_clone.lang();
         if let Some(doc) = web_sys::window().and_then(|w| w.document())

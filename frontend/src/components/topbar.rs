@@ -294,6 +294,7 @@ pub fn Topbar(dark: Memo<bool>, theme: RwSignal<Option<bool>>) -> impl IntoView 
                         let current = i18n.lang_untracked();
                         let new_lang = if current == "zh" { "en" } else { "zh" };
                         i18n.set_lang(new_lang);
+                        crate::storage::set_item(crate::storage::LANG_KEY, new_lang);
                     }
                 >
                     <i class="fas fa-globe w-4 text-center"></i>
