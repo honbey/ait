@@ -42,7 +42,8 @@ fn system_lang() -> &'static str {
 
 #[component]
 pub fn App() -> impl IntoView {
-    let initial_lang = storage::get_item(storage::LANG_KEY).unwrap_or_else(|| system_lang().to_string());
+    let initial_lang =
+        storage::get_item(storage::LANG_KEY).unwrap_or_else(|| system_lang().to_string());
     let i18n = I18n::new(&initial_lang);
     provide_context(i18n.clone());
 
