@@ -18,11 +18,12 @@
 
 ## 功能
 
-- **后台管理** — 管理提供商/模型/API Key
-- **多语言** — 支持切换显示语言
-- **深色模式** — localStorage 持久化存储状态，Tailwind CSS 驱动
+- **后台管理** — 管理提供商/模型/API Key，支持修改密码
+- **多语言** — 默认跟随浏览器语言（zh/en，其他回退 zh），仅显式切换才持久化到 localStorage
+- **深色模式** — 无存储偏好时跟随系统主题（`prefers-color-scheme`），仅显式切换才持久化
 - **骨架屏加载** — 控制台页面数据加载中显示占位骨架
 - **全局 Toast** — 会话过期、操作结果等全局通知
+- **Docs / About** — 文档中心与关于页面
 
 ## 页面
 
@@ -30,10 +31,13 @@
 | ------ | ------ | ------ |
 | `/` | 首页 | - |
 | `/login` | 登录 | 用户名密码登录 |
+| `/docs` | 文档中心 | 项目与前端 README 入口 |
+| `/about` | 关于 | 项目信息 |
 | `/console/overview` | 概览 | 提供商 / 模型总数、API 请求数 / Token 消耗图表 |
 | `/console/providers` | 提供商管理 | - |
 | `/console/models` | 模型管理 | - |
 | `/console/api-keys` | API Key 管理 | - |
+| `/console/logs` | 日志 | 代理请求日志查询与统计 |
 | `/console/text-generation` | 文本生成 | 文本生成接口 demo，需要 API Key |
 
 ## 开发

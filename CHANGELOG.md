@@ -1,11 +1,47 @@
 # 更新日志
 
+## [v0.1.7] - 2026-08-03
+
+### 新增功能
+
+- **Docs / About 页面** - 新增文档中心与关于页面，文档中心提供项目与前端 README 入口
+- **改密码弹窗** - 用户下拉菜单新增修改密码入口，成功后自动登出并跳转登录页
+- **主题跟随系统** - 无存储偏好时按系统主题（`prefers-color-scheme`）初始化，仅显式切换才写入 localStorage
+- **语言跟随浏览器** - 无存储偏好时按浏览器语言初始化（`zh*` → zh，`en*` → en，其他回退 zh），仅显式切换才持久化
+- **登录表单自动填充** - 用户名/密码输入框补充 `autocomplete` 属性，恢复浏览器自动填充
+- **CORS 凭据支持** - 新增 `cors_allow_credentials` 配置项，支持跨域部署场景
+
+### 修复
+
+- **API Key** - `expires_at=0` 视为永不过期；部分更新跳过未设字段；按字符数而非字节索引掩码 key
+- **代理** - 限制上游响应体大小并超时读取错误体；model_cache 增长受限且负条目快速过期
+- **SSRF 防护** - 校验前规范化 IPv4-mapped 与 NAT64 IPv6 地址，防止绕过白名单
+- **会话认证** - cookie 续期实现滑动过期；改密码后清理会话缓存；修复会话 key 泄漏与 SSE chunk 边界顺序
+- **日志** - 拒绝 `retention_every=0` 并增加防 panic 保护；代理日志查询参数 URL 编码
+- **并发** - 修复 rate_limiter 容量满时驱逐导致的死锁
+- **前端** - 修复手工测试发现的 11 个 bug；API Key 创建后重新拉取列表而非前端掩盖
+
+### 优化
+
+- **测试补全（+2600 行）**
+  - 业务集成测试：apikeys / auth / models / providers / users handlers
+  - 基础设施单测：config / app / main / error / rate_limiter / blocking
+  - DuckDB 日志与分析：logger / analytics 及 logs / stats / analytics handlers
+  - DashMap 防死锁：`assert_no_deadlock` helper、生产模式镜像与并发压力测试、positive control 验证检测能力
+  - 全量测试 169 个全部通过
+- **可测性重构** - 抽取 `parse_config_path_from` 与 `cleanup_caches` 便于单元测试
+- **测试稳定性** - DuckDB logger 测试改为 `shutdown` join 后断言，消除并行执行下的时序竞态
+
+### Chore
+
+- 前端主题 / 语言存储策略与系统偏好对齐（仅在用户显式切换时持久化）
+
 ## [v0.1.6] - 2026-07-28
 
 ### 新增功能
 
 - **X-Request-Id 追踪** - 所有响应添加 `X-Request-Id` header，`access_log` / `proxy_log` / `audit_log` 中记录 `request_id`，方便关联请求全链路
-- **分页条数选择** - 日志与概览表格增加 10/20/50 每页条数下拉选择器
+- **分页条数选择** - 日志表格增加 10/20/50 每页条数下拉选择器
 
 ### 优化
 
