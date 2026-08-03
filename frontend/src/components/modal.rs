@@ -65,12 +65,19 @@ pub fn DeleteConfirmModal(
         if consumed.get_untracked() {
             return;
         }
-        if let Some(Ok(_)) = action.value().get() {
-            consumed.set(true);
-            let en = entity_name();
-            let act = ts!(ActionDeleted);
-            toast.success(trs!(EntityAction, &[("entity", &en), ("action", &act)]));
-            on_success();
+        match action.value().get() {
+            Some(Ok(_)) => {
+                consumed.set(true);
+                let en = entity_name();
+                let act = ts!(ActionDeleted);
+                toast.success(trs!(EntityAction, &[("entity", &en), ("action", &act)]));
+                on_success();
+            }
+            Some(Err(e)) => {
+                consumed.set(true);
+                toast.error(e);
+            }
+            None => {}
         }
     });
 

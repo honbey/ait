@@ -15,6 +15,19 @@ use uuid::Uuid;
 
 pub(crate) const CACHE_TTL: Duration = Duration::from_secs(300);
 
+/// Build a `Set-Cookie` header value for the session key.
+///
+/// `Secure` is intentionally always set: direct HTTP access only happens
+/// against 127.0.0.1/localhost for local dev, production runs behind nginx
+/// which terminates TLS. No plain-HTTP remote deployment is supported, so
+/// no config toggle is provided.
+pub(crate) fn set_cookie_header(session_key: &str, max_age: i64) -> String {
+    format!(
+        "session_key={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
+        session_key, max_age
+    )
+}
+
 fn full_access(username: &str) -> SessionUser {
     SessionUser {
         username: username.to_string(),
@@ -122,8 +135,10 @@ pub async fn admin_auth_middleware(
     // Admin endpoints always require authentication
     let session_key = extract_session_key(req.headers())
         .ok_or_else(|| unauthorized("Unauthorized: invalid or missing API key"))?;
+    let session_key = session_key.to_string();
 
-    let hash = hash_key(session_key);
+    let hash = hash_key(&session_key);
+    let ttl = state.config.auth.session_ttl_secs;
 
     // Cache hit — verify freshness and renew TTL
     if let Some(mut entry) = state.session_cache.get_mut(&hash) {
@@ -133,15 +148,20 @@ pub async fn admin_auth_middleware(
             drop(entry);
             req.extensions_mut().insert(user);
             req.extensions_mut().insert(client_ip);
-            return Ok(next.run(req).await);
+            let mut response = next.run(req).await;
+            let cookie = set_cookie_header(&session_key, ttl as i64);
+            response
+                .headers_mut()
+                .insert(header::SET_COOKIE, cookie.parse().unwrap());
+            return Ok(response);
         }
         drop(entry);
     }
 
     // Cache miss or stale — load from DB (only session; username is enough for SessionUser)
-    let session_key = session_key.to_string();
+    let session_key_for_db = session_key.clone();
     let db = state.db.clone();
-    let session = crate::run_blocking(move || db.get_session(&session_key))
+    let session = crate::run_blocking(move || db.get_session(&session_key_for_db))
         .await
         .map_err(internal_error)?
         .map_err(|_| db_error())?
@@ -154,7 +174,6 @@ pub async fn admin_auth_middleware(
     // Fire-and-forget session renewal so active sessions do not expire
     let db = state.db.clone();
     let hash_clone = hash.clone();
-    let ttl = state.config.auth.session_ttl_secs;
     tokio::spawn(async move {
         let _ = crate::run_blocking(move || db.renew_session(&hash_clone, ttl)).await;
     });
@@ -170,7 +189,12 @@ pub async fn admin_auth_middleware(
 
     req.extensions_mut().insert(user);
     req.extensions_mut().insert(client_ip);
-    Ok(next.run(req).await)
+    let mut response = next.run(req).await;
+    let cookie = set_cookie_header(&session_key, ttl as i64);
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, cookie.parse().unwrap());
+    Ok(response)
 }
 
 fn is_trusted_proxy(ip: IpAddr, trusted: &[IpAddr]) -> bool {

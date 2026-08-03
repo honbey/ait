@@ -89,6 +89,7 @@ pub fn LoginPage() -> impl IntoView {
                             id="login-username"
                             name="username"
                             type="text"
+                            autocomplete="username"
                             placeholder=t!(Username)
                             prop:value=move || username.get()
                             on:input=move |ev| {
@@ -107,6 +108,7 @@ pub fn LoginPage() -> impl IntoView {
                             id="login-password"
                             name="password"
                             type="password"
+                            autocomplete="current-password"
                             placeholder=t!(Password)
                             prop:value=move || password.get()
                             on:input=move |ev| {

@@ -95,12 +95,37 @@ async fn resolve_with_cache(
 }
 
 fn is_allowed(ip: &IpAddr, allowed_cidrs: &[String]) -> bool {
+    let ip = normalize_ip(ip);
     for cidr in allowed_cidrs {
-        if ip_in_cidr(ip, cidr) {
+        if ip_in_cidr(&ip, cidr) {
             return true;
         }
     }
-    !is_blocked_ip(ip)
+    !is_blocked_ip(&ip)
+}
+
+/// Canonicalize IPv6 forms that embed an IPv4 address (RFC 4291 IPv4-mapped
+/// `::ffff:a.b.c.d` and RFC 6052 NAT64 `64:ff9b::/96`) into plain IPv4, so
+/// blocked/CIDR checks see the address the connection actually reaches.
+fn normalize_ip(ip: &IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => *ip,
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return IpAddr::V4(v4);
+            }
+            let s = v6.segments();
+            if s[0] == 0x0064 && s[1] == 0xff9b && s[2] == 0 && s[3] == 0 {
+                return IpAddr::V4(Ipv4Addr::new(
+                    (s[6] >> 8) as u8,
+                    (s[6] & 0xff) as u8,
+                    (s[7] >> 8) as u8,
+                    (s[7] & 0xff) as u8,
+                ));
+            }
+            IpAddr::V6(*v6)
+        }
+    }
 }
 
 fn is_blocked_ip(ip: &IpAddr) -> bool {
@@ -192,4 +217,66 @@ fn ipv6_in_prefix(ip: &Ipv6Addr, prefix: &Ipv6Addr, len: u8) -> bool {
     let prefix_bits = u128::from(*prefix);
     let mask = !0u128 << (128 - len);
     (ip_bits & mask) == (prefix_bits & mask)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn allowed(ip: &str) -> bool {
+        is_allowed(&ip.parse().unwrap(), &[])
+    }
+
+    #[test]
+    fn v4_loopback_blocked() {
+        assert!(!allowed("127.0.0.1"));
+    }
+
+    #[test]
+    fn v6_loopback_blocked() {
+        assert!(!allowed("::1"));
+    }
+
+    #[test]
+    fn public_ipv4_allowed() {
+        assert!(allowed("8.8.8.8"));
+    }
+
+    #[test]
+    fn public_ipv6_allowed() {
+        assert!(allowed("2001:db8::1"));
+    }
+
+    #[test]
+    fn ipv4_mapped_loopback_blocked() {
+        assert!(!allowed("::ffff:127.0.0.1"));
+    }
+
+    #[test]
+    fn ipv4_mapped_metadata_blocked() {
+        assert!(!allowed("::ffff:a9fe:a9fe"));
+    }
+
+    #[test]
+    fn ipv4_mapped_public_allowed() {
+        assert!(allowed("::ffff:8.8.8.8"));
+    }
+
+    #[test]
+    fn nat64_metadata_blocked() {
+        assert!(!allowed("64:ff9b::a9fe:a9fe"));
+    }
+
+    #[test]
+    fn nat64_public_allowed() {
+        assert!(allowed("64:ff9b::808:808"));
+    }
+
+    #[test]
+    fn mapped_matches_v4_cidr_whitelist() {
+        assert!(is_allowed(
+            &"::ffff:192.168.3.130".parse().unwrap(),
+            &["192.168.3.130".to_string()]
+        ));
+    }
 }

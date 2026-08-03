@@ -105,10 +105,12 @@ async fn main() {
         tokio::select! {
             _ = tokio::time::sleep(graceful_timeout) => {
                 tracing::warn!("Graceful shutdown timeout, forcing exit");
+                log_manager.shutdown();
                 std::process::exit(0);
             }
             _ = tokio::signal::ctrl_c() => {
                 tracing::warn!("Forced shutdown via Ctrl+C");
+                log_manager.shutdown();
                 std::process::exit(0);
             }
         }
@@ -128,7 +130,12 @@ async fn main() {
 }
 
 fn parse_config_path() -> Option<String> {
-    let mut args = std::env::args();
+    parse_config_path_from(std::env::args())
+}
+
+/// Testable core of `parse_config_path`: walk the argument list and return the
+/// value following `-c`/`--config`, if present.
+fn parse_config_path_from<I: Iterator<Item = String>>(mut args: I) -> Option<String> {
     args.next(); // skip program name
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -164,7 +171,7 @@ fn init_logging(cfg: &config::LogConfig) {
         .init();
 }
 
-fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
+fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer {
     let methods = [Method::GET, Method::POST, Method::PUT, Method::DELETE];
     let headers = [
         header::AUTHORIZATION,
@@ -182,9 +189,19 @@ fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
     }
 
     if allowed_origins.iter().any(|o| o == "*") {
-        return CorsLayer::permissive()
-            .allow_methods(methods)
-            .allow_headers(headers);
+        return if allow_credentials {
+            // `*` combined with credentials is rejected by browsers; mirror the
+            // request origin instead so cross-origin cookie auth can work
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::mirror_request())
+                .allow_methods(methods)
+                .allow_headers(headers)
+                .allow_credentials(true)
+        } else {
+            CorsLayer::permissive()
+                .allow_methods(methods)
+                .allow_headers(headers)
+        };
     }
 
     let origins: Vec<_> = allowed_origins
@@ -198,6 +215,7 @@ fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
         .allow_origin(origins)
         .allow_methods(methods)
         .allow_headers(headers)
+        .allow_credentials(allow_credentials)
 }
 
 fn build_app(state: app::AppState) -> Router {
@@ -288,7 +306,10 @@ fn build_app(state: app::AppState) -> Router {
         .fallback(ServeFile::new("frontend/dist/index.html"));
 
     let trace_level = parse_level(&state.config.log.tower_http_trace);
-    let cors = cors_layer(&state.config.security.cors_allowed_origins);
+    let cors = cors_layer(
+        &state.config.security.cors_allowed_origins,
+        state.config.security.cors_allow_credentials,
+    );
 
     Router::new()
         .nest_service("/static", frontend_root)
@@ -300,4 +321,123 @@ fn build_app(state: app::AppState) -> Router {
         .with_state(state)
         .layer(cors)
         .layer(TraceLayer::new_for_http().on_response(DefaultOnResponse::new().level(trace_level)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN;
+    use axum::http::{Method, Request};
+    use tower::ServiceExt;
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn parse_config_path_no_flag_returns_none() {
+        assert_eq!(parse_config_path_from(args(&["ait"]).into_iter()), None);
+        assert_eq!(
+            parse_config_path_from(args(&["ait", "-x", "foo"]).into_iter()),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_config_path_short_flag_returns_value() {
+        assert_eq!(
+            parse_config_path_from(args(&["ait", "-c", "config/test"]).into_iter()),
+            Some("config/test".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_config_path_long_flag_returns_value() {
+        assert_eq!(
+            parse_config_path_from(args(&["ait", "--config", "config/prod"]).into_iter()),
+            Some("config/prod".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_level_maps_all_levels() {
+        assert_eq!(parse_level("trace"), tracing::Level::TRACE);
+        assert_eq!(parse_level("debug"), tracing::Level::DEBUG);
+        assert_eq!(parse_level("info"), tracing::Level::INFO);
+        assert_eq!(parse_level("warn"), tracing::Level::WARN);
+        assert_eq!(parse_level("error"), tracing::Level::ERROR);
+        assert_eq!(parse_level("INFO"), tracing::Level::INFO);
+        // Unknown values fall back to INFO.
+        assert_eq!(parse_level("verbose"), tracing::Level::INFO);
+    }
+
+    fn cors_router(cors: CorsLayer) -> Router {
+        Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(cors)
+    }
+
+    async fn get_with_origin(router: &Router, origin: &str) -> Option<String> {
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/")
+            .header(header::ORIGIN, origin)
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        response
+            .headers()
+            .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+    }
+
+    #[tokio::test]
+    async fn cors_layer_empty_origins_sends_no_header() {
+        let router = cors_router(cors_layer(&[], false));
+        assert!(
+            get_with_origin(&router, "https://evil.example.com")
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_layer_wildcard_without_credentials_is_permissive() {
+        let router = cors_router(cors_layer(&["*".to_string()], false));
+        assert_eq!(
+            get_with_origin(&router, "https://evil.example.com")
+                .await
+                .as_deref(),
+            Some("*")
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_layer_wildcard_with_credentials_mirrors_origin() {
+        let router = cors_router(cors_layer(&["*".to_string()], true));
+        assert_eq!(
+            get_with_origin(&router, "https://app.example.com")
+                .await
+                .as_deref(),
+            Some("https://app.example.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_layer_specific_origins_allow_only_listed() {
+        let router = cors_router(cors_layer(&["https://app.example.com".to_string()], false));
+        assert_eq!(
+            get_with_origin(&router, "https://app.example.com")
+                .await
+                .as_deref(),
+            Some("https://app.example.com")
+        );
+        assert!(
+            get_with_origin(&router, "https://other.example.com")
+                .await
+                .is_none()
+        );
+    }
 }

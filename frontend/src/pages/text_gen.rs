@@ -439,22 +439,19 @@ enum SsePoll {
 
 fn poll_sse(buf: &mut Vec<u8>) -> Option<SsePoll> {
     let (boundary, n) = buf
-        .windows(2)
-        .position(|w| w == b"\n\n")
-        .map(|p| (p, 2))
-        .or_else(|| {
-            buf.windows(4)
-                .position(|w| w == b"\r\n\r\n")
-                .map(|p| (p, 4))
-        })?;
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|p| (p, 4))
+        .or_else(|| buf.windows(2).position(|w| w == b"\n\n").map(|p| (p, 2)))?;
 
     let event_bytes: Vec<u8> = buf.drain(..boundary).collect();
     buf.drain(..n);
 
     let event_str = String::from_utf8_lossy(&event_bytes);
     for line in event_str.lines() {
-        let payload = match line.strip_prefix("data: ") {
-            Some(p) => p.trim(),
+        // Accept both "data: value" and "data:value" per the SSE spec.
+        let payload = match line.strip_prefix("data:") {
+            Some(p) => p.strip_prefix(' ').unwrap_or(p).trim(),
             None => continue,
         };
         if payload == "[DONE]" {

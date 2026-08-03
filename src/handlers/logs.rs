@@ -75,3 +75,170 @@ pub async fn list_proxy_logs(
         per_page,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{
+        create_test_state_fast_logs, insert_test_user, login_and_cookie, make_proxy_event,
+        send_request, test_router,
+    };
+    use axum::Router;
+    use axum::http::Method;
+    use chrono::Utc;
+
+    async fn setup_with_events() -> (Router, String, i64) {
+        let (state, _dir) = create_test_state_fast_logs();
+        insert_test_user(&state.db, "alice", "secret123");
+        let now = Utc::now().timestamp();
+        state
+            .log_manager
+            .log_proxy(make_proxy_event("gpt-4", "success", 100));
+        state
+            .log_manager
+            .log_proxy(make_proxy_event("gpt-4", "error", 50));
+        state
+            .log_manager
+            .log_proxy(make_proxy_event("llama", "success", 10));
+        // Wait for the worker to flush all three events.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if state
+                .log_manager
+                .total_requests(now - 3600, now + 3600)
+                .await
+                >= 3
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for proxy events"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let router = test_router(state);
+        let cookie = login_and_cookie(&router, "alice", "secret123").await;
+        (router, cookie, now)
+    }
+
+    #[tokio::test]
+    async fn list_proxy_logs_returns_all_rows_desc() {
+        let (router, cookie, now) = setup_with_events().await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            &format!(
+                "/api/data/proxy-log?start_ts={}&end_ts={}",
+                now - 3600,
+                now + 3600
+            ),
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["total"], 3);
+        let items = resp.json["items"].as_array().unwrap();
+        assert_eq!(items.len(), 3);
+        // Ordered by timestamp DESC: the last written event is first.
+        assert!(items[0]["timestamp"].as_i64().unwrap() >= items[1]["timestamp"].as_i64().unwrap());
+    }
+
+    #[tokio::test]
+    async fn list_proxy_logs_filters_and_paginates() {
+        let (router, cookie, now) = setup_with_events().await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            &format!(
+                "/api/data/proxy-log?start_ts={}&end_ts={}&model_name=gpt-4",
+                now - 3600,
+                now + 3600
+            ),
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.json["total"], 2);
+        assert!(
+            resp.json["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|e| e["model_name"] == "gpt-4")
+        );
+
+        // Pagination: page 2 of per_page=1 -> the second most recent row.
+        let resp = send_request(
+            &router,
+            Method::GET,
+            &format!(
+                "/api/data/proxy-log?start_ts={}&end_ts={}&per_page=1&page=2",
+                now - 3600,
+                now + 3600
+            ),
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.json["total"], 3);
+        assert_eq!(resp.json["page"], 2);
+        assert_eq!(resp.json["per_page"], 1);
+        assert_eq!(resp.json["items"].as_array().unwrap().len(), 1);
+
+        // Status filter combined with model.
+        let resp = send_request(
+            &router,
+            Method::GET,
+            &format!(
+                "/api/data/proxy-log?start_ts={}&end_ts={}&model_name=gpt-4&status=error",
+                now - 3600,
+                now + 3600
+            ),
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.json["total"], 1);
+        assert_eq!(resp.json["items"][0]["status"], "error");
+    }
+
+    #[tokio::test]
+    async fn list_proxy_logs_rejects_invalid_timestamps() {
+        let (router, cookie, _now) = setup_with_events().await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/data/proxy-log?start_ts=999999999999999999999",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn list_proxy_logs_clamps_per_page() {
+        let (router, cookie, now) = setup_with_events().await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            &format!(
+                "/api/data/proxy-log?start_ts={}&end_ts={}&per_page=1000",
+                now - 3600,
+                now + 3600
+            ),
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.json["per_page"], 100);
+    }
+}

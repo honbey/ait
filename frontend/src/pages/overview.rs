@@ -35,8 +35,20 @@ fn aggregate_daily(buckets: &[BucketEntry]) -> Vec<BucketEntry> {
     daily
 }
 
+/// Advances `cur` to the next local midnight. Uses the calendar date rather
+/// than a fixed 86400s step so DST days (23h/25h) stay aligned with
+/// `aggregate_daily`'s local-midnight bucket keys.
+fn next_local_midnight(cur: i64) -> i64 {
+    let d = js_sys::Date::new(&((cur as f64) * 1000.0).into());
+    let next = js_sys::Date::new_with_year_month_day(
+        d.get_full_year(),
+        d.get_month() as i32,
+        d.get_date() as i32 + 1,
+    );
+    (next.get_time() / 1000.0) as i64
+}
+
 fn fill_daily_range(daily: &[BucketEntry], start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
-    let day_secs = 86400i64;
     let sd = js_sys::Date::new(&((start_ts as f64) * 1000.0).into());
     let ed = js_sys::Date::new(&((end_ts as f64) * 1000.0).into());
     let start_day = js_sys::Date::new_with_year_month_day(
@@ -65,7 +77,7 @@ fn fill_daily_range(daily: &[BucketEntry], start_ts: i64, end_ts: i64) -> Vec<Bu
                 count: 0,
             });
         }
-        cur += day_secs;
+        cur = next_local_midnight(cur);
     }
     result
 }
@@ -151,6 +163,7 @@ pub fn Overview() -> impl IntoView {
     let (end_ts, set_end_ts) = signal(default_end);
     let (start_dirty, set_start_dirty) = signal(false);
     let (end_dirty, set_end_dirty) = signal(false);
+    let (force_refresh, set_force_refresh) = signal(false);
     let (left_tab, set_left_tab) = signal(0usize);
     let (right_tab, set_right_tab) = signal(0usize);
 
@@ -158,13 +171,14 @@ pub fn Overview() -> impl IntoView {
         move || {
             let s = start_ts.get_untracked();
             let e = end_ts.get_untracked();
+            let force = force_refresh.get_untracked();
             async move {
                 let (stats, req_b, tok_b, mdl, tok_d) = futures_util::join!(
-                    api::fetch_overview_stats(s, e),
-                    api::fetch_request_buckets(s, e),
-                    api::fetch_token_buckets(s, e),
-                    api::fetch_model_dist(s, e),
-                    api::fetch_token_dist(s, e),
+                    api::fetch_overview_stats(s, e, force),
+                    api::fetch_request_buckets(s, e, force),
+                    api::fetch_token_buckets(s, e, force),
+                    api::fetch_model_dist(s, e, force),
+                    api::fetch_token_dist(s, e, force),
                 );
                 match (stats, req_b, tok_b, mdl, tok_d) {
                     (Ok(stats_val), Ok(r), Ok(t), Ok(md), Ok(td)) => Ok(OverviewData {
@@ -199,6 +213,7 @@ pub fn Overview() -> impl IntoView {
             set_end_ts.set(end);
             set_start_dirty.set(false);
             set_end_dirty.set(false);
+            set_force_refresh.set(true);
             overview_resource.refetch();
         }
     };
@@ -210,6 +225,7 @@ pub fn Overview() -> impl IntoView {
         set_end_ts.set(end);
         set_start_dirty.set(false);
         set_end_dirty.set(false);
+        set_force_refresh.set(true);
         overview_resource.refetch();
     };
 
@@ -220,6 +236,7 @@ pub fn Overview() -> impl IntoView {
         set_end_ts.set(end);
         set_start_dirty.set(false);
         set_end_dirty.set(false);
+        set_force_refresh.set(true);
         overview_resource.refetch();
     };
 

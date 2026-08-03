@@ -68,12 +68,14 @@ pub struct ProxyConfig {
     pub stream: bool,
     pub sse_idle_timeout_secs: u64,
     pub connect_timeout_secs: u64,
+    pub max_response_body_bytes: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct SecurityConfig {
     pub ssrf_allowed_cidrs: Vec<String>,
     pub cors_allowed_origins: Vec<String>,
+    pub cors_allow_credentials: bool,
 }
 
 impl ConfigApp {
@@ -115,12 +117,21 @@ impl ConfigApp {
             .set_default("proxy.stream", true)?
             .set_default("proxy.sse_idle_timeout_secs", 60u64)?
             .set_default("proxy.connect_timeout_secs", 30u64)?
+            .set_default("proxy.max_response_body_bytes", 8u64 * 1024 * 1024)?
             .set_default("security.ssrf_allowed_cidrs", Vec::<String>::new())?
             .set_default("security.cors_allowed_origins", Vec::<String>::new())?
+            .set_default("security.cors_allow_credentials", false)?
             .add_source(File::new(config_file, FileFormat::Toml).required(false))
             .add_source(Environment::with_prefix("AIT").separator("_"))
             .build()?
             .try_deserialize()?;
+
+        // `is_multiple_of(0)` panics and would kill the log worker thread
+        if app.log.retention_every == 0 {
+            return Err(ConfigError::Message(
+                "log.retention_every must be >= 1 (0 crashes the log worker)".to_string(),
+            ));
+        }
 
         Ok(app)
     }
@@ -190,6 +201,7 @@ max_api_keys_per_user = 20
         assert_eq!(config.database.path, "./data/ait.db");
         assert_eq!(config.proxy.timeout_secs, 300);
         assert!(config.proxy.stream);
+        assert_eq!(config.proxy.max_response_body_bytes, 8 * 1024 * 1024);
     }
 
     #[test]
@@ -200,7 +212,71 @@ max_api_keys_per_user = 20
         assert_eq!(config.auth.max_api_keys_per_user, 10);
         assert_eq!(config.log.retention_days, 30);
         assert_eq!(config.log.analytics_timeout_secs, 10);
+        assert_eq!(config.proxy.max_response_body_bytes, 8 * 1024 * 1024);
         assert!(config.security.ssrf_allowed_cidrs.is_empty());
         assert!(config.security.cors_allowed_origins.is_empty());
+        assert!(!config.security.cors_allow_credentials);
+    }
+
+    #[test]
+    fn cors_allow_credentials_override() {
+        let (_dir, path) = write_toml(
+            r#"
+[security]
+cors_allow_credentials = true
+cors_allowed_origins = ["https://app.example.com"]
+"#,
+        );
+        let config = ConfigApp::new(Some(&path)).unwrap();
+        assert!(config.security.cors_allow_credentials);
+        assert_eq!(
+            config.security.cors_allowed_origins,
+            vec!["https://app.example.com"]
+        );
+    }
+
+    #[test]
+    fn retention_every_zero_rejected() {
+        let (_dir, path) = write_toml(
+            r#"
+[log]
+retention_every = 0
+"#,
+        );
+        let err = ConfigApp::new(Some(&path)).unwrap_err();
+        assert!(err.to_string().contains("retention_every"));
+    }
+
+    #[test]
+    fn invalid_toml_rejected() {
+        let (_dir, path) = write_toml("this is not [ valid toml");
+        assert!(ConfigApp::new(Some(&path)).is_err());
+    }
+
+    #[test]
+    fn proxy_and_security_toml_override() {
+        let (_dir, path) = write_toml(
+            r#"
+[proxy]
+timeout_secs = 60
+stream = false
+max_response_body_bytes = 1048576
+
+[security]
+ssrf_allowed_cidrs = ["10.0.0.0/8"]
+cors_allowed_origins = ["https://app.example.com"]
+cors_allow_credentials = true
+"#,
+        );
+        let config = ConfigApp::new(Some(&path)).unwrap();
+        assert_eq!(config.proxy.timeout_secs, 60);
+        assert!(!config.proxy.stream);
+        assert_eq!(config.proxy.max_response_body_bytes, 1048576);
+        assert_eq!(config.security.ssrf_allowed_cidrs, vec!["10.0.0.0/8"]);
+        assert_eq!(
+            config.security.cors_allowed_origins,
+            vec!["https://app.example.com"]
+        );
+        assert!(config.security.cors_allow_credentials);
     }
 }

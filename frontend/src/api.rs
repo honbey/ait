@@ -19,6 +19,13 @@ thread_local! {
     static BASE_URL: OnceCell<String> = const { OnceCell::new() };
 }
 
+/// 30s cap for admin API requests. Streaming /v1 calls bypass this.
+const REQUEST_TIMEOUT_MS: u32 = 30_000;
+
+fn timeout_signal() -> web_sys::AbortSignal {
+    web_sys::AbortSignal::timeout_with_u32(REQUEST_TIMEOUT_MS)
+}
+
 struct CachedResponse {
     json: String,
     cached_at: f64,
@@ -115,6 +122,7 @@ async fn api_post<T: DeserializeOwned>(
     let url = format!("{}/{}", get_base_url(), path);
     let resp = Request::post(&url)
         .header("Content-Type", "application/json")
+        .abort_signal(Some(&timeout_signal()))
         .body(body.to_string())
         .map_err(|e| NetError::GlooError(e.to_string()))?
         .send()
@@ -133,6 +141,7 @@ async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> R
     let url = format!("{}/{}", get_base_url(), path);
     let resp = Request::put(&url)
         .header("Content-Type", "application/json")
+        .abort_signal(Some(&timeout_signal()))
         .body(body.to_string())
         .map_err(|e| NetError::GlooError(e.to_string()))?
         .send()
@@ -149,7 +158,10 @@ async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> R
 
 async fn api_delete(path: &str) -> Result<(), NetError> {
     let url = format!("{}/{}", get_base_url(), path);
-    let resp = Request::delete(&url).send().await?;
+    let resp = Request::delete(&url)
+        .abort_signal(Some(&timeout_signal()))
+        .send()
+        .await?;
     if resp.ok() {
         Ok(())
     } else {
@@ -162,7 +174,10 @@ async fn api_delete(path: &str) -> Result<(), NetError> {
 
 async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
     let url = format!("{}/{}", get_base_url(), path);
-    let resp = Request::get(&url).send().await?;
+    let resp = Request::get(&url)
+        .abort_signal(Some(&timeout_signal()))
+        .send()
+        .await?;
     if resp.ok() {
         resp.json().await
     } else {
@@ -173,24 +188,29 @@ async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
     }
 }
 
-async fn api_get_cached<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
+async fn api_get_cached<T: DeserializeOwned>(path: &str, force: bool) -> Result<T, NetError> {
     let key = path.to_string();
 
-    if let Some(cached) = FETCH_CACHE.with(|c| {
-        let map = c.borrow();
-        map.get(&key).and_then(|entry| {
-            if js_sys::Date::now() - entry.cached_at < CACHE_TTL_MS {
-                Some(entry.json.clone())
-            } else {
-                None
-            }
+    if !force
+        && let Some(cached) = FETCH_CACHE.with(|c| {
+            let map = c.borrow();
+            map.get(&key).and_then(|entry| {
+                if js_sys::Date::now() - entry.cached_at < CACHE_TTL_MS {
+                    Some(entry.json.clone())
+                } else {
+                    None
+                }
+            })
         })
-    }) {
+    {
         return serde_json::from_str(&cached).map_err(|e| NetError::GlooError(e.to_string()));
     }
 
     let url = format!("{}/{}", get_base_url(), path);
-    let resp = Request::get(&url).send().await?;
+    let resp = Request::get(&url)
+        .abort_signal(Some(&timeout_signal()))
+        .send()
+        .await?;
     if !resp.ok() {
         let status = resp.status();
         let err = response_to_error(resp).await;
@@ -235,6 +255,24 @@ pub async fn login_api(username: &str, password: &str) -> Result<(), NetError> {
 pub async fn logout_api() -> Result<(), NetError> {
     let _guard = Suppress401Guard::new();
     api_post::<serde_json::Value>("auth/logout", &serde_json::json!({})).await?;
+    Ok(())
+}
+
+pub async fn change_password_api(
+    current_password: &str,
+    new_password: &str,
+) -> Result<(), NetError> {
+    let username = use_context::<AuthContext>()
+        .and_then(|auth| auth.username.get_untracked())
+        .ok_or_else(|| NetError::GlooError("not logged in".into()))?;
+    api_put::<serde_json::Value>(
+        &format!("api/users/{}/password", username),
+        &serde_json::json!({
+            "current_password": current_password,
+            "new_password": new_password,
+        }),
+    )
+    .await?;
     Ok(())
 }
 
@@ -453,46 +491,69 @@ pub async fn delete_api_key(username: &str, key_id: &str) -> Result<(), NetError
     api_delete(&format!("api/users/{}/api-keys/{}", username, key_id)).await
 }
 
-pub async fn fetch_overview_stats(start_ts: i64, end_ts: i64) -> Result<OverviewStats, NetError> {
-    api_get_cached(&format!(
-        "api/stats?start_ts={}&end_ts={}",
-        start_ts, end_ts
-    ))
+pub async fn fetch_overview_stats(
+    start_ts: i64,
+    end_ts: i64,
+    force: bool,
+) -> Result<OverviewStats, NetError> {
+    api_get_cached(
+        &format!("api/stats?start_ts={}&end_ts={}", start_ts, end_ts),
+        force,
+    )
     .await
 }
 
-pub async fn fetch_model_dist(start_ts: i64, end_ts: i64) -> Result<Vec<ModelDistEntry>, NetError> {
-    api_get_cached(&format!(
-        "api/data/model-dist?start_ts={}&end_ts={}",
-        start_ts, end_ts
-    ))
+pub async fn fetch_model_dist(
+    start_ts: i64,
+    end_ts: i64,
+    force: bool,
+) -> Result<Vec<ModelDistEntry>, NetError> {
+    api_get_cached(
+        &format!(
+            "api/data/model-dist?start_ts={}&end_ts={}",
+            start_ts, end_ts
+        ),
+        force,
+    )
     .await
 }
 
-pub async fn fetch_token_dist(start_ts: i64, end_ts: i64) -> Result<Vec<TokenDistEntry>, NetError> {
-    api_get_cached(&format!(
-        "api/data/token-dist?start_ts={}&end_ts={}",
-        start_ts, end_ts
-    ))
+pub async fn fetch_token_dist(
+    start_ts: i64,
+    end_ts: i64,
+    force: bool,
+) -> Result<Vec<TokenDistEntry>, NetError> {
+    api_get_cached(
+        &format!(
+            "api/data/token-dist?start_ts={}&end_ts={}",
+            start_ts, end_ts
+        ),
+        force,
+    )
     .await
 }
 
 pub async fn fetch_request_buckets(
     start_ts: i64,
     end_ts: i64,
+    force: bool,
 ) -> Result<Vec<BucketEntry>, NetError> {
-    api_get_cached(&format!(
-        "api/data/requests?start_ts={}&end_ts={}",
-        start_ts, end_ts
-    ))
+    api_get_cached(
+        &format!("api/data/requests?start_ts={}&end_ts={}", start_ts, end_ts),
+        force,
+    )
     .await
 }
 
-pub async fn fetch_token_buckets(start_ts: i64, end_ts: i64) -> Result<Vec<BucketEntry>, NetError> {
-    api_get_cached(&format!(
-        "api/data/tokens?start_ts={}&end_ts={}",
-        start_ts, end_ts
-    ))
+pub async fn fetch_token_buckets(
+    start_ts: i64,
+    end_ts: i64,
+    force: bool,
+) -> Result<Vec<BucketEntry>, NetError> {
+    api_get_cached(
+        &format!("api/data/tokens?start_ts={}&end_ts={}", start_ts, end_ts),
+        force,
+    )
     .await
 }
 
@@ -532,7 +593,9 @@ pub struct PaginatedResponse<T> {
 
 fn push_qs(parts: &mut Vec<String>, key: &str, value: Option<impl std::fmt::Display>) {
     if let Some(v) = value {
-        parts.push(format!("{}={}", key, v));
+        let s = v.to_string();
+        let encoded = js_sys::encode_uri_component(&s);
+        parts.push(format!("{}={}", key, encoded.as_string().unwrap_or(s)));
     }
 }
 

@@ -3,11 +3,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub fn mask_api_key(key: &str) -> String {
-    if key.len() <= 9 {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 9 {
         "******".to_string()
     } else {
-        let prefix = &key[..6];
-        let suffix = &key[key.len() - 3..];
+        let prefix: String = chars[..6].iter().collect();
+        let suffix: String = chars[chars.len() - 3..].iter().collect();
         format!("{}******{}", prefix, suffix)
     }
 }
@@ -114,6 +115,37 @@ impl ApiKey {
     pub fn masked(&self) -> String {
         self.display.clone()
     }
+}
+
+/// Partial update patch for a provider: `None` fields are left unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct ProviderUpdate {
+    pub id: String,
+    pub name: Option<String>,
+    pub provider_type: Option<ProviderType>,
+    pub base_url: Option<String>,
+    /// `None` keeps the stored value, `Some("")` clears it.
+    pub api_key: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+/// Partial update patch for a model: `None` fields are left unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct ModelUpdate {
+    pub name: String,
+    pub provider_id: Option<String>,
+    pub upstream_model: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+/// Partial update patch for an API key: `None` fields are left unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct ApiKeyUpdate {
+    pub id: String,
+    pub name: Option<String>,
+    pub enabled: Option<bool>,
+    /// `None` keeps the stored value, `Some(dt)` with `dt.timestamp() == 0` clears it.
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -260,6 +292,7 @@ pub struct PaginatedResponse<T: Serialize> {
     pub per_page: u64,
 }
 
+#[derive(Default)]
 pub struct ProxyLogQueryParams {
     pub page: u64,
     pub per_page: u64,
@@ -290,4 +323,32 @@ pub enum LogEvent {
     Proxy(Box<ProxyEvent>),
     Audit(AuditEvent),
     Shutdown,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mask_ascii_key() {
+        assert_eq!(mask_api_key("sk-abc1234567890xyz"), "sk-abc******xyz");
+    }
+
+    #[test]
+    fn mask_multibyte_key_does_not_panic() {
+        // "密钥" x6 is 12 chars: first 6 + mask + last 3
+        let key = "密钥密钥密钥密钥密钥密钥";
+        let masked = mask_api_key(key);
+        assert_eq!(masked, "密钥密钥密钥******钥密钥");
+    }
+
+    #[test]
+    fn mask_short_key() {
+        assert_eq!(mask_api_key("sk-abcd"), "******");
+    }
+
+    #[test]
+    fn mask_empty_key() {
+        assert_eq!(mask_api_key(""), "******");
+    }
 }

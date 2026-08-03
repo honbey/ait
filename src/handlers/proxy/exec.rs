@@ -91,13 +91,25 @@ pub(crate) async fn proxy_non_streamed(
         start.elapsed().as_millis()
     );
     let timeout = Duration::from_secs(state.config.proxy.timeout_secs);
-    let bytes = tokio::time::timeout(timeout, response.bytes())
-        .await
-        .map_err(|_| AitError::upstream_error(408, "upstream read timeout").into_response())?
-        .map_err(|e| {
-            tracing::warn!("Upstream body read error: {}", e);
-            AitError::upstream_error(502, "upstream request failed").into_response()
-        })?;
+    let max_body = state.config.proxy.max_response_body_bytes as usize;
+    let mut body = Vec::new();
+    tokio::time::timeout(timeout, async {
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| {
+                tracing::warn!("Upstream body read error: {}", e);
+            })?;
+            if body.len() + chunk.len() > max_body {
+                return Err(());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok::<_, ()>(())
+    })
+    .await
+    .map_err(|_| AitError::upstream_error(408, "upstream read timeout").into_response())?
+    .map_err(|_| AitError::upstream_error(502, "upstream response too large").into_response())?;
+    let bytes = body;
     trace!(
         model = model_name,
         body_size = bytes.len(),
@@ -114,7 +126,14 @@ pub(crate) async fn proxy_non_streamed(
             body_str.to_string()
         };
         warn!("[proxy] upstream error {}: {}", status, truncated);
-        return Err(AitError::upstream_error(status.as_u16(), truncated).into_response());
+        // Keep the upstream error body out of the client response; it may
+        // contain internal paths or stack traces.  Only the status message
+        // reaches the client, the body is recorded in the request log.
+        return Err(
+            AitError::upstream_error(status.as_u16(), "upstream request failed")
+                .with_detail(truncated)
+                .into_response(),
+        );
     }
 
     let body_size = bytes.len();
@@ -197,7 +216,11 @@ pub(crate) async fn proxy_streamed(
     }
 
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
+        let timeout = Duration::from_secs(state.config.proxy.timeout_secs);
+        let body = tokio::time::timeout(timeout, response.text())
+            .await
+            .map_err(|_| AitError::upstream_error(408, "upstream read timeout").into_response())?
+            .unwrap_or_default();
         warn!("[proxy] upstream error {}: {}", status, body);
         let truncated = if body.len() > 512 {
             let end = body.floor_char_boundary(512);

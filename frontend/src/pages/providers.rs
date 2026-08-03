@@ -441,11 +441,9 @@ fn ProviderFormModal(
                     class=CLASS_INPUT
                     on:change=move |ev| provider_type.set(event_target_value(&ev))
                 >
-                    {{
+                    {move || {
                         let current = provider_type.get_untracked();
-                        let types = provider_types_resource
-                            .get_untracked()
-                            .filter(|types| !types.is_empty());
+                        let types = provider_types_resource.get().filter(|types| !types.is_empty());
                         if let Some(types) = types {
                             types
                                 .iter()

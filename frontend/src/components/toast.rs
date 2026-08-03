@@ -62,9 +62,8 @@ impl ToastManager {
         let id = NEXT_TOAST_ID.fetch_add(1, Ordering::Relaxed);
         self.toasts
             .update(|t| t.push(ToastData { id, level, message }));
-        if !self.active.get_untracked() {
-            return;
-        }
+        // Always start the removal timer; a toast queued while the container
+        // is inactive must not linger forever once it becomes visible.
         let toasts = self.toasts;
         let active = self.active;
         spawn_local(async move {

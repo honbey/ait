@@ -82,13 +82,21 @@ async fn ensure_echarts_loaded() -> bool {
                 s.set_src("/echarts.min.js");
 
                 js_sys::Promise::new(&mut |resolve: js_sys::Function, reject: js_sys::Function| {
+                    let onload_s = s.clone();
                     let onload = Closure::once(move || {
+                        // Clear handlers so the script element stops
+                        // referencing the closures, letting GC reclaim them.
+                        onload_s.set_onload(None);
+                        onload_s.set_onerror(None);
                         let _ = resolve.call0(&JsValue::UNDEFINED);
                     });
                     s.set_onload(Some(onload.as_ref().unchecked_ref()));
                     onload.forget();
 
+                    let onerror_s = s.clone();
                     let onerror = Closure::once(move || {
+                        onerror_s.set_onload(None);
+                        onerror_s.set_onerror(None);
                         let _ = reject.call0(&JsValue::UNDEFINED);
                     });
                     s.set_onerror(Some(onerror.as_ref().unchecked_ref()));
@@ -112,6 +120,11 @@ pub fn use_chart(node: NodeRef<leptos::html::Div>) -> RwSignal<Option<Chart>> {
     let loading = Arc::new(AtomicBool::new(false));
     let alive = Arc::new(AtomicBool::new(true));
     let observer = StoredValue::new_local(None::<web_sys::ResizeObserver>);
+    // Holds the ResizeObserver callback closure so it can be dropped on
+    // cleanup; without this the forget()'d closure leaks permanently.
+    let observer_cb = StoredValue::new_local(
+        None::<Closure<dyn FnMut(Vec<web_sys::ResizeObserverEntry>, web_sys::ResizeObserver)>>,
+    );
 
     Effect::new({
         let loading = loading.clone();
@@ -169,7 +182,7 @@ pub fn use_chart(node: NodeRef<leptos::html::Div>) -> RwSignal<Option<Chart>> {
             let el_ref: &web_sys::Element = el.as_ref();
             ro.observe(el_ref);
             observer.set_value(Some(ro));
-            cb.forget();
+            observer_cb.set_value(Some(cb));
 
             if el.offset_width() > 0
                 && chart.get_untracked().is_none()
@@ -202,6 +215,9 @@ pub fn use_chart(node: NodeRef<leptos::html::Div>) -> RwSignal<Option<Chart>> {
         if let Some(ro) = observer.get_value() {
             ro.disconnect();
         }
+        // Drop the callback closure to release its JS reference; the
+        // observer no longer references it after disconnect.
+        observer_cb.set_value(None);
         if let Some(c) = chart.get_untracked() {
             c.dispose();
         }

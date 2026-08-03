@@ -22,3 +22,20 @@ where
         .map_err(|_| BlockingError::Timeout)?
         .map_err(BlockingError::Join)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn returns_result_from_blocking_task() {
+        let result = run_blocking(|| 2 + 2).await.unwrap();
+        assert_eq!(result, 4);
+    }
+
+    #[tokio::test]
+    async fn panicking_task_returns_join_error() {
+        let err = run_blocking(|| panic!("boom")).await.unwrap_err();
+        assert!(matches!(err, BlockingError::Join(_)));
+    }
+}

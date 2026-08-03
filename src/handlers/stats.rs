@@ -62,3 +62,112 @@ pub async fn overview_stats(
         tpm,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{
+        create_test_state_fast_logs, insert_test_user, login_and_cookie, make_proxy_event,
+        send_request, test_router,
+    };
+    use axum::Router;
+    use axum::http::Method;
+    use chrono::Utc;
+
+    async fn setup() -> (Router, String) {
+        let (state, _dir) = create_test_state_fast_logs();
+        insert_test_user(&state.db, "alice", "secret123");
+        let router = test_router(state);
+        let cookie = login_and_cookie(&router, "alice", "secret123").await;
+        (router, cookie)
+    }
+
+    #[tokio::test]
+    async fn overview_stats_zero_without_data() {
+        let (router, cookie) = setup().await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/stats?start_ts=0&end_ts=1",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["provider_count"], 0);
+        assert_eq!(resp.json["model_count"], 0);
+        assert_eq!(resp.json["api_request_count"], 0);
+        assert_eq!(resp.json["token_consumption"], 0);
+        assert_eq!(resp.json["rpm"], 0.0);
+    }
+
+    #[tokio::test]
+    async fn overview_stats_counts_written_proxy_events() {
+        let (state, _dir) = create_test_state_fast_logs();
+        insert_test_user(&state.db, "alice", "secret123");
+        let now = Utc::now().timestamp();
+        state
+            .log_manager
+            .log_proxy(make_proxy_event("gpt-4", "success", 300));
+        state
+            .log_manager
+            .log_proxy(make_proxy_event("llama", "success", 150));
+        // Wait until the worker has flushed both events.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let count = state
+                .log_manager
+                .total_requests(now - 3600, now + 3600)
+                .await;
+            if count >= 2 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for proxy events"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let range = crate::handlers::analytics::validate_ts_range(
+            None,
+            None,
+            state.config.log.retention_days,
+        )
+        .unwrap();
+        let _ = range;
+        let router = test_router(state);
+        let cookie = login_and_cookie(&router, "alice", "secret123").await;
+        // Explicit range with headroom: the default end (now, second precision)
+        // can equal the event timestamp and the exclusive upper bound would
+        // exclude the row.
+        let resp = send_request(
+            &router,
+            Method::GET,
+            &format!("/api/stats?start_ts={}&end_ts={}", now - 3600, now + 3600),
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["api_request_count"], 2);
+        assert_eq!(resp.json["token_consumption"], 450);
+        assert_eq!(resp.json["provider_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn overview_stats_rejects_invalid_timestamps() {
+        let (router, cookie) = setup().await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/stats?start_ts=99999999999999999999",
+            Some(&cookie),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    }
+}

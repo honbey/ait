@@ -44,7 +44,7 @@ dependencies = [
 
 [[package]]
 name = "ait"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "axum",
@@ -66,6 +66,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "tower",
  "tower-http 0.7.0",
  "tracing",
  "tracing-subscriber",
@@ -74,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "ait-frontend"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "console_error_panic_hook",
  "futures-util",
