@@ -17,6 +17,7 @@ use crate::error::{AitError, internal_error, not_found};
 use crate::middleware::CACHE_TTL;
 use crate::providers::create_provider;
 use crate::ssrf;
+use crate::utils::mask_sensitive_value;
 
 /// Insert into the model cache only while under the entry cap; beyond it the
 /// entry is not cached at all. `DashMap::len` is approximate under concurrency,
@@ -201,6 +202,48 @@ pub async fn proxy_request(
     upstream_path: &str,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     let start = Instant::now();
+
+    if body_len as u64 > state.config.proxy.max_request_body_bytes {
+        return Err(AitError::bad_request("request body exceeds max allowed size").into_response());
+    }
+
+    if state.dlp.is_enabled()
+        && let Some(value) = state.dlp.scan(&body)
+    {
+        let reason = format!(
+            "blocked by DLP: sensitive value '{}' matched",
+            mask_sensitive_value(value, 3, 2)
+        );
+        state.log_manager.log_proxy(ProxyEvent {
+            timestamp: Utc::now(),
+            request_id: request_id.0,
+            username: Some(session.username.clone()),
+            api_key_name: session.api_key_name.clone(),
+            model_name: body
+                .get("model")
+                .and_then(|m| m.as_str())
+                .unwrap_or("blocked")
+                .to_string(),
+            provider_name: "unknown".to_string(),
+            prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
+            cached_tokens: None,
+            latency_ms: start.elapsed().as_millis() as i64,
+            status: "400".to_string(),
+            endpoint: upstream_path.to_string(),
+            is_streaming: false,
+            time_to_first_token_ms: None,
+            upstream_model: "blocked".to_string(),
+            provider_type: "unknown".to_string(),
+            response_body_size: None,
+            error_message: Some(reason),
+            client_ip: client_ip.map(|ip| ip.to_string()),
+        });
+        return Err(
+            AitError::bad_request("request blocked by sensitive data rule").into_response(),
+        );
+    }
 
     let model_name = body.get("model").and_then(|m| m.as_str()).ok_or_else(|| {
         AitError::bad_request("Missing 'model' field in request body").into_response()
@@ -473,6 +516,10 @@ fn count_prompt_tokens(body_len: usize) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::{RequestId, SessionUser};
+    use crate::test_utils::create_test_state_dlp;
+    use axum::Extension;
+    use bytes::Bytes;
 
     #[test]
     fn insert_model_cache_respects_cap() {
@@ -491,5 +538,69 @@ mod tests {
         let map = dashmap::DashMap::new();
         insert_model_cache(&map, "m0", (None, Instant::now()), 0);
         assert!(map.is_empty());
+    }
+
+    fn session() -> SessionUser {
+        SessionUser {
+            username: "tester".to_string(),
+            api_key_name: Some("test-key".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn dlp_blocks_request_containing_sensitive_value() {
+        let (state, _dir) = create_test_state_dlp(&["13800138000"]);
+        let body = serde_json::json!({
+            "model": "x",
+            "messages": [{"role": "user", "content": "my phone is 13800138000"}]
+        });
+        let result = chat_completions(
+            State(state),
+            Extension(session()),
+            Extension(Some("127.0.0.1".parse().unwrap())),
+            Extension(RequestId("r1".to_string())),
+            Bytes::from(serde_json::to_vec(&body).unwrap()),
+        )
+        .await;
+        let (status, _) = result.unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn dlp_allows_request_without_sensitive_value() {
+        let (state, _dir) = create_test_state_dlp(&["13800138000"]);
+        let body = serde_json::json!({
+            "model": "x",
+            "messages": [{"role": "user", "content": "no sensitive data here"}]
+        });
+        let result = chat_completions(
+            State(state),
+            Extension(session()),
+            Extension(Some("127.0.0.1".parse().unwrap())),
+            Extension(RequestId("r2".to_string())),
+            Bytes::from(serde_json::to_vec(&body).unwrap()),
+        )
+        .await;
+        // DLP passes; the request fails later (unknown model -> 404), not at 400.
+        let (status, _) = result.unwrap_err();
+        assert_ne!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn dlp_request_size_limit_blocks_oversized_body() {
+        let (mut state, _dir) = create_test_state_dlp(&[]);
+        // Use a small limit so the test does not allocate a multi-megabyte body.
+        state.config.proxy.max_request_body_bytes = 16;
+        let body = serde_json::json!({ "model": "x", "content": "x".repeat(17) });
+        let result = chat_completions(
+            State(state),
+            Extension(session()),
+            Extension(Some("127.0.0.1".parse().unwrap())),
+            Extension(RequestId("r3".to_string())),
+            Bytes::from(serde_json::to_vec(&body).unwrap()),
+        )
+        .await;
+        let (status, _) = result.unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }

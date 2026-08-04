@@ -69,6 +69,15 @@ pub struct ProxyConfig {
     pub sse_idle_timeout_secs: u64,
     pub connect_timeout_secs: u64,
     pub max_response_body_bytes: u64,
+    pub max_request_body_bytes: u64,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct DlpConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub sensitive_values: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -76,6 +85,8 @@ pub struct SecurityConfig {
     pub ssrf_allowed_cidrs: Vec<String>,
     pub cors_allowed_origins: Vec<String>,
     pub cors_allow_credentials: bool,
+    #[serde(default)]
+    pub dlp: DlpConfig,
 }
 
 impl ConfigApp {
@@ -118,9 +129,12 @@ impl ConfigApp {
             .set_default("proxy.sse_idle_timeout_secs", 60u64)?
             .set_default("proxy.connect_timeout_secs", 30u64)?
             .set_default("proxy.max_response_body_bytes", 8u64 * 1024 * 1024)?
+            .set_default("proxy.max_request_body_bytes", 8u64 * 1024 * 1024)?
             .set_default("security.ssrf_allowed_cidrs", Vec::<String>::new())?
             .set_default("security.cors_allowed_origins", Vec::<String>::new())?
             .set_default("security.cors_allow_credentials", false)?
+            .set_default("security.dlp.enabled", false)?
+            .set_default("security.dlp.sensitive_values", Vec::<String>::new())?
             .add_source(File::new(config_file, FileFormat::Toml).required(false))
             .add_source(Environment::with_prefix("AIT").separator("_"))
             .build()?
@@ -278,5 +292,34 @@ cors_allow_credentials = true
             vec!["https://app.example.com"]
         );
         assert!(config.security.cors_allow_credentials);
+    }
+
+    #[test]
+    fn dlp_defaults_disabled() {
+        let config = ConfigApp::new(Some("config/ait.toml.example")).unwrap();
+        assert!(!config.security.dlp.enabled);
+        assert!(config.security.dlp.sensitive_values.is_empty());
+        assert_eq!(config.proxy.max_request_body_bytes, 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn dlp_toml_override() {
+        let (_dir, path) = write_toml(
+            r#"
+[proxy]
+max_request_body_bytes = 1048576
+
+[security.dlp]
+enabled = true
+sensitive_values = ["110101199001011234", "13800138000"]
+"#,
+        );
+        let config = ConfigApp::new(Some(&path)).unwrap();
+        assert!(config.security.dlp.enabled);
+        assert_eq!(
+            config.security.dlp.sensitive_values,
+            vec!["110101199001011234", "13800138000"]
+        );
+        assert_eq!(config.proxy.max_request_body_bytes, 1048576);
     }
 }

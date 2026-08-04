@@ -4,6 +4,7 @@ use crate::config::ConfigApp;
 use crate::db::Database;
 use crate::db::logger::LogManager;
 use crate::db::{ApiKeyInfo, Model, Provider, SessionUser};
+use crate::dlp::DlpScanner;
 use crate::error::AppInitError;
 use crate::handlers::users::create_user;
 use crate::middleware::CACHE_TTL;
@@ -37,6 +38,7 @@ pub struct AppState {
     pub model_cache: Arc<DashMap<String, ModelCacheEntry>>,
     pub provider_cache: Arc<DashMap<String, ProviderCacheEntry>>,
     pub ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
+    pub dlp: DlpScanner,
 }
 
 impl AppState {
@@ -98,6 +100,7 @@ impl AppState {
         let model_cache: Arc<DashMap<String, ModelCacheEntry>> = Arc::new(DashMap::new());
         let provider_cache: Arc<DashMap<String, ProviderCacheEntry>> = Arc::new(DashMap::new());
         let ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
+        let dlp = DlpScanner::new(&config.security.dlp);
         spawn_caches_cleanup(
             session_cache.clone(),
             api_key_cache.clone(),
@@ -122,6 +125,7 @@ impl AppState {
             model_cache,
             provider_cache,
             ssrf_dns_cache,
+            dlp,
         })
     }
 }
