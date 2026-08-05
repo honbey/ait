@@ -85,10 +85,18 @@ timeout_secs = 300
 connect_timeout_secs = 30
 sse_idle_timeout_secs = 60
 stream = true
+max_response_body_bytes = 8388608
+max_request_body_bytes = 8388608
 
 [security]
 cors_allowed_origins = []
+cors_allow_credentials = false
 ssrf_allowed_cidrs = []
+
+# 请求体敏感信息检测（DLP）
+[security.dlp]
+enabled = false
+sensitive_values = []
 ```
 
 **注意**：大部分配置项都可通过 `AIT_<SECTION>_<KEY>` 环境变量覆盖，例如：
