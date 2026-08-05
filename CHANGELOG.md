@@ -1,5 +1,20 @@
 # 更新日志
 
+## [v0.1.8] - 2026-08-05
+
+### 新增功能
+
+- **请求体 DLP 检测** - 新增 `security.dlp` 配置（`enabled` + `sensitive_values`），请求体 JSON 字符串值命中配置敏感字面量（子串匹配、区分大小写）即阻断请求，被掩码的敏感值记录在代理日志 `error_message`
+- **请求体大小上限** - 新增 `proxy.max_request_body_bytes`（默认 8MB），超出直接返回 400
+
+### 修复
+
+- **代理日志时间戳** - 后端返回秒级时间戳，前端误按微秒换算导致时间显示错误
+
+### Chore
+
+- README 与示例配置补齐实际配置项（`max_response_body_bytes`、`max_request_body_bytes`、`cors_allow_credentials`、`security.dlp`、`connect_timeout_secs`、`sse_idle_timeout_secs`）
+
 ## [v0.1.7] - 2026-08-03
 
 ### 新增功能
