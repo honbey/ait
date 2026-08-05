@@ -2,6 +2,7 @@ mod app;
 mod blocking;
 mod config;
 mod db;
+mod dlp;
 mod error;
 use crate::error::not_found;
 mod handlers;
@@ -9,6 +10,7 @@ mod middleware;
 mod providers;
 mod rate_limiter;
 mod ssrf;
+mod utils;
 
 pub(crate) use blocking::run_blocking;
 

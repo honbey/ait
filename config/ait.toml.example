@@ -63,8 +63,16 @@ tower_http_trace = "info"
 [proxy]
 # 代理请求超时时间
 timeout_secs = 300
+# 连接上游超时时间（秒）
+connect_timeout_secs = 30
+# SSE 空闲超时时间（秒）
+sse_idle_timeout_secs = 60
 # 是否支持流失传输
 stream = true
+# 响应体大小上限（字节），超出直接返回 400
+max_response_body_bytes = 8388608
+# 请求体大小上限（字节），超出直接返回 400
+max_request_body_bytes = 8388608
 
 [security]
 # 允许的跨域来源域名，空列表则拒绝所有跨域请求（同源部署不需要配置）
@@ -77,3 +85,11 @@ cors_allow_credentials = false
 # 例如 ssrf_allowed_cidrs = ["127.0.0.1/32", "::1/128"] 允许本机 Ollama/LocalAI
 # 支持单 IP（自动 /32 或 /128）和 CIDR 段
 ssrf_allowed_cidrs = []
+
+# 请求体敏感信息检测（DLP）
+[security.dlp]
+# 是否启用 DLP 检测
+enabled = false
+# 命中即阻断的敏感值字面量列表（子串匹配、区分大小写）
+# 例如 sensitive_values = ["110101199001011234", "13800138000", "sk-xxxxxxxxxx"]
+sensitive_values = []

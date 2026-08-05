@@ -526,7 +526,7 @@ pub fn LogsPage() -> impl IntoView {
                                                                     on:click=move |_| detail_item.set(Some(entry_clone.clone()))
                                                                 >
                                                                     <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
-                                                                        {timestamp_str(e.timestamp / 1_000_000)}
+                                                                        {timestamp_str(e.timestamp)}
                                                                     </td>
                                                                     <td class="px-6 py-4 text-gray-800 dark:text-gray-200 font-medium whitespace-nowrap">
                                                                         {e.provider_name}
@@ -643,7 +643,7 @@ pub fn LogsPage() -> impl IntoView {
                             <div class=CLASS_DETAIL_DIVIDER>
                                 <DetailRow label=ts!(CreatedAt)>
                                     <span class=CLASS_DETAIL_VALUE_MONO>
-                                        {timestamp_str(item.timestamp / 1_000_000)}
+                                        {timestamp_str(item.timestamp)}
                                     </span>
                                 </DetailRow>
                                 <DetailRow label=ts!(Providers)>

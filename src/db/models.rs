@@ -2,16 +2,7 @@ use chrono::serde::{ts_seconds, ts_seconds_option};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub fn mask_api_key(key: &str) -> String {
-    let chars: Vec<char> = key.chars().collect();
-    if chars.len() <= 9 {
-        "******".to_string()
-    } else {
-        let prefix: String = chars[..6].iter().collect();
-        let suffix: String = chars[chars.len() - 3..].iter().collect();
-        format!("{}******{}", prefix, suffix)
-    }
-}
+pub use crate::utils::mask_api_key;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
@@ -323,32 +314,4 @@ pub enum LogEvent {
     Proxy(Box<ProxyEvent>),
     Audit(AuditEvent),
     Shutdown,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mask_ascii_key() {
-        assert_eq!(mask_api_key("sk-abc1234567890xyz"), "sk-abc******xyz");
-    }
-
-    #[test]
-    fn mask_multibyte_key_does_not_panic() {
-        // "密钥" x6 is 12 chars: first 6 + mask + last 3
-        let key = "密钥密钥密钥密钥密钥密钥";
-        let masked = mask_api_key(key);
-        assert_eq!(masked, "密钥密钥密钥******钥密钥");
-    }
-
-    #[test]
-    fn mask_short_key() {
-        assert_eq!(mask_api_key("sk-abcd"), "******");
-    }
-
-    #[test]
-    fn mask_empty_key() {
-        assert_eq!(mask_api_key(""), "******");
-    }
 }

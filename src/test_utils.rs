@@ -1,11 +1,12 @@
 use crate::app::AppState;
 use crate::config::{
-    AuthConfig, ConfigApp, DatabaseConfig, LogConfig, ProxyConfig, RateLimitConfig, SecurityConfig,
-    ServerConfig,
+    AuthConfig, ConfigApp, DatabaseConfig, DlpConfig, LogConfig, ProxyConfig, RateLimitConfig,
+    SecurityConfig, ServerConfig,
 };
 use crate::db::{
     AccessEvent, AuditEvent, Database, LogManager, Model, Provider, ProviderType, ProxyEvent, User,
 };
+use crate::dlp::DlpScanner;
 use crate::rate_limiter::RateLimiter;
 use axum::Router;
 use axum::body::Body;
@@ -114,11 +115,13 @@ pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
             sse_idle_timeout_secs: 60,
             connect_timeout_secs: 30,
             max_response_body_bytes: 8 * 1024 * 1024,
+            max_request_body_bytes: 8 * 1024 * 1024,
         },
         security: SecurityConfig {
             ssrf_allowed_cidrs: vec!["127.0.0.1/8".to_string()],
             cors_allowed_origins: vec![],
             cors_allow_credentials: false,
+            dlp: DlpConfig::default(),
         },
     }
 }
@@ -139,6 +142,7 @@ fn build_state(config: ConfigApp, dir: TempDir) -> (AppState, TempDir) {
     let db =
         Arc::new(Database::new(&config.database.path, config.auth.max_api_keys_per_user).unwrap());
     let log_manager = LogManager::new(&config.log).unwrap();
+    let dlp = DlpScanner::new(&config.security.dlp);
     let state = AppState {
         config,
         db,
@@ -152,6 +156,7 @@ fn build_state(config: ConfigApp, dir: TempDir) -> (AppState, TempDir) {
         model_cache: Arc::new(DashMap::new()),
         provider_cache: Arc::new(DashMap::new()),
         ssrf_dns_cache: Arc::new(DashMap::new()),
+        dlp,
     };
     (state, dir)
 }
@@ -176,6 +181,19 @@ pub fn create_test_state_fast_logs() -> (AppState, TempDir) {
         dir.path().join("test.db").to_str().unwrap(),
         dir.path().join("test-logs.duckdb").to_str().unwrap(),
     );
+    build_state(config, dir)
+}
+
+/// Build a test AppState with the DLP scanner enabled for the given literal
+/// values, so handlers exercise the sensitive-data block path.
+pub fn create_test_state_dlp(values: &[&str]) -> (AppState, TempDir) {
+    let dir = TempDir::new().unwrap();
+    let mut config = test_config(
+        dir.path().join("test.db").to_str().unwrap(),
+        dir.path().join("test-logs.duckdb").to_str().unwrap(),
+    );
+    config.security.dlp.enabled = true;
+    config.security.dlp.sensitive_values = values.iter().map(|s| s.to_string()).collect();
     build_state(config, dir)
 }
 
