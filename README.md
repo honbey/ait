@@ -119,6 +119,32 @@ ait
 ait -c /path/to/config.toml
 ```
 
+### Docker 部署
+
+构建镜像并启动（首次构建需要下载依赖，耗时较长）：
+
+```bash
+docker build -t ait .
+docker run -d --name ait -p 8000:8000 \
+  -e AIT_AUTH_BOOTSTRAP_PASSWORD="your_password" \
+  -v ait-data:/app/data \
+  ait
+```
+
+或使用 docker compose（配置见 `docker-compose.yml`，记得修改默认管理员密码）：
+
+```bash
+docker compose up -d
+```
+
+注意事项：
+
+- 容器默认监听 `0.0.0.0:8000`（`AIT_SERVER_HOST` / `AIT_SERVER_PORT` 可覆盖）
+- **必须提供 `AIT_AUTH_BOOTSTRAP_PASSWORD`**（或挂载配置文件）初始化管理员，否则无法启动
+- 数据（SQLite / DuckDB 日志）持久化在卷 `/app/data`
+- 其余配置通过 `AIT_<SECTION>_<KEY>` 环境变量覆盖，或挂载自定义配置文件到 `/app/config/ait.toml`
+- `docker stop` 会通过 SIGINT 触发优雅停机
+
 ## Web 管理界面
 
 构建前端后将 `frontend/dist/` 与后端二进制一起部署，启动后通过 `http://{host}:{port}` 访问。

@@ -1,0 +1,28 @@
+# Version control / CI
+.git
+.github
+.opencode
+.vscode
+.gitignore
+.gitmessage
+.gitattributes
+
+# Rust build artifacts
+target
+frontend/target
+
+# Frontend build output
+frontend/dist
+
+# Runtime data (SQLite / DuckDB)
+data
+
+# Secrets
+.env
+.env.*
+
+# Docs and local assets
+.docs
+
+# Misc
+*.log
