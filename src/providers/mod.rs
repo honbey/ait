@@ -86,7 +86,11 @@ impl ProviderCore {
 
         if stream {
             body["stream"] = serde_json::Value::Bool(true);
-            body["stream_options"] = serde_json::json!({"include_usage": true});
+            // stream_options is a chat.completions-only parameter; the
+            // Responses API reports usage in its terminal SSE event.
+            if upstream_path != "/responses" {
+                body["stream_options"] = serde_json::json!({"include_usage": true});
+            }
         }
 
         let body_bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;

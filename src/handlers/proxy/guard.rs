@@ -15,13 +15,27 @@ pub(crate) fn parse_usage(body: &[u8]) -> UsageTokens {
         return UsageTokens::default();
     };
 
-    let usage = val.get("usage");
+    // Responses API streaming terminal events (response.completed etc.)
+    // nest usage inside the response object; all other payloads carry it
+    // at the top level.
+    let usage = val
+        .get("usage")
+        .or_else(|| val.get("response").and_then(|r| r.get("usage")));
 
-    let prompt_tokens = usage.and_then(|u| u.get("prompt_tokens").and_then(|v| v.as_i64()));
+    let prompt_tokens = usage
+        .and_then(|u| u.get("prompt_tokens").and_then(|v| v.as_i64()))
+        .or_else(|| usage.and_then(|u| u.get("input_tokens").and_then(|v| v.as_i64())));
 
-    let completion_tokens = usage.and_then(|u| u.get("completion_tokens").and_then(|v| v.as_i64()));
+    let completion_tokens = usage
+        .and_then(|u| u.get("completion_tokens").and_then(|v| v.as_i64()))
+        .or_else(|| usage.and_then(|u| u.get("output_tokens").and_then(|v| v.as_i64())));
 
-    let total_tokens = usage.and_then(|u| u.get("total_tokens").and_then(|v| v.as_i64()));
+    let total_tokens = usage
+        .and_then(|u| u.get("total_tokens").and_then(|v| v.as_i64()))
+        .or_else(|| match (prompt_tokens, completion_tokens) {
+            (Some(prompt), Some(completion)) => Some(prompt + completion),
+            _ => None,
+        });
 
     let cached_tokens = usage
         .and_then(|u| {
@@ -29,6 +43,11 @@ pub(crate) fn parse_usage(body: &[u8]) -> UsageTokens {
                 .or_else(|| u.get("completion_tokens_details"))
         })
         .and_then(|d| d.get("cached_tokens").and_then(|v| v.as_i64()))
+        .or_else(|| {
+            usage
+                .and_then(|u| u.get("input_tokens_details"))
+                .and_then(|d| d.get("cached_tokens").and_then(|v| v.as_i64()))
+        })
         .or_else(|| usage.and_then(|u| u.get("cached_tokens").and_then(|v| v.as_i64())));
 
     UsageTokens {
@@ -36,6 +55,68 @@ pub(crate) fn parse_usage(body: &[u8]) -> UsageTokens {
         completion_tokens,
         total_tokens,
         cached_tokens,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_chat_completions_usage() {
+        let body = br#"{"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30,"prompt_tokens_details":{"cached_tokens":5}}}"#;
+        let u = parse_usage(body);
+        assert_eq!(u.prompt_tokens, Some(10));
+        assert_eq!(u.completion_tokens, Some(20));
+        assert_eq!(u.total_tokens, Some(30));
+        assert_eq!(u.cached_tokens, Some(5));
+    }
+
+    #[test]
+    fn parse_responses_usage() {
+        let body = br#"{"id":"resp-1","object":"response","usage":{"input_tokens":100,"output_tokens":83,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":183}}"#;
+        let u = parse_usage(body);
+        assert_eq!(u.prompt_tokens, Some(100));
+        assert_eq!(u.completion_tokens, Some(83));
+        assert_eq!(u.total_tokens, Some(183));
+        assert_eq!(u.cached_tokens, None);
+    }
+
+    #[test]
+    fn parse_responses_usage_with_cached_tokens() {
+        let body = br#"{"usage":{"input_tokens":200,"output_tokens":50,"input_tokens_details":{"cached_tokens":150}}}"#;
+        let u = parse_usage(body);
+        assert_eq!(u.prompt_tokens, Some(200));
+        assert_eq!(u.completion_tokens, Some(50));
+        // total_tokens missing -> falls back to input + output
+        assert_eq!(u.total_tokens, Some(250));
+        assert_eq!(u.cached_tokens, Some(150));
+    }
+
+    #[test]
+    fn parse_responses_streaming_terminal_event_usage() {
+        let body = br#"{"type":"response.completed","sequence_number":10,"response":{"id":"resp-2","status":"completed","usage":{"input_tokens":7,"output_tokens":3}}}"#;
+        let u = parse_usage(body);
+        assert_eq!(u.prompt_tokens, Some(7));
+        assert_eq!(u.completion_tokens, Some(3));
+        assert_eq!(u.total_tokens, Some(10));
+    }
+
+    #[test]
+    fn parse_usage_ignores_payloads_without_usage() {
+        let body = br#"{"type":"response.output_text.delta","delta":"hello"}"#;
+        let u = parse_usage(body);
+        assert_eq!(u.prompt_tokens, None);
+        assert_eq!(u.completion_tokens, None);
+        assert_eq!(u.total_tokens, None);
+        assert_eq!(u.cached_tokens, None);
+    }
+
+    #[test]
+    fn parse_usage_invalid_json_returns_default() {
+        let u = parse_usage(b"not json");
+        assert_eq!(u.prompt_tokens, None);
+        assert_eq!(u.completion_tokens, None);
     }
 }
 

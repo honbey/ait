@@ -60,7 +60,7 @@ impl ProviderType {
 
     pub fn supports_endpoint(&self, path: &str) -> bool {
         match self {
-            Self::DeepSeek => path == "/chat/completions",
+            Self::DeepSeek => matches!(path, "/chat/completions" | "/responses"),
             Self::Zhipu => matches!(path, "/chat/completions" | "/embeddings"),
             _ => matches!(
                 path,
@@ -314,4 +314,31 @@ pub enum LogEvent {
     Proxy(Box<ProxyEvent>),
     Audit(AuditEvent),
     Shutdown,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deepseek_supports_chat_and_responses_endpoints() {
+        let t = ProviderType::DeepSeek;
+        assert!(t.supports_endpoint("/chat/completions"));
+        assert!(t.supports_endpoint("/responses"));
+        assert!(!t.supports_endpoint("/completions"));
+        assert!(!t.supports_endpoint("/embeddings"));
+    }
+
+    #[test]
+    fn openai_compat_supports_all_endpoints() {
+        let t = ProviderType::OpenAICompat;
+        for path in [
+            "/chat/completions",
+            "/completions",
+            "/embeddings",
+            "/responses",
+        ] {
+            assert!(t.supports_endpoint(path), "{path} should be allowed");
+        }
+    }
 }
