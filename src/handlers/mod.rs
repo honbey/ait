@@ -6,7 +6,6 @@ pub mod models;
 pub mod providers;
 pub mod proxy;
 pub mod stats;
-pub mod users;
 
 use crate::error::AitError;
 

@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, Model, ModelUpdate, RequestId, SessionUser};
+use crate::db::{AuditEvent, Model, ModelUpdate, RequestId};
 use crate::error::{AitError, internal_error, not_found};
 use crate::handlers::{model_name_chars, upstream_model_chars, uuid_chars, validate_string};
 
@@ -75,7 +75,6 @@ impl From<CreateModelRequest> for Model {
 
 pub async fn create_model(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
     Extension(request_id): Extension<RequestId>,
     Json(input): Json<CreateModelRequest>,
 ) -> Result<(StatusCode, Json<ModelResponse>), (StatusCode, Json<AitError>)> {
@@ -105,7 +104,6 @@ pub async fn create_model(
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
-        username: session.username.clone(),
         action: "create".into(),
         resource: "model".into(),
         resource_id: inserted.name.clone(),
@@ -117,7 +115,6 @@ pub async fn create_model(
 
 pub async fn list_models(
     State(state): State<AppState>,
-    Extension(_session): Extension<SessionUser>,
 ) -> Result<Json<Vec<ModelResponse>>, (StatusCode, Json<AitError>)> {
     let db = state.db.clone();
     let models = crate::run_blocking(move || db.list_models())
@@ -129,7 +126,6 @@ pub async fn list_models(
 
 pub async fn get_model(
     State(state): State<AppState>,
-    Extension(_session): Extension<SessionUser>,
     Path(name): Path<String>,
 ) -> Result<Json<ModelResponse>, (StatusCode, Json<AitError>)> {
     let db = state.db.clone();
@@ -145,7 +141,6 @@ pub async fn get_model(
 
 pub async fn delete_model(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
     Extension(request_id): Extension<RequestId>,
     Path(name): Path<String>,
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
@@ -163,7 +158,6 @@ pub async fn delete_model(
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
-        username: session.username.clone(),
         action: "delete".into(),
         resource: "model".into(),
         resource_id: name,
@@ -175,7 +169,6 @@ pub async fn delete_model(
 
 pub async fn update_model(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
     Extension(request_id): Extension<RequestId>,
     Path(name): Path<String>,
     Json(input): Json<UpdateModelRequest>,
@@ -205,7 +198,6 @@ pub async fn update_model(
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
-        username: session.username.clone(),
         action: "update".into(),
         resource: "model".into(),
         resource_id: model_name,
@@ -218,27 +210,22 @@ pub async fn update_model(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{
-        create_test_state, insert_test_user, login_and_cookie, send_request, test_router,
-    };
+    use crate::test_utils::{create_test_state, send_request, test_router};
     use axum::Router;
     use axum::http::Method;
 
-    async fn setup() -> (Router, String) {
+    async fn setup() -> Router {
         let (state, _dir) = create_test_state();
-        insert_test_user(&state.db, "alice", "secret123");
-        let router = test_router(state);
-        let cookie = login_and_cookie(&router, "alice", "secret123").await;
-        (router, cookie)
+        test_router(state)
     }
 
     /// Create a provider and return its id, so models have a valid provider.
-    async fn create_provider(router: &Router, cookie: &str) -> String {
+    async fn create_provider(router: &Router) -> String {
         let resp = send_request(
             router,
             Method::POST,
             "/api/providers",
-            Some(cookie),
+            None,
             None,
             Some(serde_json::json!({
                 "name": "test-provider",
@@ -252,17 +239,12 @@ mod tests {
         resp.json["id"].as_str().unwrap().to_string()
     }
 
-    async fn create_model(
-        router: &Router,
-        cookie: &str,
-        provider_id: &str,
-        name: &str,
-    ) -> serde_json::Value {
+    async fn create_model(router: &Router, provider_id: &str, name: &str) -> serde_json::Value {
         let resp = send_request(
             router,
             Method::POST,
             "/api/models",
-            Some(cookie),
+            None,
             None,
             Some(serde_json::json!({
                 "name": name,
@@ -282,9 +264,9 @@ mod tests {
 
     #[tokio::test]
     async fn create_model_returns_created() {
-        let (router, cookie) = setup().await;
-        let provider_id = create_provider(&router, &cookie).await;
-        let json = create_model(&router, &cookie, &provider_id, "gpt-test").await;
+        let router = setup().await;
+        let provider_id = create_provider(&router).await;
+        let json = create_model(&router, &provider_id, "gpt-test").await;
         assert_eq!(json["name"], "gpt-test");
         assert_eq!(json["provider_id"], provider_id);
         assert_eq!(json["upstream_model"], "gpt-test");
@@ -293,13 +275,13 @@ mod tests {
 
     #[tokio::test]
     async fn create_model_invalid_name_bad_request() {
-        let (router, cookie) = setup().await;
-        let provider_id = create_provider(&router, &cookie).await;
+        let router = setup().await;
+        let provider_id = create_provider(&router).await;
         let resp = send_request(
             &router,
             Method::POST,
             "/api/models",
-            Some(&cookie),
+            None,
             None,
             Some(serde_json::json!({
                 "name": "bad#name",
@@ -315,12 +297,12 @@ mod tests {
 
     #[tokio::test]
     async fn create_model_unknown_provider_not_found() {
-        let (router, cookie) = setup().await;
+        let router = setup().await;
         let resp = send_request(
             &router,
             Method::POST,
             "/api/models",
-            Some(&cookie),
+            None,
             None,
             Some(serde_json::json!({
                 "name": "gpt-test",
@@ -335,19 +317,11 @@ mod tests {
 
     #[tokio::test]
     async fn list_and_get_model() {
-        let (router, cookie) = setup().await;
-        let provider_id = create_provider(&router, &cookie).await;
-        create_model(&router, &cookie, &provider_id, "gpt-test").await;
+        let router = setup().await;
+        let provider_id = create_provider(&router).await;
+        create_model(&router, &provider_id, "gpt-test").await;
 
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/api/models",
-            Some(&cookie),
-            None,
-            None,
-        )
-        .await;
+        let resp = send_request(&router, Method::GET, "/api/models", None, None, None).await;
         assert_eq!(resp.status, StatusCode::OK);
         let models = resp.json.as_array().expect("list should return an array");
         assert_eq!(models.len(), 1);
@@ -357,7 +331,7 @@ mod tests {
             &router,
             Method::GET,
             "/api/models/gpt-test",
-            Some(&cookie),
+            None,
             None,
             None,
         )
@@ -368,14 +342,14 @@ mod tests {
 
     #[tokio::test]
     async fn update_model_changes_upstream() {
-        let (router, cookie) = setup().await;
-        let provider_id = create_provider(&router, &cookie).await;
-        create_model(&router, &cookie, &provider_id, "gpt-test").await;
+        let router = setup().await;
+        let provider_id = create_provider(&router).await;
+        create_model(&router, &provider_id, "gpt-test").await;
         let resp = send_request(
             &router,
             Method::PUT,
             "/api/models/gpt-test",
-            Some(&cookie),
+            None,
             None,
             Some(serde_json::json!({
                 "upstream_model": "gpt-upstream-v2",
@@ -390,14 +364,14 @@ mod tests {
 
     #[tokio::test]
     async fn delete_model_removes_and_get_returns_404() {
-        let (router, cookie) = setup().await;
-        let provider_id = create_provider(&router, &cookie).await;
-        create_model(&router, &cookie, &provider_id, "gpt-test").await;
+        let router = setup().await;
+        let provider_id = create_provider(&router).await;
+        create_model(&router, &provider_id, "gpt-test").await;
         let resp = send_request(
             &router,
             Method::DELETE,
             "/api/models/gpt-test",
-            Some(&cookie),
+            None,
             None,
             None,
         )
@@ -407,7 +381,7 @@ mod tests {
             &router,
             Method::GET,
             "/api/models/gpt-test",
-            Some(&cookie),
+            None,
             None,
             None,
         )

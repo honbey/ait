@@ -103,7 +103,7 @@
   "retry": "重试",
   "save": "保存",
   "save_create": "创建",
-  "session_expired": "会话已过期，请重新登录",
+  "api_key_expired": "API 密钥无效或已过期",
   "start_date": "开始日期",
   "status_disabled": "禁用",
   "status_enabled": "启用",

@@ -16,7 +16,6 @@ pub(crate) fn hash_key(key: &str) -> String {
 
 pub struct Database {
     conn: Arc<Mutex<Connection>>,
-    max_api_keys_per_user: u64,
 }
 
 #[derive(Debug)]
@@ -97,30 +96,11 @@ fn row_to_api_key(row: &Row) -> rusqlite::Result<ApiKey> {
 fn row_to_api_key_info(row: &Row) -> rusqlite::Result<ApiKeyInfo> {
     Ok(ApiKeyInfo {
         id: row.get(0)?,
-        username: row.get(1)?,
-        name: row.get(2)?,
-        enabled: row.get::<_, i32>(3)? != 0,
-        expires_at: opt_ts(row.get::<_, Option<i64>>(4)?),
-        created_at: ts(row.get::<_, i64>(5)?),
+        name: row.get(1)?,
+        enabled: row.get::<_, i32>(2)? != 0,
+        expires_at: opt_ts(row.get::<_, Option<i64>>(3)?),
+        created_at: ts(row.get::<_, i64>(4)?),
     })
-}
-
-fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
-    Ok(Session {
-        session_key: row.get(0)?,
-        username: row.get(1)?,
-        created_at: ts(row.get::<_, i64>(2)?),
-        expires_at: ts(row.get::<_, i64>(3)?),
-    })
-}
-
-fn row_to_user_basic(row: &Row) -> rusqlite::Result<(String, String, i64, i64)> {
-    Ok((
-        row.get::<_, String>(0)?,
-        row.get::<_, String>(1)?,
-        row.get::<_, i64>(2)?,
-        row.get::<_, i64>(3)?,
-    ))
 }
 
 fn create_tables(conn: &Connection) -> Result<(), DbError> {
@@ -146,33 +126,17 @@ fn create_tables(conn: &Connection) -> Result<(), DbError> {
         );
         CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id);
         CREATE INDEX IF NOT EXISTS idx_models_enabled ON models(enabled);
-        CREATE TABLE IF NOT EXISTS users (
-            username      TEXT PRIMARY KEY,
-            password_hash TEXT NOT NULL,
-            created_at    INTEGER NOT NULL,
-            updated_at    INTEGER NOT NULL
-        );
-        -- no FK on username: sessions are transient cache data, user cleanup
-        -- is handled explicitly before the user row is removed
-        CREATE TABLE IF NOT EXISTS sessions (
-            session_key_hash TEXT PRIMARY KEY,
-            username         TEXT NOT NULL,
-            created_at       INTEGER NOT NULL,
-            expires_at       INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
         CREATE TABLE IF NOT EXISTS api_keys (
             id         TEXT PRIMARY KEY,
             key_hash   TEXT NOT NULL UNIQUE,
             display    TEXT NOT NULL,
-            username   TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
             name       TEXT NOT NULL,
             enabled    INTEGER NOT NULL DEFAULT 1,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             expires_at INTEGER
         );
-        CREATE INDEX IF NOT EXISTS idx_apikeys_username ON api_keys(username);",
+        CREATE INDEX IF NOT EXISTS idx_apikeys_id ON api_keys(id);",
     )
     .map_err(to_storage)
 }
@@ -182,10 +146,7 @@ fn create_tables(conn: &Connection) -> Result<(), DbError> {
 // ---------------------------------------------------------------------------
 
 impl Database {
-    pub fn new(
-        path: &str,
-        max_api_keys_per_user: u64,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(parent) = Path::new(path).parent() {
             fs::create_dir_all(parent)?;
         }
@@ -196,7 +157,6 @@ impl Database {
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
-            max_api_keys_per_user,
         })
     }
 
@@ -530,190 +490,6 @@ impl Database {
         }
     }
 
-    // --- User CRUD ---
-
-    pub fn insert_user(&self, mut user: User) -> Result<User, DbError> {
-        let now = Utc::now();
-        user.created_at = now;
-        user.updated_at = now;
-
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO users (username, password_hash, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![
-                user.username,
-                user.password_hash,
-                user.created_at.timestamp(),
-                user.updated_at.timestamp(),
-            ],
-        )
-        .map_err(to_storage)?;
-
-        Ok(user)
-    }
-
-    pub fn get_user(&self, username: &str) -> Result<Option<User>, DbError> {
-        let conn = self.conn.lock().unwrap();
-
-        let mut user = match conn.query_row(
-            "SELECT username, password_hash, created_at, updated_at
-             FROM users WHERE username = ?1",
-            params![username],
-            |row| {
-                let (username, password_hash, created_ts, updated_ts) = row_to_user_basic(row)?;
-                Ok(User {
-                    username,
-                    password_hash,
-                    api_keys: vec![],
-                    created_at: ts(created_ts),
-                    updated_at: ts(updated_ts),
-                })
-            },
-        ) {
-            Ok(u) => u,
-            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-            Err(e) => return Err(DbError::Storage(e.to_string())),
-        };
-
-        // Fill api_keys
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, key_hash, display, name, created_at, updated_at, enabled, expires_at
-                 FROM api_keys WHERE username = ?1 ORDER BY created_at",
-            )
-            .map_err(to_storage)?;
-        let keys = stmt
-            .query_map(params![username], row_to_api_key)
-            .map_err(to_storage)?;
-
-        for key in keys.flatten() {
-            user.api_keys.push(key);
-        }
-
-        Ok(Some(user))
-    }
-
-    pub fn has_any_users(&self) -> Result<bool, DbError> {
-        let conn = self.conn.lock().unwrap();
-        let exists: bool = conn
-            .query_row("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)", [], |row| {
-                row.get(0)
-            })
-            .map_err(to_storage)?;
-        Ok(exists)
-    }
-
-    pub fn update_user(&self, user: &User) -> Result<User, DbError> {
-        let conn = self.conn.lock().unwrap();
-        let now = Utc::now().timestamp();
-
-        let exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?1)",
-                params![user.username],
-                |row| row.get(0),
-            )
-            .map_err(to_storage)?;
-        if !exists {
-            return Err(DbError::NotFound(format!(
-                "User '{}' not found",
-                user.username
-            )));
-        }
-
-        conn.execute(
-            "UPDATE users SET password_hash = ?1, updated_at = ?2 WHERE username = ?3",
-            params![user.password_hash, now, user.username],
-        )
-        .map_err(to_storage)?;
-
-        let mut updated = user.clone();
-        updated.updated_at = Utc::now();
-        Ok(updated)
-    }
-
-    // --- Session CRUD ---
-
-    pub fn insert_session(
-        &self,
-        username: &str,
-        expires_at: DateTime<Utc>,
-    ) -> Result<String, DbError> {
-        let raw_key = Self::generate_session_key();
-        let hash = hash_key(&raw_key);
-        let now = Utc::now();
-
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO sessions (session_key_hash, username, created_at, expires_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![hash, username, now.timestamp(), expires_at.timestamp(),],
-        )
-        .map_err(to_storage)?;
-
-        Ok(raw_key)
-    }
-
-    pub fn get_session(&self, session_key: &str) -> Result<Option<Session>, DbError> {
-        let hash = hash_key(session_key);
-        let conn = self.conn.lock().unwrap();
-        let result = conn.query_row(
-            "SELECT session_key_hash, username, created_at, expires_at
-             FROM sessions WHERE session_key_hash = ?1",
-            params![hash],
-            row_to_session,
-        );
-        match result {
-            Ok(s) => Ok(Some(s)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(DbError::Storage(e.to_string())),
-        }
-    }
-
-    pub fn delete_session(&self, session_key: &str) -> Result<bool, DbError> {
-        let hash = hash_key(session_key);
-        let conn = self.conn.lock().unwrap();
-        let rows = conn
-            .execute(
-                "DELETE FROM sessions WHERE session_key_hash = ?1",
-                params![hash],
-            )
-            .map_err(to_storage)?;
-        Ok(rows > 0)
-    }
-
-    pub fn cleanup_expired_sessions(&self) -> Result<usize, DbError> {
-        let now = Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap();
-        let rows = conn
-            .execute("DELETE FROM sessions WHERE expires_at < ?1", params![now])
-            .map_err(to_storage)?;
-        Ok(rows)
-    }
-
-    pub fn delete_sessions_for_user(&self, username: &str) -> Result<usize, DbError> {
-        let conn = self.conn.lock().unwrap();
-        let rows = conn
-            .execute(
-                "DELETE FROM sessions WHERE username = ?1",
-                params![username],
-            )
-            .map_err(to_storage)?;
-        Ok(rows)
-    }
-
-    pub fn renew_session(&self, hash: &str, ttl_secs: u64) -> Result<(), DbError> {
-        let new_expiry = Utc::now() + chrono::Duration::seconds(ttl_secs as i64);
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "UPDATE sessions SET expires_at = ?1 WHERE session_key_hash = ?2",
-            params![new_expiry.timestamp(), hash],
-        )
-        .map_err(to_storage)?;
-        Ok(())
-    }
-
     // --- API Key CRUD ---
 
     fn generate_random_string(len: usize) -> String {
@@ -729,13 +505,8 @@ impl Database {
         format!("sk-{}", Self::generate_random_string(32))
     }
 
-    fn generate_session_key() -> String {
-        Self::generate_random_string(32)
-    }
-
     pub fn insert_api_key(
         &self,
-        username: &str,
         name: &str,
         expires_at: Option<DateTime<Utc>>,
     ) -> Result<(ApiKey, String), DbError> {
@@ -751,39 +522,13 @@ impl Database {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(to_storage)?;
 
-        let user_exists: bool = tx
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?1)",
-                params![username],
-                |row| row.get(0),
-            )
-            .map_err(to_storage)?;
-        if !user_exists {
-            return Err(DbError::NotFound(format!("User '{}' not found", username)));
-        }
-
-        let count: i64 = tx
-            .query_row(
-                "SELECT COUNT(*) FROM api_keys WHERE username = ?1",
-                params![username],
-                |row| row.get(0),
-            )
-            .map_err(to_storage)?;
-        if count as u64 >= self.max_api_keys_per_user {
-            return Err(DbError::LimitExceeded(format!(
-                "Maximum of {} API keys per user",
-                self.max_api_keys_per_user
-            )));
-        }
-
         tx.execute(
-            "INSERT INTO api_keys (id, key_hash, display, username, name, enabled, created_at, updated_at, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO api_keys (id, key_hash, display, name, enabled, created_at, updated_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 id,
                 hash,
                 mask_api_key(&raw_key),
-                username,
                 name,
                 1i32,
                 now_ts,
@@ -809,11 +554,27 @@ impl Database {
         Ok((stored, raw_key))
     }
 
+    pub fn list_api_keys(&self) -> Result<Vec<ApiKey>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, key_hash, display, name, created_at, updated_at, enabled, expires_at
+                 FROM api_keys ORDER BY created_at",
+            )
+            .map_err(to_storage)?;
+        let items = stmt
+            .query_map([], row_to_api_key)
+            .map_err(to_storage)?
+            .flatten()
+            .collect();
+        Ok(items)
+    }
+
     pub fn get_user_by_api_key(&self, api_key: &str) -> Result<Option<ApiKeyInfo>, DbError> {
         let api_hash = hash_key(api_key);
         let conn = self.conn.lock().unwrap();
         let result = conn.query_row(
-            "SELECT id, username, name, enabled, expires_at, created_at
+            "SELECT id, name, enabled, expires_at, created_at
              FROM api_keys WHERE key_hash = ?1",
             params![api_hash],
             row_to_api_key_info,
@@ -825,13 +586,13 @@ impl Database {
         }
     }
 
-    pub fn delete_api_key(&self, username: &str, key_id: &str) -> Result<String, DbError> {
+    pub fn delete_api_key(&self, key_id: &str) -> Result<String, DbError> {
         let conn = self.conn.lock().unwrap();
 
         let hash: String = conn
             .query_row(
-                "SELECT key_hash FROM api_keys WHERE id = ?1 AND username = ?2",
-                params![key_id, username],
+                "SELECT key_hash FROM api_keys WHERE id = ?1",
+                params![key_id],
                 |row| row.get(0),
             )
             .map_err(|e| match e {
@@ -841,28 +602,21 @@ impl Database {
                 _ => DbError::Storage(e.to_string()),
             })?;
 
-        conn.execute(
-            "DELETE FROM api_keys WHERE id = ?1 AND username = ?2",
-            params![key_id, username],
-        )
-        .map_err(to_storage)?;
+        conn.execute("DELETE FROM api_keys WHERE id = ?1", params![key_id])
+            .map_err(to_storage)?;
 
         Ok(hash)
     }
 
-    pub fn update_api_key(
-        &self,
-        username: &str,
-        updates: &ApiKeyUpdate,
-    ) -> Result<(ApiKey, String), DbError> {
+    pub fn update_api_key(&self, updates: &ApiKeyUpdate) -> Result<(ApiKey, String), DbError> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now();
 
         let mut api_key = {
             let result = conn.query_row(
                 "SELECT id, key_hash, display, name, created_at, updated_at, enabled, expires_at
-                 FROM api_keys WHERE id = ?1 AND username = ?2",
-                params![updates.id, username],
+                 FROM api_keys WHERE id = ?1",
+                params![updates.id],
                 row_to_api_key,
             );
             match result {
@@ -888,39 +642,19 @@ impl Database {
         api_key.updated_at = now;
 
         conn.execute(
-            "UPDATE api_keys SET name = ?1, enabled = ?2, expires_at = ?3, updated_at = ?4 WHERE id = ?5 AND username = ?6",
+            "UPDATE api_keys SET name = ?1, enabled = ?2, expires_at = ?3, updated_at = ?4 WHERE id = ?5",
             params![
                 api_key.name,
                 api_key.enabled as i32,
                 api_key.expires_at.map(|dt| dt.timestamp()),
                 api_key.updated_at.timestamp(),
                 api_key.id,
-                username,
             ],
         )
         .map_err(to_storage)?;
 
         let hash = api_key.key.clone();
         Ok((api_key, hash))
-    }
-
-    // --- Test helpers ---
-
-    #[cfg(test)]
-    pub fn list_sessions(&self) -> Result<Vec<Session>, DbError> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare(
-                "SELECT session_key_hash, username, created_at, expires_at
-                 FROM sessions ORDER BY created_at",
-            )
-            .map_err(to_storage)?;
-        let items: Vec<Session> = stmt
-            .query_map([], row_to_session)
-            .map_err(to_storage)?
-            .flatten()
-            .collect();
-        Ok(items)
     }
 }
 
@@ -933,7 +667,7 @@ mod tests {
     use super::*;
 
     fn setup() -> (Database, tempfile::TempDir) {
-        crate::test_utils::create_test_db(10)
+        crate::test_utils::create_test_db()
     }
 
     fn make_prov(id: &str) -> Provider {
@@ -942,10 +676,6 @@ mod tests {
             ProviderType::OpenAICompat,
             "https://example.com",
         )
-    }
-
-    fn make_user() -> User {
-        crate::test_utils::create_test_user()
     }
 
     // ── Provider CRUD ──
@@ -1218,154 +948,33 @@ mod tests {
         assert!(db.resolve_model("no_such_model").unwrap().is_none());
     }
 
-    // ── User CRUD ──
-
-    #[test]
-    fn user_create() {
-        let (db, _dir) = setup();
-        let user = db.insert_user(make_user()).unwrap();
-        assert!(!user.username.is_empty());
-    }
-
-    #[test]
-    fn user_get() {
-        let (db, _dir) = setup();
-        let user = db.insert_user(make_user()).unwrap();
-        let got = db.get_user(&user.username).unwrap().expect("should exist");
-        assert_eq!(got.username, user.username);
-    }
-
-    #[test]
-    fn user_get_missing() {
-        let (db, _dir) = setup();
-        assert!(db.get_user("nobody").unwrap().is_none());
-    }
-
-    #[test]
-    fn has_any_users_empty() {
-        let (db, _dir) = setup();
-        assert!(!db.has_any_users().unwrap());
-    }
-
-    #[test]
-    fn has_any_users_with_users() {
-        let (db, _dir) = setup();
-        db.insert_user(make_user()).unwrap();
-        assert!(db.has_any_users().unwrap());
-    }
-
-    #[test]
-    fn user_update() {
-        let (db, _dir) = setup();
-        let user = make_user();
-        let username = user.username.clone();
-        db.insert_user(user).unwrap();
-        let mut updated = db.get_user(&username).unwrap().unwrap();
-        updated.password_hash = "newhash".to_string();
-        db.update_user(&updated).unwrap();
-        assert_eq!(
-            db.get_user(&username).unwrap().unwrap().password_hash,
-            "newhash"
-        );
-    }
-
-    // ── Session CRUD ──
-
-    #[test]
-    fn session_insert_hashes_key() {
-        let (db, _dir) = setup();
-        let expires_at = Utc::now() + chrono::Duration::hours(1);
-        let raw_key = db.insert_session("alice", expires_at).unwrap();
-        assert_eq!(raw_key.len(), 32);
-        let stored = db.get_session(&raw_key).unwrap().expect("should find");
-        assert_ne!(stored.session_key, raw_key);
-        assert_eq!(stored.username, "alice");
-    }
-
-    #[test]
-    fn session_get() {
-        let (db, _dir) = setup();
-        let expires_at = Utc::now() + chrono::Duration::hours(1);
-        let raw_key = db.insert_session("bob", expires_at).unwrap();
-        let found = db.get_session(&raw_key).unwrap().expect("should find");
-        assert_eq!(found.username, "bob");
-    }
-
-    #[test]
-    fn session_get_missing() {
-        let (db, _dir) = setup();
-        assert!(db.get_session("no-such-key").unwrap().is_none());
-    }
-
-    #[test]
-    fn session_delete() {
-        let (db, _dir) = setup();
-        let expires_at = Utc::now() + chrono::Duration::hours(1);
-        let raw_key = db.insert_session("alice", expires_at).unwrap();
-        let stored = db.get_session(&raw_key).unwrap().expect("should find");
-        assert!(db.delete_session(&raw_key).unwrap());
-        assert!(db.get_session(&raw_key).unwrap().is_none());
-        assert!(!db.delete_session(&stored.session_key).unwrap());
-    }
-
-    #[test]
-    fn session_delete_for_user() {
-        let (db, _dir) = setup();
-        let expires_at = Utc::now() + chrono::Duration::hours(1);
-        db.insert_session("alice", expires_at).unwrap();
-        db.insert_session("alice", expires_at).unwrap();
-        db.insert_session("bob", expires_at).unwrap();
-        let deleted = db.delete_sessions_for_user("alice").unwrap();
-        assert_eq!(deleted, 2);
-        assert_eq!(db.delete_sessions_for_user("alice").unwrap(), 0);
-        assert!(
-            db.list_sessions()
-                .unwrap()
-                .iter()
-                .all(|s| s.username == "bob")
-        );
-    }
-
-    #[test]
-    fn cleanup_expired_sessions() {
-        let (db, _dir) = setup();
-        let future = Utc::now() + chrono::Duration::hours(1);
-        let past = Utc::now() - chrono::Duration::hours(1);
-        db.insert_session("alice", future).unwrap();
-        db.insert_session("bob", past).unwrap();
-        db.insert_session("charlie", past).unwrap();
-        let cleaned = db.cleanup_expired_sessions().unwrap();
-        assert_eq!(cleaned, 2);
-        let all = db.list_sessions().unwrap();
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].username, "alice");
-    }
-
-    #[test]
-    fn delete_session_missing() {
-        let (db, _dir) = setup();
-        assert!(!db.delete_session("no-such-key").unwrap());
-    }
-
     // ── API Key CRUD ──
 
     #[test]
     fn api_key_create_returns_raw_key() {
         let (db, _dir) = setup();
-        let user = db.insert_user(make_user()).unwrap();
-        let (stored, raw) = db.insert_api_key(&user.username, "test-key", None).unwrap();
+        let (stored, raw) = db.insert_api_key("test-key", None).unwrap();
         assert!(raw.starts_with("sk-"));
         assert_eq!(raw.len(), 35);
         assert_eq!(stored.name, "test-key");
     }
 
     #[test]
+    fn api_key_create_empty_name_errors() {
+        let (db, _dir) = setup();
+        // validate_string is applied at the handler layer; the store accepts any
+        // name, but an obviously-empty name would still produce a row. Here we
+        // just assert a non-empty name round-trips.
+        let (stored, _) = db.insert_api_key("another-key", None).unwrap();
+        assert_eq!(stored.name, "another-key");
+    }
+
+    #[test]
     fn api_key_lookup_by_raw_key() {
         let (db, _dir) = setup();
-        let user = db.insert_user(make_user()).unwrap();
-        let (_, raw) = db.insert_api_key(&user.username, "test-key", None).unwrap();
+        let (_, raw) = db.insert_api_key("test-key", None).unwrap();
         let info = db.get_user_by_api_key(&raw).unwrap().expect("should find");
-        assert_eq!(info.username, user.username);
+        assert_eq!(info.name, "test-key");
     }
 
     #[test]
@@ -1375,84 +984,60 @@ mod tests {
     }
 
     #[test]
+    fn api_key_list_returns_all() {
+        let (db, _dir) = setup();
+        db.insert_api_key("k1", None).unwrap();
+        db.insert_api_key("k2", None).unwrap();
+        let all = db.list_api_keys().unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|k| k.name == "k1"));
+        assert!(all.iter().any(|k| k.name == "k2"));
+    }
+
+    #[test]
     fn api_key_delete() {
         let (db, _dir) = setup();
-        let user = db.insert_user(make_user()).unwrap();
-        let (_, raw) = db.insert_api_key(&user.username, "test-key", None).unwrap();
+        let (_, raw) = db.insert_api_key("test-key", None).unwrap();
         let stored = db.get_user_by_api_key(&raw).unwrap().unwrap();
-        db.delete_api_key(&user.username, &stored.id).unwrap();
+        db.delete_api_key(&stored.id).unwrap();
         assert!(db.get_user_by_api_key(&raw).unwrap().is_none());
     }
 
     #[test]
     fn api_key_update() {
         let (db, _dir) = setup();
-        let user = db.insert_user(make_user()).unwrap();
-        let (stored, raw) = db.insert_api_key(&user.username, "test-key", None).unwrap();
-        db.update_api_key(
-            &user.username,
-            &ApiKeyUpdate {
-                id: stored.id.clone(),
-                enabled: Some(false),
-                ..Default::default()
-            },
-        )
+        let (stored, raw) = db.insert_api_key("test-key", None).unwrap();
+        db.update_api_key(&ApiKeyUpdate {
+            id: stored.id.clone(),
+            enabled: Some(false),
+            ..Default::default()
+        })
         .unwrap();
         let info = db.get_user_by_api_key(&raw).unwrap().unwrap();
-        let u = db.get_user(&user.username).unwrap().unwrap();
-        let key = u.api_keys.iter().find(|k| k.id == info.id).unwrap();
-        assert!(!key.enabled);
+        assert!(!info.enabled);
     }
 
     #[test]
     fn api_key_partial_update_keeps_other_fields() {
         let (db, _dir) = setup();
-        let user = db.insert_user(make_user()).unwrap();
-        let (stored, _raw) = db.insert_api_key(&user.username, "test-key", None).unwrap();
-        db.update_api_key(
-            &user.username,
-            &ApiKeyUpdate {
-                id: stored.id.clone(),
-                enabled: Some(false),
-                ..Default::default()
-            },
-        )
+        let (stored, raw) = db.insert_api_key("test-key", None).unwrap();
+        db.update_api_key(&ApiKeyUpdate {
+            id: stored.id.clone(),
+            enabled: Some(false),
+            ..Default::default()
+        })
         .unwrap();
-        let u = db.get_user(&user.username).unwrap().unwrap();
-        let key = u.api_keys.iter().find(|k| k.id == stored.id).unwrap();
-        assert!(!key.enabled);
-        assert_eq!(key.name, "test-key");
-    }
-
-    #[test]
-    fn api_key_cross_user_isolation() {
-        let (db, _dir) = setup();
-        let alice = db.insert_user(make_user()).unwrap();
-        let bob = db.insert_user(make_user()).unwrap();
-        let (stored, _) = db
-            .insert_api_key(&alice.username, "alice-key", None)
-            .unwrap();
-        db.delete_api_key(&bob.username, &stored.id).unwrap_err();
-        let bob_user = db.get_user(&bob.username).unwrap().unwrap();
-        assert_eq!(bob_user.api_keys.len(), 0);
-    }
-
-    #[test]
-    fn api_key_limit_exceeded() {
-        let (db, _dir) = crate::test_utils::create_test_db(2);
-        let user = db.insert_user(make_user()).unwrap();
-        db.insert_api_key(&user.username, "k1", None).unwrap();
-        db.insert_api_key(&user.username, "k2", None).unwrap();
-        let err = db.insert_api_key(&user.username, "k3", None).unwrap_err();
-        assert!(matches!(err, DbError::LimitExceeded(_)));
+        let info = db.get_user_by_api_key(&raw).unwrap().unwrap();
+        assert!(!info.enabled);
+        assert_eq!(info.name, "test-key");
     }
 
     // ── Database isolation ──
 
     #[test]
     fn databases_are_isolated() {
-        let (db_a, _dir_a) = crate::test_utils::create_test_db(10);
-        let (db_b, _dir_b) = crate::test_utils::create_test_db(10);
+        let (db_a, _dir_a) = crate::test_utils::create_test_db();
+        let (db_b, _dir_b) = crate::test_utils::create_test_db();
         db_a.insert_provider(make_prov("p1")).unwrap();
         assert!(db_b.list_providers().unwrap().is_empty());
     }

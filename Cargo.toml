@@ -96,9 +96,6 @@ async-trait = "0.1"
 # Random token generation
 rand = "0.10"
 
-# Password hashing
-bcrypt = "0.19"
-
 # Key hashing
 sha2 = "0.11"
 hex = "0.4"

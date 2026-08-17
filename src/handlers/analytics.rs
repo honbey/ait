@@ -1,5 +1,5 @@
 use axum::{
-    Extension, Json,
+    Json,
     extract::{Query, State},
     http::StatusCode,
 };
@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::app::AppState;
-use crate::db::SessionUser;
+
 use crate::db::models::{BucketEntry, ModelDistEntry, TokenDistEntry};
 use crate::error::AitError;
 
@@ -60,7 +60,6 @@ pub fn validate_ts_range(
 
 pub async fn requests(
     State(state): State<AppState>,
-    Extension(_session): Extension<SessionUser>,
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<Vec<BucketEntry>>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
@@ -70,7 +69,6 @@ pub async fn requests(
 
 pub async fn tokens(
     State(state): State<AppState>,
-    Extension(_session): Extension<SessionUser>,
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<Vec<BucketEntry>>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
@@ -80,7 +78,6 @@ pub async fn tokens(
 
 pub async fn model_dist(
     State(state): State<AppState>,
-    Extension(_session): Extension<SessionUser>,
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<Vec<ModelDistEntry>>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
@@ -90,7 +87,6 @@ pub async fn model_dist(
 
 pub async fn token_dist(
     State(state): State<AppState>,
-    Extension(_session): Extension<SessionUser>,
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<Vec<TokenDistEntry>>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
@@ -155,15 +151,13 @@ mod tests {
 mod http_tests {
     use super::*;
     use crate::test_utils::{
-        create_test_state_fast_logs, insert_test_user, login_and_cookie, make_proxy_event,
-        send_request, test_router,
+        create_test_state_fast_logs, make_proxy_event, send_request, test_router,
     };
     use axum::Router;
     use axum::http::Method;
 
-    async fn setup() -> (Router, String, i64) {
+    async fn setup() -> (Router, i64) {
         let (state, _dir) = create_test_state_fast_logs();
-        insert_test_user(&state.db, "alice", "secret123");
         let now = Utc::now().timestamp();
         let h = now / 3600 * 3600;
         // Two events in the current hour, one in the previous hour.
@@ -189,8 +183,7 @@ mod http_tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         let router = test_router(state);
-        let cookie = login_and_cookie(&router, "alice", "secret123").await;
-        (router, cookie, h)
+        (router, h)
     }
 
     fn range_qs(h: i64) -> String {
@@ -199,12 +192,12 @@ mod http_tests {
 
     #[tokio::test]
     async fn requests_endpoint_returns_hourly_buckets() {
-        let (router, cookie, h) = setup().await;
+        let (router, h) = setup().await;
         let resp = send_request(
             &router,
             Method::GET,
             &format!("/api/data/requests?{}", range_qs(h)),
-            Some(&cookie),
+            None,
             None,
             None,
         )
@@ -220,12 +213,12 @@ mod http_tests {
 
     #[tokio::test]
     async fn tokens_endpoint_sums_per_hour() {
-        let (router, cookie, h) = setup().await;
+        let (router, h) = setup().await;
         let resp = send_request(
             &router,
             Method::GET,
             &format!("/api/data/tokens?{}", range_qs(h)),
-            Some(&cookie),
+            None,
             None,
             None,
         )
@@ -239,12 +232,12 @@ mod http_tests {
 
     #[tokio::test]
     async fn model_dist_endpoint_groups_by_model() {
-        let (router, cookie, h) = setup().await;
+        let (router, h) = setup().await;
         let resp = send_request(
             &router,
             Method::GET,
             &format!("/api/data/model-dist?{}", range_qs(h)),
-            Some(&cookie),
+            None,
             None,
             None,
         )
@@ -260,12 +253,12 @@ mod http_tests {
 
     #[tokio::test]
     async fn token_dist_endpoint_returns_three_categories() {
-        let (router, cookie, h) = setup().await;
+        let (router, h) = setup().await;
         let resp = send_request(
             &router,
             Method::GET,
             &format!("/api/data/token-dist?{}", range_qs(h)),
-            Some(&cookie),
+            None,
             None,
             None,
         )

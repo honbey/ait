@@ -14,7 +14,6 @@ use crate::pages::about::AboutPage;
 use crate::pages::apikeys::ApiKeysPage;
 use crate::pages::docs::DocsPage;
 use crate::pages::home::Home;
-use crate::pages::login::LoginPage;
 use crate::pages::logs::LogsPage;
 use crate::pages::models::ModelsPage;
 use crate::pages::not_found::NotFoundPage;
@@ -111,7 +110,6 @@ pub fn App() -> impl IntoView {
                 <main class="min-h-[calc(100vh-3.5rem)]">
                     <Routes fallback=|| view! { <NotFoundPage /> }>
                         <Route path=StaticSegment("") view=Home />
-                        <Route path=StaticSegment("login") view=LoginPage />
                         <Route path=StaticSegment("docs") view=DocsPage />
                         <Route path=StaticSegment("about") view=AboutPage />
                         <ParentRoute path=StaticSegment("console") view=ConsoleShell>

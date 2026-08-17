@@ -142,7 +142,6 @@ pub struct ApiKeyUpdate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeyInfo {
     pub id: String,
-    pub username: String,
     pub name: String,
     pub enabled: bool,
     #[serde(
@@ -155,37 +154,11 @@ pub struct ApiKeyInfo {
     pub created_at: DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct User {
-    pub username: String,
-    pub password_hash: String,
-    pub api_keys: Vec<ApiKey>,
-    #[serde(with = "ts_seconds")]
-    pub created_at: DateTime<chrono::Utc>,
-    #[serde(with = "ts_seconds")]
-    pub updated_at: DateTime<chrono::Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionUser {
-    pub username: String,
-    pub api_key_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Session {
-    pub session_key: String,
-    pub username: String,
-    #[serde(with = "ts_seconds")]
-    pub created_at: DateTime<chrono::Utc>,
-    #[serde(with = "ts_seconds")]
-    pub expires_at: DateTime<chrono::Utc>,
-}
-
-impl Session {
-    pub fn is_expired(&self) -> bool {
-        self.expires_at <= Utc::now()
-    }
+/// Identity of the API key used for a proxy request. Injected by the proxy
+/// auth middleware so handlers can record which key served a request.
+#[derive(Debug, Clone)]
+pub struct ApiKeyContext {
+    pub name: Option<String>,
 }
 
 pub struct AccessEvent {
@@ -195,7 +168,6 @@ pub struct AccessEvent {
     pub path: String,
     pub status: i32,
     pub latency_ms: i64,
-    pub username: Option<String>,
     pub client_ip: Option<String>,
 }
 
@@ -203,7 +175,6 @@ pub struct AccessEvent {
 pub struct ProxyEvent {
     pub timestamp: DateTime<Utc>,
     pub request_id: String,
-    pub username: Option<String>,
     pub api_key_name: Option<String>,
     pub model_name: String,
     pub provider_name: String,
@@ -226,7 +197,6 @@ pub struct ProxyEvent {
 pub struct AuditEvent {
     pub timestamp: DateTime<Utc>,
     pub request_id: String,
-    pub username: String,
     pub action: String,
     pub resource: String,
     pub resource_id: String,
@@ -255,7 +225,6 @@ pub struct TokenDistEntry {
 #[serde(rename_all = "snake_case")]
 pub struct ProxyLogEntryResponse {
     pub timestamp: i64,
-    pub username: Option<String>,
     pub api_key_name: Option<String>,
     pub model_name: String,
     pub provider_name: String,
@@ -292,7 +261,6 @@ pub struct ProxyLogQueryParams {
     pub model_name: Option<String>,
     pub provider_name: Option<String>,
     pub status: Option<String>,
-    pub username: Option<String>,
     pub api_key_name: Option<String>,
     pub endpoint: Option<String>,
     pub is_streaming: Option<bool>,

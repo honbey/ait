@@ -424,7 +424,10 @@ pub fn Overview() -> impl IntoView {
     };
 
     let greeting = {
-        let user_name = auth.username.get_untracked().unwrap_or_default();
+        let user_name = auth
+            .username
+            .get_untracked()
+            .unwrap_or_else(|| "Welcome".to_string());
         tr!(Greeting, &[("username", &user_name)])
     };
 

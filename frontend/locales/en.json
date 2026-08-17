@@ -103,7 +103,7 @@
   "retry": "Retry",
   "save": "Save",
   "save_create": "Create",
-  "session_expired": "Session expired, please log in again",
+  "api_key_expired": "API key invalid or expired",
   "start_date": "Start Date",
   "status_disabled": "Disabled",
   "status_enabled": "Enabled",

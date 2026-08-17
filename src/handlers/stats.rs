@@ -1,12 +1,12 @@
 use axum::{
-    Extension, Json,
+    Json,
     extract::{Query, State},
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
-use crate::db::SessionUser;
+
 use crate::error::{AitError, internal_error};
 use crate::handlers::analytics::validate_ts_range;
 
@@ -28,7 +28,6 @@ pub struct OverviewStats {
 
 pub async fn overview_stats(
     State(state): State<AppState>,
-    Extension(_session): Extension<SessionUser>,
     Query(q): Query<StatsQuery>,
 ) -> Result<Json<OverviewStats>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
@@ -67,29 +66,26 @@ pub async fn overview_stats(
 mod tests {
     use super::*;
     use crate::test_utils::{
-        create_test_state_fast_logs, insert_test_user, login_and_cookie, make_proxy_event,
-        send_request, test_router,
+        create_test_state_fast_logs, make_proxy_event, send_request, test_router,
     };
     use axum::Router;
     use axum::http::Method;
     use chrono::Utc;
 
-    async fn setup() -> (Router, String) {
+    async fn setup() -> Router {
         let (state, _dir) = create_test_state_fast_logs();
-        insert_test_user(&state.db, "alice", "secret123");
         let router = test_router(state);
-        let cookie = login_and_cookie(&router, "alice", "secret123").await;
-        (router, cookie)
+        router
     }
 
     #[tokio::test]
     async fn overview_stats_zero_without_data() {
-        let (router, cookie) = setup().await;
+        let router = setup().await;
         let resp = send_request(
             &router,
             Method::GET,
             "/api/stats?start_ts=0&end_ts=1",
-            Some(&cookie),
+            None,
             None,
             None,
         )
@@ -105,7 +101,6 @@ mod tests {
     #[tokio::test]
     async fn overview_stats_counts_written_proxy_events() {
         let (state, _dir) = create_test_state_fast_logs();
-        insert_test_user(&state.db, "alice", "secret123");
         let now = Utc::now().timestamp();
         state
             .log_manager
@@ -137,7 +132,7 @@ mod tests {
         .unwrap();
         let _ = range;
         let router = test_router(state);
-        let cookie = login_and_cookie(&router, "alice", "secret123").await;
+
         // Explicit range with headroom: the default end (now, second precision)
         // can equal the event timestamp and the exclusive upper bound would
         // exclude the row.
@@ -145,7 +140,7 @@ mod tests {
             &router,
             Method::GET,
             &format!("/api/stats?start_ts={}&end_ts={}", now - 3600, now + 3600),
-            Some(&cookie),
+            None,
             None,
             None,
         )
@@ -158,12 +153,12 @@ mod tests {
 
     #[tokio::test]
     async fn overview_stats_rejects_invalid_timestamps() {
-        let (router, cookie) = setup().await;
+        let (router) = setup().await;
         let resp = send_request(
             &router,
             Method::GET,
             "/api/stats?start_ts=99999999999999999999",
-            Some(&cookie),
+            None,
             None,
             None,
         )

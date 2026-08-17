@@ -1,6 +1,6 @@
 use crate::app::AppState;
-use crate::db::{AccessEvent, ApiKeyInfo, RequestId, SessionUser, hash_key};
-use crate::error::{AitError, db_error, internal_error, too_many_requests, unauthorized};
+use crate::db::{AccessEvent, ApiKeyContext, ApiKeyInfo, RequestId, hash_key};
+use crate::error::{AitError, db_error, internal_error, unauthorized};
 use axum::{
     Json,
     extract::{ConnectInfo, Request, State},
@@ -15,47 +15,12 @@ use uuid::Uuid;
 
 pub(crate) const CACHE_TTL: Duration = Duration::from_secs(300);
 
-/// Build a `Set-Cookie` header value for the session key.
-///
-/// `Secure` is intentionally always set: direct HTTP access only happens
-/// against 127.0.0.1/localhost for local dev, production runs behind nginx
-/// which terminates TLS. No plain-HTTP remote deployment is supported, so
-/// no config toggle is provided.
-pub(crate) fn set_cookie_header(session_key: &str, max_age: i64) -> String {
-    format!(
-        "session_key={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
-        session_key, max_age
-    )
-}
-
-fn full_access(username: &str) -> SessionUser {
-    SessionUser {
-        username: username.to_string(),
-        api_key_name: None,
-    }
-}
-
 /// Extract Bearer token from Authorization header.
 fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-}
-
-/// Extract `session_key` from Authorization header (Bearer) or Cookie header.
-pub fn extract_session_key(headers: &HeaderMap) -> Option<&str> {
-    if let Some(key) = extract_bearer_token(headers) {
-        return Some(key);
-    }
-    let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
-    for pair in cookie.split(';') {
-        let pair = pair.trim();
-        if let Some(value) = pair.strip_prefix("session_key=") {
-            return Some(value);
-        }
-    }
-    None
 }
 
 fn verify_key(
@@ -68,9 +33,8 @@ fn verify_key(
     if key_info.expires_at.is_some_and(|exp| exp <= Utc::now()) {
         return Err(unauthorized("Unauthorized: invalid or missing API key"));
     }
-    req.extensions_mut().insert(SessionUser {
-        username: key_info.username.clone(),
-        api_key_name: Some(key_info.name.clone()),
+    req.extensions_mut().insert(ApiKeyContext {
+        name: Some(key_info.name.clone()),
     });
     Ok(())
 }
@@ -83,7 +47,7 @@ pub async fn auth_middleware(
     let client_ip = get_client_ip(&req, &state.config.server.trusted_proxies);
 
     if !state.config.auth.enabled {
-        req.extensions_mut().insert(full_access("anonymous"));
+        req.extensions_mut().insert(ApiKeyContext { name: None });
         req.extensions_mut().insert(client_ip);
         return Ok(next.run(req).await);
     }
@@ -125,78 +89,6 @@ pub async fn auth_middleware(
     Ok(next.run(req).await)
 }
 
-pub async fn admin_auth_middleware(
-    State(state): State<AppState>,
-    mut req: Request,
-    next: Next,
-) -> Result<Response, (StatusCode, Json<AitError>)> {
-    let client_ip = get_client_ip(&req, &state.config.server.trusted_proxies);
-
-    // Admin endpoints always require authentication
-    let session_key = extract_session_key(req.headers())
-        .ok_or_else(|| unauthorized("Unauthorized: invalid or missing API key"))?;
-    let session_key = session_key.to_string();
-
-    let hash = hash_key(&session_key);
-    let ttl = state.config.auth.session_ttl_secs;
-
-    // Cache hit — verify freshness and renew TTL
-    if let Some(mut entry) = state.session_cache.get_mut(&hash) {
-        if entry.1 > Utc::now() && entry.2.elapsed() < CACHE_TTL {
-            entry.2 = Instant::now();
-            let user = entry.0.clone();
-            drop(entry);
-            req.extensions_mut().insert(user);
-            req.extensions_mut().insert(client_ip);
-            let mut response = next.run(req).await;
-            let cookie = set_cookie_header(&session_key, ttl as i64);
-            response
-                .headers_mut()
-                .insert(header::SET_COOKIE, cookie.parse().unwrap());
-            return Ok(response);
-        }
-        drop(entry);
-    }
-
-    // Cache miss or stale — load from DB (only session; username is enough for SessionUser)
-    let session_key_for_db = session_key.clone();
-    let db = state.db.clone();
-    let session = crate::run_blocking(move || db.get_session(&session_key_for_db))
-        .await
-        .map_err(internal_error)?
-        .map_err(|_| db_error())?
-        .ok_or_else(|| unauthorized("Unauthorized: invalid or missing API key"))?;
-
-    if session.is_expired() {
-        return Err(unauthorized("Unauthorized: invalid or missing API key"));
-    }
-
-    // Fire-and-forget session renewal so active sessions do not expire
-    let db = state.db.clone();
-    let hash_clone = hash.clone();
-    tokio::spawn(async move {
-        let _ = crate::run_blocking(move || db.renew_session(&hash_clone, ttl)).await;
-    });
-
-    let user = SessionUser {
-        username: session.username,
-        api_key_name: None,
-    };
-
-    state
-        .session_cache
-        .insert(hash, (user.clone(), session.expires_at, Instant::now()));
-
-    req.extensions_mut().insert(user);
-    req.extensions_mut().insert(client_ip);
-    let mut response = next.run(req).await;
-    let cookie = set_cookie_header(&session_key, ttl as i64);
-    response
-        .headers_mut()
-        .insert(header::SET_COOKIE, cookie.parse().unwrap());
-    Ok(response)
-}
-
 fn is_trusted_proxy(ip: IpAddr, trusted: &[IpAddr]) -> bool {
     trusted.contains(&ip)
 }
@@ -228,44 +120,6 @@ fn get_client_ip(req: &Request, trusted_proxies: &[IpAddr]) -> Option<IpAddr> {
     direct_ip
 }
 
-fn check_and_record(
-    limiter: &crate::rate_limiter::RateLimiter,
-    ip: IpAddr,
-    max_attempts: u64,
-    window_secs: u64,
-    ban_secs: u64,
-) -> Result<(), (StatusCode, Json<AitError>)> {
-    limiter
-        .check_and_record(ip, max_attempts, window_secs, ban_secs)
-        .map_err(|_| too_many_requests("Too many attempts. Please try again later."))
-}
-
-pub async fn login_rate_limit_middleware(
-    State(state): State<AppState>,
-    req: Request,
-    next: Next,
-) -> Result<Response, (StatusCode, Json<AitError>)> {
-    let config = &state.config.auth.login_rate_limit;
-    let ip = get_client_ip(&req, &state.config.server.trusted_proxies)
-        .ok_or_else(|| too_many_requests("Could not determine client IP"))?;
-
-    check_and_record(
-        &state.login_rate_limiter,
-        ip,
-        config.max_attempts,
-        config.window_secs,
-        config.ban_secs,
-    )?;
-
-    let response = next.run(req).await;
-
-    if response.status() == StatusCode::OK {
-        state.login_rate_limiter.clear(ip);
-    }
-
-    Ok(response)
-}
-
 pub async fn access_log_middleware(
     State(state): State<AppState>,
     mut req: Request,
@@ -275,10 +129,6 @@ pub async fn access_log_middleware(
     let request_id = Uuid::new_v4().to_string();
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
-    let username = req
-        .extensions()
-        .get::<SessionUser>()
-        .map(|u| u.username.clone());
 
     let client_ip =
         get_client_ip(&req, &state.config.server.trusted_proxies).map(|ip| ip.to_string());
@@ -300,7 +150,6 @@ pub async fn access_log_middleware(
         path,
         status,
         latency_ms: latency.as_millis() as i64,
-        username,
         client_ip,
     });
 
