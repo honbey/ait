@@ -1,6 +1,8 @@
 # 部署：nginx + Authelia 鉴权代理
 
-Ait 本身不提供 Web 管理界面的用户/密码/2FA 功能。生产环境下，建议在 Ait 前部署 **nginx + Authelia**，由 Authelia 负责 Web 管理面的双因素鉴权，而 `/v1/*` 代理接口仍由 Ait 自身的 API Key 机制保护。
+Ait 本身不提供 Web 管理界面的用户/密码/2FA 功能。
+生产环境下，建议在 Ait 前部署 **nginx + Authelia**，由 Authelia 负责 Web 管理面的双因素鉴权，
+而 `/v1/*` 代理接口仍由 Ait 自身的 API Key 机制保护。
 
 ## 架构
 
@@ -14,7 +16,9 @@ Ait 本身不提供 Web 管理界面的用户/密码/2FA 功能。生产环境�
 ```
 
 - `/v1/*` 和 `/health`：**不经过 Authelia**，直接到达 Ait。
-- 其他路径（`/`、`/console/*`、`/api/*`、`/auth/session`）：nginx 通过 `auth_request` 指令将请求转发给 Authelia 验证，通过后在 `proxy_set_header` 中设置 `Remote-User`，Ait 据此识别管理用户身份。
+- 其他路径（`/`、`/console/*`、`/api/*`、`/auth/session`）：
+nginx 通过 `auth_request` 指令将请求转发给 Authelia 验证，通过后在 `proxy_set_header`
+中设置 `Remote-User`，Ait 据此识别管理用户身份。
 
 ## nginx 配置示例
 
@@ -103,7 +107,7 @@ server {
 
 ```yaml
 access_control:
-  default_policy: two_factor
+  default_policy: deny
 
   rules:
     # /v1/* 由 Ait 自身 API Key 鉴权，绕过 Authelia
@@ -152,7 +156,7 @@ cors_allow_credentials = true
 部署后按以下步骤验证：
 
 | 步骤 | 命令 / 操作 | 预期结果 |
-|------|------------|----------|
+| ------ | ------------ | ---------- |
 | 健康检查（无鉴权） | `curl https://ait.example.com/health` | `200 OK` |
 | 代理接口无 key | `curl https://ait.example.com/v1/models` | `401 Unauthorized` |
 | 代理接口有 key | `curl -H "Authorization: Bearer <key>" https://ait.example.com/v1/models` | `200 OK` + 模型列表 |
@@ -165,7 +169,8 @@ cors_allow_credentials = true
 
 **Q: 关闭 `[auth].enabled` 后管理接口是否也直接暴露？**
 
-A: 不是。`[auth].enabled` 只控制 `/v1/*`。`/api/*` 始终不经过 Ait 内置鉴权，由 nginx + Authelia 保护。即使 `auth.enabled = false`，外部未授权请求仍然可以调用 `/v1/*`，但 `/api/*` 仍受 nginx 层保护。
+A: 不是。`[auth].enabled` 只控制 `/v1/*`。`/api/*` 始终不经过 Ait 内置鉴权，由 nginx + Authelia 保护。
+若 `auth.enabled = false`，外部未授权请求可以直接调用 `/v1/*`，但 `/api/*` 仍受 nginx 层保护。
 
 **Q: Authelia 与 Ait 不在同一台机器可以吗？**
 
