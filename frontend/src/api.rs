@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::cell::OnceCell;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -9,13 +8,11 @@ use leptos::prelude::*;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::auth::{AuthContext, AuthStatus};
 use crate::components::toast::ToastManager;
 use crate::i18n::{I18n, K};
 use reactive_stores::{Patch, Store};
 
 thread_local! {
-    static SUPPRESS_401: Cell<bool> = const { Cell::new(false) };
     static BASE_URL: OnceCell<String> = const { OnceCell::new() };
 }
 
@@ -60,35 +57,17 @@ pub struct Provider {
     pub updated_at: i64,
 }
 
-struct Suppress401Guard;
-
-impl Suppress401Guard {
-    fn new() -> Self {
-        SUPPRESS_401.set(true);
-        Suppress401Guard
-    }
-}
-
-impl Drop for Suppress401Guard {
-    fn drop(&mut self) {
-        SUPPRESS_401.set(false);
-    }
-}
-
 pub fn clear_cache() {
     FETCH_CACHE.with(|c| c.borrow_mut().clear());
 }
 
 fn handle_401(status: u16) {
-    if status != 401 || SUPPRESS_401.get() {
+    if status != 401 {
         return;
     }
     clear_cache();
-    if let Some(auth) = use_context::<AuthContext>() {
-        auth.authenticated.set(AuthStatus::NotAuthenticated);
-        if let (Some(toast), Some(i18n)) = (use_context::<ToastManager>(), use_context::<I18n>()) {
-            toast.error(i18n.t_untracked(K::ApiKeyExpired));
-        }
+    if let (Some(toast), Some(i18n)) = (use_context::<ToastManager>(), use_context::<I18n>()) {
+        toast.error(i18n.t_untracked(K::ApiKeyExpired));
     }
 }
 
@@ -242,23 +221,6 @@ async fn api_get_cached<T: DeserializeOwned>(path: &str, force: bool) -> Result<
     Ok(result)
 }
 
-pub async fn check_session() -> Result<Option<String>, NetError> {
-    let _guard = Suppress401Guard::new();
-    let json: serde_json::Value = api_get("auth/session").await?;
-    let authenticated = json
-        .get("authenticated")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if !authenticated {
-        return Ok(None);
-    }
-    let username = json
-        .get("username")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    Ok(username)
-}
-
 pub async fn fetch_providers() -> Result<Vec<Provider>, NetError> {
     api_get("api/providers").await
 }
@@ -320,6 +282,8 @@ pub struct OverviewStats {
     pub token_consumption: u64,
     pub rpm: f64,
     pub tpm: f64,
+    #[serde(default)]
+    pub username: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

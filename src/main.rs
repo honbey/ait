@@ -27,7 +27,6 @@ use tracing::info;
 
 use handlers::analytics::{model_dist, requests, token_dist, tokens};
 use handlers::apikeys::{create_api_key, delete_api_key, list_api_keys, update_api_key};
-use handlers::auth::session_check;
 use handlers::logs::list_proxy_logs;
 use handlers::models::{create_model, delete_model, get_model, list_models, update_model};
 use handlers::providers::{
@@ -217,15 +216,6 @@ fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer 
 }
 
 fn build_app(state: app::AppState) -> Router {
-    // Auth routes — nested under /auth so unmatched paths return 404
-    let auth_routes = Router::new()
-        .route("/session", get(session_check))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            access_log_middleware,
-        ))
-        .fallback(|| async { not_found("404 not found") });
-
     // Admin API routes. Web-admin authentication is delegated to a reverse
     // proxy (e.g. nginx + Authelia); Ait does not authenticate these routes.
     let admin_api = Router::new()
@@ -298,7 +288,6 @@ fn build_app(state: app::AppState) -> Router {
     Router::new()
         .nest_service("/static", frontend_root)
         .fallback_service(frontend_spa)
-        .nest("/auth", auth_routes)
         .nest("/v1", proxy_api_v1)
         .merge(health_route)
         .nest("/api", Router::new().merge(admin_api))

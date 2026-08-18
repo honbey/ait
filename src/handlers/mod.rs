@@ -1,6 +1,5 @@
 pub mod analytics;
 pub mod apikeys;
-pub mod auth;
 pub mod logs;
 pub mod models;
 pub mod providers;

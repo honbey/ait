@@ -16,9 +16,9 @@ Ait 本身不提供 Web 管理界面的用户/密码/2FA 功能。
 ```
 
 - `/v1/*` 和 `/health`：**不经过 Authelia**，直接到达 Ait。
-- 其他路径（`/`、`/console/*`、`/api/*`、`/auth/session`）：
+- 其他路径（`/`、`/console/*`、`/api/*`）：
 nginx 通过 `auth_request` 指令将请求转发给 Authelia 验证，通过后在 `proxy_set_header`
-中设置 `Remote-User`，Ait 据此识别管理用户身份。
+中设置 `Remote-User`，Ait 据此识别管理用户身份（仅用于 overview 页面的问候语，不用于鉴权）。
 
 ## nginx 配置示例
 
@@ -162,8 +162,7 @@ cors_allow_credentials = true
 | 代理接口有 key | `curl -H "Authorization: Bearer <key>" https://ait.example.com/v1/models` | `200 OK` + 模型列表 |
 | 管理页未登录 | 浏览器访问 `https://ait.example.com/console/` | 重定向到 Authelia 登录页 |
 | 管理页已登录 | 完成 2FA 后访问管理页 | 正常加载管理界面 |
-| /auth/session | 登录后 `curl https://ait.example.com/auth/session` | `{"authenticated":true,"username":"<user>"}` |
-| /auth/session 未登录 | `curl https://ait.example.com/auth/session` | `{"authenticated":false,"username":null}` |
+| Remote-User | 登录后导出 Authelia 会话 cookie，`curl -b cookies.txt https://ait.example.com/api/stats` | 响应含 `"username":"<真实用户名>"`（nginx 会覆盖客户端传入的 `Remote-User`，仅用于 overview 问候语） |
 
 ## 常见问题
 
@@ -178,7 +177,7 @@ A: 可以。确保 nginx 的 `auth_request` 能够访问到 Authelia，且 Authe
 
 **Q: 是否可以不用 Authelia，只用 nginx 基础认证？**
 
-A: 可以。`/auth/session` 只读取 `Remote-User` header。只要 nginx 在转发请求时设置该 header 即可。例如：
+A: 可以。`Remote-User` header 只用于 overview 页面的问候语，不参与鉴权。只要 nginx 在转发请求时设置该 header 即可。例如：
 
 ```nginx
 # 简单的 HTTP Basic Auth（不推荐生产使用）

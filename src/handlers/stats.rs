@@ -1,7 +1,9 @@
+use std::net::{IpAddr, SocketAddr};
+
 use axum::{
     Json,
-    extract::{Query, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Query, State},
+    http::{HeaderMap, StatusCode},
 };
 use serde::{Deserialize, Serialize};
 
@@ -9,6 +11,9 @@ use crate::app::AppState;
 
 use crate::error::{AitError, internal_error};
 use crate::handlers::analytics::validate_ts_range;
+
+/// Header name set by the upstream authenticator (e.g. Authelia via nginx).
+const REMOTE_USER_HEADER: &str = "remote-user";
 
 #[derive(Deserialize)]
 pub struct StatsQuery {
@@ -24,12 +29,39 @@ pub struct OverviewStats {
     pub token_consumption: u64,
     pub rpm: f64,
     pub tpm: f64,
+    /// Caller identity reported by the upstream authenticator; used only for
+    /// the overview greeting, not for authentication.
+    pub username: Option<String>,
+}
+
+fn is_trusted_proxy(ip: IpAddr, trusted: &[IpAddr]) -> bool {
+    trusted.contains(&ip)
+}
+
+/// Only trust the identity header when the direct peer is a known reverse
+/// proxy; a client that reaches Ait directly can forge `Remote-User`.
+fn remote_user_from_headers(
+    headers: &HeaderMap,
+    direct_ip: IpAddr,
+    trusted_proxies: &[IpAddr],
+) -> Option<String> {
+    if !is_trusted_proxy(direct_ip, trusted_proxies) {
+        return None;
+    }
+    headers
+        .get(REMOTE_USER_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
 }
 
 pub async fn overview_stats(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(q): Query<StatsQuery>,
 ) -> Result<Json<OverviewStats>, (StatusCode, Json<AitError>)> {
+    let username =
+        remote_user_from_headers(&headers, addr.ip(), &state.config.server.trusted_proxies);
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
     let range_mins = (range.end - range.start) as f64 / 60.0;
 
@@ -59,6 +91,7 @@ pub async fn overview_stats(
         token_consumption,
         rpm,
         tpm,
+        username,
     }))
 }
 
@@ -69,13 +102,47 @@ mod tests {
         create_test_state_fast_logs, make_proxy_event, send_request, test_router,
     };
     use axum::Router;
+    use axum::body::Body;
+    use axum::extract::ConnectInfo;
     use axum::http::Method;
+    use axum::http::Request;
     use chrono::Utc;
+    use std::net::SocketAddr;
+    use tower::ServiceExt;
 
     async fn setup() -> Router {
         let (state, _dir) = create_test_state_fast_logs();
         let router = test_router(state);
         router
+    }
+
+    async fn stats_with_remote_user(header_value: Option<&str>) -> serde_json::Value {
+        let router = setup().await;
+        let mut builder = Request::builder().method(Method::GET).uri("/api/stats");
+        if let Some(v) = header_value {
+            builder = builder.header(REMOTE_USER_HEADER, v);
+        }
+        let mut request = builder.body(Body::empty()).unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+        let response = router.clone().oneshot(request).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+    }
+
+    #[tokio::test]
+    async fn overview_stats_returns_remote_user_header() {
+        let json = stats_with_remote_user(Some("alice")).await;
+        assert_eq!(json["username"], "alice");
+    }
+
+    #[tokio::test]
+    async fn overview_stats_without_remote_user_header_returns_null() {
+        let json = stats_with_remote_user(None).await;
+        assert_eq!(json["username"], serde_json::Value::Null);
     }
 
     #[tokio::test]
