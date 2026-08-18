@@ -20,8 +20,7 @@ v0.2.0 移除了内置的用户/会话/密码系统。管理接口 (`/api/*`) �
 - **users / sessions 表删除** — 管理登录委托给反向代理
 - **api_keys.username 列删除** — Key 不再按用户隔离，改为全局管理
 - **DuckDB 日志表删除 username 列**
-- **已有 API Key 失效** — 哈希算法从 bcrypt 改为 SHA256，旧 Key 无法通过鉴权，
-但迁移后旧的 API Key 仍会显示在前端的列表中，但调用 `/v1/*` 会返回 401，需要手动删除。
+- **已有 API Key 继续有效** — Key 的哈希算法（SHA256）与校验路径未变，迁移后旧 Key 可直接使用，无需重新生成
 
 ## 前置条件
 
@@ -119,18 +118,11 @@ enabled = true
 ait v0.2.0 不再处理管理接口认证。需要在 `/api/*` 前部署反向代理，
 详见 [auth-proxy.md](auth-proxy.md) 中的 nginx + Authelia 配置示例。
 
-### 7. 重新生成 API Key
+### 7. API Key 说明
 
-已有 API Key 因哈希算法变更（bcrypt → SHA256）而失效。旧 Key 存储的是 bcrypt hash，v0.2.0 用 SHA256 验证，
-即使发送正确的原始 key 字符串，`SHA256(原始key)` 也无法匹配旧的 bcrypt hash。
+v0.2.0 未更改 API Key 的哈希算法（SHA256）与鉴权路径，迁移后已有 Key 继续有效，可直接使用。
 
-注意：**旧 Key 无法恢复，必须删除后重新生成。**
-
-启动 ait v0.2.0 后：
-
-1. 通过反向代理访问管理界面
-2. 进入 API Keys 页面
-3. 删除旧 Key，按需创建新 Key
+如出于安全考虑想轮换 Key，可在管理界面的 API Keys 页面删除旧 Key 并按需创建新 Key，此步骤可选，非迁移必需。
 
 ## 验证
 
