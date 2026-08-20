@@ -268,7 +268,6 @@ pub async fn send_request(
     }
 }
 
-/// Login and return the raw session key from the `Set-Cookie` header.
 /// Run a blocking closure on a separate thread and fail the test if it does
 /// not complete within `timeout`. A timeout means the closure deadlocked on a
 /// non-reentrant lock (e.g. DashMap with parking_lot); a disconnect means the
