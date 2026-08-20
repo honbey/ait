@@ -46,9 +46,9 @@ trunk build --release --cargo-profile release-wasm  # Frontend prod
 
 ### Backend (`src/`)
 
-- **Database**: SQLite (via rusqlite, `Arc<Mutex<Connection>>`) for app data (providers, models, users, api keys, sessions). DuckDB (via `LogManager`) for structured logging + analytics. All DB ops go through `crate::run_blocking()` because SQLite Mutex must be acquired on a blocking thread and bcrypt is CPU-bound.
+- **Database**: SQLite (via rusqlite, `Arc<Mutex<Connection>>`) for app data (providers, models, api keys). DuckDB (via `LogManager`) for structured logging + analytics. All DB ops go through `crate::run_blocking()` because SQLite Mutex must be acquired on a blocking thread.
 - **DashMap deadlock prevention**: Never hold a `DashMap` `Ref`/`RefMut` across an `.await` point, and never call `insert`/`retain`/`remove` on the same map while holding a `Ref`/`RefMut` from it — parking_lot's RwLock is **not** reentrant, even on the same thread. This includes sneaky cases like match scrutinee temporaries: `match map.get_mut(k) { Some(mut entry) if stale => ..., _ => map.insert(k, v) }` — the `_` arm still holds the `RefMut` from the scrutinee because match temporaries live until the end of the entire match expression. Always `clone()` the needed data and `drop()` the guard before any insert/retain on the same map.
-- **Handler modules**: `providers` (provider CRUD), `models` (model CRUD), `analytics`, `apikeys`, `users`, `auth`, `proxy` (proxy internals: `exec.rs`, `sse.rs`, `guard.rs`)
+- **Handler modules**: `providers` (provider CRUD), `models` (model CRUD), `analytics`, `apikeys`, `stats`, `proxy` (proxy internals: `exec.rs`, `sse.rs`, `guard.rs`)
 - API routes under `/api/` prefix, proxy routes under `/v1/*`
 - New providers: implement `UpstreamProvider` trait + register in `providers/mod.rs`
 - Config: TOML file + env var override (`AIT_<SECTION>_<KEY>`)

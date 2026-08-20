@@ -146,13 +146,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn overview_stats_ignores_remote_user_from_untrusted_peer() {
+        let router = setup().await;
+        let mut builder = Request::builder().method(Method::GET).uri("/api/stats");
+        builder = builder.header(REMOTE_USER_HEADER, "attacker");
+        let mut request = builder.body(Body::empty()).unwrap();
+        // 10.0.0.1 is NOT in trusted_proxies (test_config uses 127.0.0.1, ::1)
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 0))));
+        let response = router.oneshot(request).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        assert_eq!(json["username"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
     async fn overview_stats_zero_without_data() {
         let router = setup().await;
         let resp = send_request(
             &router,
             Method::GET,
             "/api/stats?start_ts=0&end_ts=1",
-            None,
             None,
             None,
         )
@@ -209,7 +227,6 @@ mod tests {
             &format!("/api/stats?start_ts={}&end_ts={}", now - 3600, now + 3600),
             None,
             None,
-            None,
         )
         .await;
         assert_eq!(resp.status, StatusCode::OK);
@@ -225,7 +242,6 @@ mod tests {
             &router,
             Method::GET,
             "/api/stats?start_ts=99999999999999999999",
-            None,
             None,
             None,
         )

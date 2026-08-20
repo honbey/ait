@@ -228,22 +228,17 @@ pub struct TestResponse {
     pub headers: HeaderMap,
 }
 
-/// Send a request through the router. `cookie` is the raw session key, sent as
-/// the `session_key` cookie; `bearer` is a raw API key sent as a Bearer token.
-/// A fake client IP is always injected because the login rate limiter and
-/// client IP extraction require `ConnectInfo`.
+/// Send a request through the router. `bearer` is a raw API key sent as a
+/// Bearer token. A fake client IP is always injected because the client IP
+/// extraction requires `ConnectInfo`.
 pub async fn send_request(
     router: &Router,
     method: Method,
     uri: &str,
-    cookie: Option<&str>,
     bearer: Option<&str>,
     body: Option<Value>,
 ) -> TestResponse {
     let mut builder = Request::builder().method(method).uri(uri);
-    if let Some(cookie) = cookie {
-        builder = builder.header(header::COOKIE, format!("session_key={cookie}"));
-    }
     if let Some(bearer) = bearer {
         builder = builder.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
     }

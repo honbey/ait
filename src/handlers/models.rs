@@ -226,7 +226,6 @@ mod tests {
             Method::POST,
             "/api/providers",
             None,
-            None,
             Some(serde_json::json!({
                 "name": "test-provider",
                 "type": "openai_compat",
@@ -244,7 +243,6 @@ mod tests {
             router,
             Method::POST,
             "/api/models",
-            None,
             None,
             Some(serde_json::json!({
                 "name": name,
@@ -282,7 +280,6 @@ mod tests {
             Method::POST,
             "/api/models",
             None,
-            None,
             Some(serde_json::json!({
                 "name": "bad#name",
                 "provider_id": provider_id,
@@ -303,7 +300,6 @@ mod tests {
             Method::POST,
             "/api/models",
             None,
-            None,
             Some(serde_json::json!({
                 "name": "gpt-test",
                 "provider_id": "00000000-0000-0000-0000-000000000000",
@@ -321,21 +317,13 @@ mod tests {
         let provider_id = create_provider(&router).await;
         create_model(&router, &provider_id, "gpt-test").await;
 
-        let resp = send_request(&router, Method::GET, "/api/models", None, None, None).await;
+        let resp = send_request(&router, Method::GET, "/api/models", None, None).await;
         assert_eq!(resp.status, StatusCode::OK);
         let models = resp.json.as_array().expect("list should return an array");
         assert_eq!(models.len(), 1);
         assert_eq!(models[0]["name"], "gpt-test");
 
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/api/models/gpt-test",
-            None,
-            None,
-            None,
-        )
-        .await;
+        let resp = send_request(&router, Method::GET, "/api/models/gpt-test", None, None).await;
         assert_eq!(resp.status, StatusCode::OK);
         assert_eq!(resp.json["upstream_model"], "gpt-test");
     }
@@ -349,7 +337,6 @@ mod tests {
             &router,
             Method::PUT,
             "/api/models/gpt-test",
-            None,
             None,
             Some(serde_json::json!({
                 "upstream_model": "gpt-upstream-v2",
@@ -367,25 +354,9 @@ mod tests {
         let router = setup().await;
         let provider_id = create_provider(&router).await;
         create_model(&router, &provider_id, "gpt-test").await;
-        let resp = send_request(
-            &router,
-            Method::DELETE,
-            "/api/models/gpt-test",
-            None,
-            None,
-            None,
-        )
-        .await;
+        let resp = send_request(&router, Method::DELETE, "/api/models/gpt-test", None, None).await;
         assert_eq!(resp.status, StatusCode::NO_CONTENT);
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/api/models/gpt-test",
-            None,
-            None,
-            None,
-        )
-        .await;
+        let resp = send_request(&router, Method::GET, "/api/models/gpt-test", None, None).await;
         assert_eq!(resp.status, StatusCode::NOT_FOUND);
     }
 }

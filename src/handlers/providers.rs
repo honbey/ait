@@ -386,7 +386,6 @@ mod tests {
             Method::POST,
             "/api/providers",
             None,
-            None,
             Some(create_body(name)),
         )
         .await;
@@ -413,7 +412,6 @@ mod tests {
             Method::POST,
             "/api/providers",
             None,
-            None,
             Some(create_body("   ")),
         )
         .await;
@@ -426,15 +424,7 @@ mod tests {
         let router = setup().await;
         let mut body = create_body("test-provider");
         body["base_url"] = serde_json::json!("not-a-url");
-        let resp = send_request(
-            &router,
-            Method::POST,
-            "/api/providers",
-            None,
-            None,
-            Some(body),
-        )
-        .await;
+        let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
         assert_eq!(resp.status, StatusCode::BAD_REQUEST);
     }
 
@@ -442,7 +432,7 @@ mod tests {
     async fn list_providers_includes_created() {
         let router = setup().await;
         create_provider(&router, "test-provider").await;
-        let resp = send_request(&router, Method::GET, "/api/providers", None, None, None).await;
+        let resp = send_request(&router, Method::GET, "/api/providers", None, None).await;
         assert_eq!(resp.status, StatusCode::OK);
         let providers = resp.json.as_array().expect("list should return an array");
         assert_eq!(providers.len(), 1);
@@ -459,7 +449,6 @@ mod tests {
             &router,
             Method::PUT,
             &format!("/api/providers/{id}"),
-            None,
             None,
             Some(serde_json::json!({
                 "base_url": "http://127.0.0.1:9090/",
@@ -483,7 +472,6 @@ mod tests {
             &format!("/api/providers/{id}"),
             None,
             None,
-            None,
         )
         .await;
         assert_eq!(resp.status, StatusCode::NO_CONTENT);
@@ -491,7 +479,6 @@ mod tests {
             &router,
             Method::GET,
             &format!("/api/providers/{id}"),
-            None,
             None,
             None,
         )
@@ -502,15 +489,7 @@ mod tests {
     #[tokio::test]
     async fn list_provider_types_non_empty() {
         let router = setup().await;
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/api/provider-types",
-            None,
-            None,
-            None,
-        )
-        .await;
+        let resp = send_request(&router, Method::GET, "/api/provider-types", None, None).await;
         assert_eq!(resp.status, StatusCode::OK);
         let types = resp.json.as_array().expect("types should be an array");
         assert!(!types.is_empty());

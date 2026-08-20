@@ -8,7 +8,7 @@
 - **管理接口鉴权外置** — `/api/*` 不再由 Ait 自身鉴权，由外部反向代理（如 nginx + Authelia）保护
 - **API Key 路径变更** — 从 `/api/users/{username}/api-keys` 改为 `/api/api-keys`（全局管理，不再按用户隔离）
 - **日志表删除 `username` 列** — DuckDB `access_log`、`proxy_log`、`audit_log` 不再记录用户名；`proxy_log` 保留 `api_key_name`
-- **`/auth/session` 接口变更** — 仅读取上游反向代理转发的 `Remote-User` header，返回 `{ authenticated, username }`
+- **`/auth/session` 接口删除** — 管理鉴权完全由反向代理处理，`Remote-User` header 仅用于 overview 问候语
 - **前端移除登录页** — 管理界面不再内置登录/改密功能
 
 ### 新增功能

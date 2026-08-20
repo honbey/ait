@@ -439,4 +439,19 @@ mod tests {
         let response = router.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
+
+    #[tokio::test]
+    async fn proxy_api_accepts_valid_api_key() {
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let (_stored, raw_key) = state.db.insert_api_key("test-key", None).unwrap();
+        let router = build_app(state);
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/v1/models")
+            .header(header::AUTHORIZATION, format!("Bearer {raw_key}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }

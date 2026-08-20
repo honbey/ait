@@ -128,7 +128,6 @@ mod tests {
             ),
             None,
             None,
-            None,
         )
         .await;
         assert_eq!(resp.status, StatusCode::OK);
@@ -150,7 +149,6 @@ mod tests {
                 now - 3600,
                 now + 3600
             ),
-            None,
             None,
             None,
         )
@@ -175,7 +173,6 @@ mod tests {
             ),
             None,
             None,
-            None,
         )
         .await;
         assert_eq!(resp.json["total"], 3);
@@ -194,7 +191,6 @@ mod tests {
             ),
             None,
             None,
-            None,
         )
         .await;
         assert_eq!(resp.json["total"], 1);
@@ -208,7 +204,6 @@ mod tests {
             &router,
             Method::GET,
             "/api/data/proxy-log?start_ts=999999999999999999999",
-            None,
             None,
             None,
         )
@@ -227,7 +222,6 @@ mod tests {
                 now - 3600,
                 now + 3600
             ),
-            None,
             None,
             None,
         )

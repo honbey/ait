@@ -173,7 +173,7 @@ A: 不是。`[auth].enabled` 只控制 `/v1/*`。`/api/*` 始终不经过 Ait �
 
 **Q: Authelia 与 Ait 不在同一台机器可以吗？**
 
-A: 可以。确保 nginx 的 `auth_request` 能够访问到 Authelia，且 Authelia 能够回调 Ait 进行 session 验证。
+A: 可以。确保 nginx 的 `auth_request` 能够访问到 Authelia，且 Authelia 验证通过后 nginx 通过 `proxy_set_header Remote-User` 将用户身份转发给 Ait。Ait 不参与 session 验证。
 
 **Q: 是否可以不用 Authelia，只用 nginx 基础认证？**
 

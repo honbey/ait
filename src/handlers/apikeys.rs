@@ -201,7 +201,6 @@ mod tests {
             Method::POST,
             "/api/api-keys",
             None,
-            None,
             Some(serde_json::json!({"name": name})),
         )
         .await;
@@ -217,7 +216,6 @@ mod tests {
         router: &Router,
         method: Method,
         uri: &str,
-        _cookie: Option<&str>,
         _bearer: Option<&str>,
         body: Option<serde_json::Value>,
     ) -> TestResponse {
@@ -278,7 +276,6 @@ mod tests {
             Method::POST,
             "/api/api-keys",
             None,
-            None,
             Some(serde_json::json!({"name": "   "})),
         )
         .await;
@@ -299,22 +296,13 @@ mod tests {
             Method::PUT,
             &format!("/api/api-keys/{key_id}"),
             None,
-            None,
             Some(serde_json::json!({"enabled": false})),
         )
         .await;
         assert_eq!(resp.status, StatusCode::OK);
         assert_eq!(resp.json["enabled"], serde_json::Value::Bool(false));
 
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/v1/models",
-            None,
-            Some(raw_key),
-            None,
-        )
-        .await;
+        let resp = send_request(&router, Method::GET, "/v1/models", Some(raw_key), None).await;
         assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
     }
 
@@ -332,20 +320,11 @@ mod tests {
             &format!("/api/api-keys/{key_id}"),
             None,
             None,
-            None,
         )
         .await;
         assert_eq!(resp.status, StatusCode::NO_CONTENT);
 
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/v1/models",
-            None,
-            Some(raw_key),
-            None,
-        )
-        .await;
+        let resp = send_request(&router, Method::GET, "/v1/models", Some(raw_key), None).await;
         assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
     }
 }

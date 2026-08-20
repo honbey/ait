@@ -44,6 +44,10 @@ impl AppState {
                  Set [auth].enabled = true in config to enable authentication."
             );
         }
+        tracing::info!(
+            "Admin API (/api/*) is not authenticated by Ait — \
+             deploy a reverse proxy (e.g. nginx + Authelia) to protect it."
+        );
 
         // Created up front so every background task can subscribe to it; the
         // same instance ends up in AppState at the end.
@@ -98,7 +102,7 @@ impl AppState {
 
 /// Evict expired in-memory cache entries at a configurable interval.
 /// Applies a shorter TTL when a cache exceeds 90% of max_entries.
-/// Covers session, api_key, model, provider, and SSRF DNS caches in one task.
+/// Covers api_key, model, provider, and SSRF DNS caches in one task.
 /// Note: `max_entries` is only a soft threshold here; the model cache also
 /// enforces it as a hard cap at insertion time (see insert_model_cache).
 #[allow(clippy::too_many_arguments)]

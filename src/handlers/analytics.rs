@@ -199,7 +199,6 @@ mod http_tests {
             &format!("/api/data/requests?{}", range_qs(h)),
             None,
             None,
-            None,
         )
         .await;
         assert_eq!(resp.status, StatusCode::OK);
@@ -220,7 +219,6 @@ mod http_tests {
             &format!("/api/data/tokens?{}", range_qs(h)),
             None,
             None,
-            None,
         )
         .await;
         assert_eq!(resp.status, StatusCode::OK);
@@ -237,7 +235,6 @@ mod http_tests {
             &router,
             Method::GET,
             &format!("/api/data/model-dist?{}", range_qs(h)),
-            None,
             None,
             None,
         )
@@ -258,7 +255,6 @@ mod http_tests {
             &router,
             Method::GET,
             &format!("/api/data/token-dist?{}", range_qs(h)),
-            None,
             None,
             None,
         )
