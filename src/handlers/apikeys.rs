@@ -216,10 +216,16 @@ mod tests {
         router: &Router,
         method: Method,
         uri: &str,
-        _bearer: Option<&str>,
+        bearer: Option<&str>,
         body: Option<serde_json::Value>,
     ) -> TestResponse {
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if let Some(bearer) = bearer {
+            builder = builder.header(
+                axum::http::header::AUTHORIZATION,
+                format!("Bearer {bearer}"),
+            );
+        }
         if body.is_some() {
             builder = builder.header(axum::http::header::CONTENT_TYPE, "application/json");
         }
