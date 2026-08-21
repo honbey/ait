@@ -570,7 +570,7 @@ impl Database {
         Ok(items)
     }
 
-    pub fn get_user_by_api_key(&self, api_key: &str) -> Result<Option<ApiKeyInfo>, DbError> {
+    pub fn get_api_key_by_raw(&self, api_key: &str) -> Result<Option<ApiKeyInfo>, DbError> {
         let api_hash = hash_key(api_key);
         let conn = self.conn.lock().unwrap();
         let result = conn.query_row(
@@ -973,14 +973,14 @@ mod tests {
     fn api_key_lookup_by_raw_key() {
         let (db, _dir) = setup();
         let (_, raw) = db.insert_api_key("test-key", None).unwrap();
-        let info = db.get_user_by_api_key(&raw).unwrap().expect("should find");
+        let info = db.get_api_key_by_raw(&raw).unwrap().expect("should find");
         assert_eq!(info.name, "test-key");
     }
 
     #[test]
     fn api_key_lookup_invalid_key() {
         let (db, _dir) = setup();
-        assert!(db.get_user_by_api_key("sk-invalid").unwrap().is_none());
+        assert!(db.get_api_key_by_raw("sk-invalid").unwrap().is_none());
     }
 
     #[test]
@@ -998,9 +998,9 @@ mod tests {
     fn api_key_delete() {
         let (db, _dir) = setup();
         let (_, raw) = db.insert_api_key("test-key", None).unwrap();
-        let stored = db.get_user_by_api_key(&raw).unwrap().unwrap();
+        let stored = db.get_api_key_by_raw(&raw).unwrap().unwrap();
         db.delete_api_key(&stored.id).unwrap();
-        assert!(db.get_user_by_api_key(&raw).unwrap().is_none());
+        assert!(db.get_api_key_by_raw(&raw).unwrap().is_none());
     }
 
     #[test]
@@ -1013,7 +1013,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let info = db.get_user_by_api_key(&raw).unwrap().unwrap();
+        let info = db.get_api_key_by_raw(&raw).unwrap().unwrap();
         assert!(!info.enabled);
     }
 
@@ -1027,7 +1027,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let info = db.get_user_by_api_key(&raw).unwrap().unwrap();
+        let info = db.get_api_key_by_raw(&raw).unwrap().unwrap();
         assert!(!info.enabled);
         assert_eq!(info.name, "test-key");
     }

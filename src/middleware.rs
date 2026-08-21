@@ -73,7 +73,7 @@ pub async fn auth_middleware(
     // Cache miss or stale — load from DB
     let token = token.to_string();
     let db = state.db.clone();
-    let key_info = crate::run_blocking(move || db.get_user_by_api_key(&token))
+    let key_info = crate::run_blocking(move || db.get_api_key_by_raw(&token))
         .await
         .map_err(internal_error)?
         .map_err(|_| db_error())?
