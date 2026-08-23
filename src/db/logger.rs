@@ -28,13 +28,11 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<()> {
             path       VARCHAR NOT NULL,
             status     INT NOT NULL,
             latency_ms BIGINT NOT NULL,
-            client_ip  VARCHAR,
-            username   VARCHAR
+            client_ip  VARCHAR
         );
         CREATE TABLE IF NOT EXISTS proxy_log (
             timestamp         TIMESTAMP NOT NULL,
             request_id        VARCHAR NOT NULL,
-            username          VARCHAR,
             api_key_name      VARCHAR,
             model_name        VARCHAR NOT NULL,
             provider_name     VARCHAR NOT NULL,
@@ -56,7 +54,6 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS audit_log (
             timestamp   TIMESTAMP NOT NULL,
             request_id  VARCHAR NOT NULL,
-            username    VARCHAR NOT NULL,
             action      VARCHAR NOT NULL,
             resource    VARCHAR NOT NULL,
             resource_id VARCHAR NOT NULL,
@@ -291,8 +288,8 @@ fn flush_accesses(conn: &Connection, events: &[&AccessEvent]) -> Result<()> {
         return Ok(());
     }
     let mut stmt = conn.prepare_cached(
-        "INSERT INTO access_log (timestamp, request_id, method, path, status, latency_ms, client_ip, username)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO access_log (timestamp, request_id, method, path, status, latency_ms, client_ip)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
     )?;
     for e in events {
         stmt.execute(params![
@@ -303,7 +300,6 @@ fn flush_accesses(conn: &Connection, events: &[&AccessEvent]) -> Result<()> {
             e.status,
             e.latency_ms,
             e.client_ip,
-            e.username,
         ])?;
     }
     Ok(())
@@ -314,18 +310,17 @@ fn flush_proxies(conn: &Connection, events: &[&ProxyEvent]) -> Result<()> {
         return Ok(());
     }
     let mut stmt = conn.prepare_cached(
-        "INSERT INTO proxy_log (timestamp, request_id, username, api_key_name, model_name, provider_name,
+        "INSERT INTO proxy_log (timestamp, request_id, api_key_name, model_name, provider_name,
          prompt_tokens, completion_tokens, total_tokens, cached_tokens, latency_ms, status,
          endpoint, is_streaming, time_to_first_token_ms, upstream_model, provider_type,
          response_body_size, error_message, client_ip)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                 ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                 ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
     )?;
     for e in events {
         stmt.execute(params![
             e.timestamp.naive_utc(),
             e.request_id,
-            e.username,
             e.api_key_name,
             e.model_name,
             e.provider_name,
@@ -353,14 +348,13 @@ fn flush_audits(conn: &Connection, events: &[&AuditEvent]) -> Result<()> {
         return Ok(());
     }
     let mut stmt = conn.prepare_cached(
-        "INSERT INTO audit_log (timestamp, request_id, username, action, resource, resource_id, detail)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO audit_log (timestamp, request_id, action, resource, resource_id, detail)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )?;
     for e in events {
         stmt.execute(params![
             e.timestamp.naive_utc(),
             e.request_id,
-            e.username,
             e.action,
             e.resource,
             e.resource_id,
@@ -420,17 +414,14 @@ mod tests {
         // shutdown joins the worker, so the flush is guaranteed complete.
         manager.shutdown();
         let conn = Connection::open(dir.path().join("logs.duckdb")).unwrap();
-        let (method, path_col, status, username): (String, String, i32, Option<String>) = conn
-            .query_row(
-                "SELECT method, path, status, username FROM access_log",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
+        let (method, path_col, status): (String, String, i32) = conn
+            .query_row("SELECT method, path, status FROM access_log", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
             .unwrap();
         assert_eq!(method, "GET");
         assert_eq!(path_col, "/api/providers");
         assert_eq!(status, 200);
-        assert_eq!(username.as_deref(), Some("alice"));
     }
 
     #[tokio::test]
@@ -460,15 +451,12 @@ mod tests {
         // shutdown joins the worker, so the flush is guaranteed complete.
         manager.shutdown();
         let conn = Connection::open(dir.path().join("logs.duckdb")).unwrap();
-        let (action, username, resource): (String, String, String) = conn
-            .query_row(
-                "SELECT action, username, resource FROM audit_log",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
+        let (action, resource): (String, String) = conn
+            .query_row("SELECT action, resource FROM audit_log", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
             .unwrap();
         assert_eq!(action, "delete");
-        assert_eq!(username, "alice");
         assert_eq!(resource, "api_key");
     }
 

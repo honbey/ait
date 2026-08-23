@@ -2,7 +2,6 @@ pub mod about;
 pub mod apikeys;
 pub mod docs;
 pub mod home;
-pub mod login;
 pub mod logs;
 pub mod models;
 pub mod not_found;

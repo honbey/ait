@@ -8,7 +8,6 @@ use crate::error::not_found;
 mod handlers;
 mod middleware;
 mod providers;
-mod rate_limiter;
 mod ssrf;
 mod utils;
 
@@ -28,7 +27,6 @@ use tracing::info;
 
 use handlers::analytics::{model_dist, requests, token_dist, tokens};
 use handlers::apikeys::{create_api_key, delete_api_key, list_api_keys, update_api_key};
-use handlers::auth::{login, logout, session_check};
 use handlers::logs::list_proxy_logs;
 use handlers::models::{create_model, delete_model, get_model, list_models, update_model};
 use handlers::providers::{
@@ -39,10 +37,7 @@ use handlers::proxy::{
     chat_completions, completions, embeddings, health, list_models_proxy, responses,
 };
 use handlers::stats::overview_stats;
-use handlers::users::change_password;
-use middleware::{
-    access_log_middleware, admin_auth_middleware, auth_middleware, login_rate_limit_middleware,
-};
+use middleware::{access_log_middleware, auth_middleware};
 
 #[tokio::main]
 async fn main() {
@@ -221,25 +216,8 @@ fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer 
 }
 
 fn build_app(state: app::AppState) -> Router {
-    // Auth routes — nested under /auth so unmatched paths return 404
-    let login_route =
-        Router::new()
-            .route("/login", post(login))
-            .layer(axum::middleware::from_fn_with_state(
-                state.clone(),
-                login_rate_limit_middleware,
-            ));
-    let auth_routes = Router::new()
-        .merge(login_route)
-        .route("/logout", post(logout))
-        .route("/session", get(session_check))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            access_log_middleware,
-        ))
-        .fallback(|| async { not_found("404 not found") });
-
-    // Admin API routes (admin auth required)
+    // Admin API routes. Web-admin authentication is delegated to a reverse
+    // proxy (e.g. nginx + Authelia); Ait does not authenticate these routes.
     let admin_api = Router::new()
         // Provider management
         .route("/providers", post(create_provider))
@@ -255,13 +233,11 @@ fn build_app(state: app::AppState) -> Router {
         .route("/models/{name}", get(get_model))
         .route("/models/{name}", put(update_model))
         .route("/models/{name}", delete(delete_model))
-        // User management
-        .route("/users/{username}/password", put(change_password))
-        // API key management
-        .route("/users/{username}/api-keys", get(list_api_keys))
-        .route("/users/{username}/api-keys", post(create_api_key))
-        .route("/users/{username}/api-keys/{key}", put(update_api_key))
-        .route("/users/{username}/api-keys/{key}", delete(delete_api_key))
+        // API key management (global)
+        .route("/api-keys", get(list_api_keys))
+        .route("/api-keys", post(create_api_key))
+        .route("/api-keys/{key}", put(update_api_key))
+        .route("/api-keys/{key}", delete(delete_api_key))
         // Overview statistics
         .route("/stats", get(overview_stats))
         // Analytics
@@ -274,10 +250,6 @@ fn build_app(state: app::AppState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             access_log_middleware,
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            admin_auth_middleware,
         ))
         .fallback(|| async { not_found("404 not found") });
 
@@ -316,7 +288,6 @@ fn build_app(state: app::AppState) -> Router {
     Router::new()
         .nest_service("/static", frontend_root)
         .fallback_service(frontend_spa)
-        .nest("/auth", auth_routes)
         .nest("/v1", proxy_api_v1)
         .merge(health_route)
         .nest("/api", Router::new().merge(admin_api))
@@ -330,7 +301,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN;
-    use axum::http::{Method, Request};
+    use axum::http::{Method, Request, StatusCode};
     use tower::ServiceExt;
 
     fn args(items: &[&str]) -> Vec<String> {
@@ -441,5 +412,46 @@ mod tests {
                 .await
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn admin_api_accessible_without_auth() {
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let router = build_app(state);
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/api/providers")
+            .body(Body::empty())
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn proxy_api_rejects_without_api_key() {
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let router = build_app(state);
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/v1/models")
+            .body(Body::empty())
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn proxy_api_accepts_valid_api_key() {
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let (_stored, raw_key) = state.db.insert_api_key("test-key", None).unwrap();
+        let router = build_app(state);
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/v1/models")
+            .header(header::AUTHORIZATION, format!("Bearer {raw_key}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

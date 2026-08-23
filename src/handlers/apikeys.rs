@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::app::AppState;
-use crate::db::{ApiKeyUpdate, AuditEvent, RequestId, SessionUser};
-use crate::error::{AitError, forbidden, internal_error, not_found};
+use crate::db::{ApiKeyUpdate, AuditEvent, RequestId};
+use crate::error::{AitError, internal_error};
 use crate::handlers::{ident_chars, validate_string};
 
 #[derive(Deserialize)]
@@ -30,15 +30,9 @@ pub struct ApiKeyResponse {
 
 pub async fn create_api_key(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
     Extension(request_id): Extension<RequestId>,
-    Path(username): Path<String>,
     Json(input): Json<CreateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<ApiKeyResponse>), (StatusCode, Json<AitError>)> {
-    if session.username != username {
-        return Err(forbidden("You can only manage your own API keys"));
-    }
-
     let expires_at: Option<DateTime<Utc>> = input
         .expires_at
         .filter(|&ts| ts != 0)
@@ -50,17 +44,14 @@ pub async fn create_api_key(
 
     let name = validate_string(&input.name, "name", 128, ident_chars)?;
     let db = state.db.clone();
-    let username_clone = username.clone();
-    let (stored, raw_key) =
-        crate::run_blocking(move || db.insert_api_key(&username_clone, &name, expires_at))
-            .await
-            .map_err(internal_error)?
-            .map_err(internal_error)?;
+    let (stored, raw_key) = crate::run_blocking(move || db.insert_api_key(&name, expires_at))
+        .await
+        .map_err(internal_error)?
+        .map_err(internal_error)?;
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
-        username: session.username.clone(),
         action: "create".into(),
         resource: "api_key".into(),
         resource_id: stored.id.clone(),
@@ -83,23 +74,14 @@ pub async fn create_api_key(
 
 pub async fn list_api_keys(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
-    Path(username): Path<String>,
 ) -> Result<Json<Vec<ApiKeyResponse>>, (StatusCode, Json<AitError>)> {
-    if session.username != username {
-        return Err(forbidden("You can only view your own API keys"));
-    }
-
     let db = state.db.clone();
-    let username_clone = username.clone();
-    let user = crate::run_blocking(move || db.get_user(&username_clone))
+    let keys = crate::run_blocking(move || db.list_api_keys())
         .await
         .map_err(internal_error)?
-        .map_err(|e| AitError::from_db_error(e).into_response())?
-        .ok_or_else(|| not_found(format!("User '{}' not found", username)))?;
+        .map_err(internal_error)?;
 
-    let items: Vec<ApiKeyResponse> = user
-        .api_keys
+    let items: Vec<ApiKeyResponse> = keys
         .into_iter()
         .map(|k| ApiKeyResponse {
             id: k.id.clone(),
@@ -116,18 +98,12 @@ pub async fn list_api_keys(
 
 pub async fn delete_api_key(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
     Extension(request_id): Extension<RequestId>,
-    Path((username, key)): Path<(String, String)>,
+    Path(key): Path<String>,
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
-    if session.username != username {
-        return Err(forbidden("You can only manage your own API keys"));
-    }
-
     let db = state.db.clone();
-    let username_clone = username.clone();
     let key_clone = key.clone();
-    let hash = crate::run_blocking(move || db.delete_api_key(&username_clone, &key_clone))
+    let hash = crate::run_blocking(move || db.delete_api_key(&key_clone))
         .await
         .map_err(internal_error)?
         .map_err(|e| AitError::from_db_error(e).into_response())?;
@@ -136,7 +112,6 @@ pub async fn delete_api_key(
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
-        username: session.username.clone(),
         action: "delete".into(),
         resource: "api_key".into(),
         resource_id: key,
@@ -155,15 +130,10 @@ pub struct UpdateApiKeyRequest {
 
 pub async fn update_api_key(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
     Extension(request_id): Extension<RequestId>,
-    Path((username, key_id)): Path<(String, String)>,
+    Path(key_id): Path<String>,
     Json(input): Json<UpdateApiKeyRequest>,
 ) -> Result<Json<ApiKeyResponse>, (StatusCode, Json<AitError>)> {
-    if session.username != username {
-        return Err(forbidden("You can only manage your own API keys"));
-    }
-
     let name = match input.name {
         Some(n) => {
             let t = n.trim().to_string();
@@ -191,8 +161,7 @@ pub async fn update_api_key(
             .transpose()?,
     };
     let db = state.db.clone();
-    let username_clone = username.clone();
-    let (updated, hash) = crate::run_blocking(move || db.update_api_key(&username_clone, &updates))
+    let (updated, hash) = crate::run_blocking(move || db.update_api_key(&updates))
         .await
         .map_err(internal_error)?
         .map_err(|e| AitError::from_db_error(e).into_response())?;
@@ -201,7 +170,6 @@ pub async fn update_api_key(
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
-        username: session.username.clone(),
         action: "update".into(),
         resource: "api_key".into(),
         resource_id: key_id,
@@ -222,26 +190,16 @@ pub async fn update_api_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{
-        create_test_state, insert_test_user, login_and_cookie, send_request, test_router,
-    };
+    use crate::test_utils::{create_test_state, test_router};
     use axum::Router;
     use axum::http::Method;
+    use tower::ServiceExt;
 
-    async fn setup() -> (Router, String) {
-        let (state, _dir) = create_test_state();
-        insert_test_user(&state.db, "alice", "secret123");
-        let router = test_router(state);
-        let cookie = login_and_cookie(&router, "alice", "secret123").await;
-        (router, cookie)
-    }
-
-    async fn create_key(router: &Router, cookie: &str, name: &str) -> serde_json::Value {
+    async fn create_key(router: &Router, name: &str) -> serde_json::Value {
         let resp = send_request(
             router,
             Method::POST,
-            "/api/users/alice/api-keys",
-            Some(cookie),
+            "/api/api-keys",
             None,
             Some(serde_json::json!({"name": name})),
         )
@@ -254,10 +212,60 @@ mod tests {
         resp.json
     }
 
+    async fn send_request(
+        router: &Router,
+        method: Method,
+        uri: &str,
+        bearer: Option<&str>,
+        body: Option<serde_json::Value>,
+    ) -> TestResponse {
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if let Some(bearer) = bearer {
+            builder = builder.header(
+                axum::http::header::AUTHORIZATION,
+                format!("Bearer {bearer}"),
+            );
+        }
+        if body.is_some() {
+            builder = builder.header(axum::http::header::CONTENT_TYPE, "application/json");
+        }
+        let body = body.map(|b| b.to_string()).unwrap_or_default();
+        let mut request = builder.body(axum::body::Body::from(body)).unwrap();
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                0,
+            ))));
+        let response = router.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
+        TestResponse {
+            status,
+            json,
+            headers,
+        }
+    }
+
+    struct TestResponse {
+        status: StatusCode,
+        json: serde_json::Value,
+        headers: axum::http::HeaderMap,
+    }
+
     #[tokio::test]
     async fn create_api_key_returns_raw_key() {
-        let (router, cookie) = setup().await;
-        let json = create_key(&router, &cookie, "test-key").await;
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let json = create_key(&router, "test-key").await;
         assert_eq!(json["name"], "test-key");
         assert_eq!(json["enabled"], serde_json::Value::Bool(true));
         let key = json["key"].as_str().expect("raw key should be returned");
@@ -267,12 +275,12 @@ mod tests {
 
     #[tokio::test]
     async fn create_api_key_empty_name_bad_request() {
-        let (router, cookie) = setup().await;
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
         let resp = send_request(
             &router,
             Method::POST,
-            "/api/users/alice/api-keys",
-            Some(&cookie),
+            "/api/api-keys",
             None,
             Some(serde_json::json!({"name": "   "})),
         )
@@ -282,56 +290,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_api_key_cross_user_forbidden() {
-        let (state, _dir) = create_test_state();
-        insert_test_user(&state.db, "alice", "secret123");
-        insert_test_user(&state.db, "bob", "bobpass");
-        let router = test_router(state);
-        let cookie = login_and_cookie(&router, "alice", "secret123").await;
-        let resp = send_request(
-            &router,
-            Method::POST,
-            "/api/users/bob/api-keys",
-            Some(&cookie),
-            None,
-            Some(serde_json::json!({"name": "test-key"})),
-        )
-        .await;
-        assert_eq!(resp.status, StatusCode::FORBIDDEN);
-    }
-
-    #[tokio::test]
-    async fn list_api_keys_returns_created() {
-        let (router, cookie) = setup().await;
-        create_key(&router, &cookie, "test-key").await;
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/api/users/alice/api-keys",
-            Some(&cookie),
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(resp.status, StatusCode::OK);
-        let keys = resp.json.as_array().expect("list should return an array");
-        assert_eq!(keys.len(), 1);
-        assert_eq!(keys[0]["name"], "test-key");
-        assert_eq!(keys[0]["enabled"], serde_json::Value::Bool(true));
-    }
-
-    #[tokio::test]
     async fn update_api_key_disabled_key_rejected_by_proxy() {
-        let (router, cookie) = setup().await;
-        let json = create_key(&router, &cookie, "test-key").await;
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let json = create_key(&router, "test-key").await;
         let key_id = json["id"].as_str().unwrap();
         let raw_key = json["key"].as_str().unwrap();
 
         let resp = send_request(
             &router,
             Method::PUT,
-            &format!("/api/users/alice/api-keys/{key_id}"),
-            Some(&cookie),
+            &format!("/api/api-keys/{key_id}"),
             None,
             Some(serde_json::json!({"enabled": false})),
         )
@@ -339,57 +308,29 @@ mod tests {
         assert_eq!(resp.status, StatusCode::OK);
         assert_eq!(resp.json["enabled"], serde_json::Value::Bool(false));
 
-        // The disabled key must no longer pass the proxy auth middleware.
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/v1/models",
-            None,
-            Some(raw_key),
-            None,
-        )
-        .await;
+        let resp = send_request(&router, Method::GET, "/v1/models", Some(raw_key), None).await;
         assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn delete_api_key_removes_key() {
-        let (router, cookie) = setup().await;
-        let json = create_key(&router, &cookie, "test-key").await;
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let json = create_key(&router, "test-key").await;
         let key_id = json["id"].as_str().unwrap();
         let raw_key = json["key"].as_str().unwrap();
 
         let resp = send_request(
             &router,
             Method::DELETE,
-            &format!("/api/users/alice/api-keys/{key_id}"),
-            Some(&cookie),
+            &format!("/api/api-keys/{key_id}"),
             None,
             None,
         )
         .await;
         assert_eq!(resp.status, StatusCode::NO_CONTENT);
 
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/api/users/alice/api-keys",
-            Some(&cookie),
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(resp.json.as_array().unwrap().len(), 0);
-
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/v1/models",
-            None,
-            Some(raw_key),
-            None,
-        )
-        .await;
+        let resp = send_request(&router, Method::GET, "/v1/models", Some(raw_key), None).await;
         assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
     }
 }

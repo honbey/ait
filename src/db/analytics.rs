@@ -413,12 +413,6 @@ fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> Prox
         conditions.push("status = ?".into());
         values.push(Box::new(status.clone()));
     }
-    if let Some(ref username) = params.username
-        && !username.is_empty()
-    {
-        conditions.push("username = ?".into());
-        values.push(Box::new(username.clone()));
-    }
     if let Some(ref api_key_name) = params.api_key_name
         && !api_key_name.is_empty()
     {
@@ -477,7 +471,7 @@ fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> Prox
     // Data query
     let offset = (params.page.saturating_sub(1)) * params.per_page;
     let data_sql = format!(
-        "SELECT timestamp, username, api_key_name, model_name, provider_name, \
+        "SELECT timestamp, api_key_name, model_name, provider_name, \
          prompt_tokens, completion_tokens, total_tokens, cached_tokens, latency_ms, status, \
          endpoint, is_streaming, time_to_first_token_ms, upstream_model, provider_type, \
          response_body_size, error_message, client_ip \
@@ -497,24 +491,23 @@ fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> Prox
                     .get::<_, chrono::NaiveDateTime>(0)?
                     .and_utc()
                     .timestamp(),
-                username: row.get(1)?,
-                api_key_name: row.get(2)?,
-                model_name: row.get(3)?,
-                provider_name: row.get(4)?,
-                prompt_tokens: row.get(5)?,
-                completion_tokens: row.get(6)?,
-                total_tokens: row.get(7)?,
-                cached_tokens: row.get(8)?,
-                latency_ms: row.get(9)?,
-                status: row.get(10)?,
-                endpoint: row.get(11)?,
-                is_streaming: row.get(12)?,
-                time_to_first_token_ms: row.get(13)?,
-                upstream_model: row.get(14)?,
-                provider_type: row.get(15)?,
-                response_body_size: row.get(16)?,
-                error_message: row.get(17)?,
-                client_ip: row.get(18)?,
+                api_key_name: row.get(1)?,
+                model_name: row.get(2)?,
+                provider_name: row.get(3)?,
+                prompt_tokens: row.get(4)?,
+                completion_tokens: row.get(5)?,
+                total_tokens: row.get(6)?,
+                cached_tokens: row.get(7)?,
+                latency_ms: row.get(8)?,
+                status: row.get(9)?,
+                endpoint: row.get(10)?,
+                is_streaming: row.get(11)?,
+                time_to_first_token_ms: row.get(12)?,
+                upstream_model: row.get(13)?,
+                provider_type: row.get(14)?,
+                response_body_size: row.get(15)?,
+                error_message: row.get(16)?,
+                client_ip: row.get(17)?,
             })
         })?;
         let mut out = Vec::new();
@@ -557,18 +550,16 @@ mod tests {
         prompt: i64,
         completion: i64,
         cached: i64,
-        username: &str,
     ) {
         let naive = DateTime::from_timestamp(ts, 0).unwrap().naive_utc();
         conn.execute(
-            "INSERT INTO proxy_log (timestamp, request_id, username, api_key_name, model_name,
+            "INSERT INTO proxy_log (timestamp, request_id, api_key_name, model_name,
              provider_name, prompt_tokens, completion_tokens, total_tokens, cached_tokens,
              latency_ms, status, endpoint, is_streaming, upstream_model, provider_type, client_ip)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             params![
                 naive,
                 "req-1",
-                username,
                 "test-key",
                 model,
                 "test-provider",
@@ -595,26 +586,8 @@ mod tests {
     #[tokio::test]
     async fn total_requests_and_tokens_filter_by_range() {
         let (_dir, conn, analytics) = setup();
-        insert_proxy(
-            &conn,
-            hour_floor() + 100,
-            "gpt-4",
-            "success",
-            10,
-            20,
-            5,
-            "alice",
-        );
-        insert_proxy(
-            &conn,
-            hour_floor() - 3000,
-            "llama",
-            "success",
-            30,
-            40,
-            0,
-            "bob",
-        );
+        insert_proxy(&conn, hour_floor() + 100, "gpt-4", "success", 10, 20, 5);
+        insert_proxy(&conn, hour_floor() - 3000, "llama", "success", 30, 40, 0);
 
         let requests = analytics
             .total_requests(hour_floor() - 7200, hour_floor() + 7200)
@@ -647,9 +620,9 @@ mod tests {
     async fn requests_buckets_by_hour() {
         let (_dir, conn, analytics) = setup();
         let h = hour_floor();
-        insert_proxy(&conn, h + 120, "gpt-4", "success", 1, 1, 0, "alice");
-        insert_proxy(&conn, h + 1800, "llama", "success", 1, 1, 0, "bob");
-        insert_proxy(&conn, h - 3600 + 900, "gpt-4", "success", 1, 1, 0, "alice");
+        insert_proxy(&conn, h + 120, "gpt-4", "success", 1, 1, 0);
+        insert_proxy(&conn, h + 1800, "llama", "success", 1, 1, 0);
+        insert_proxy(&conn, h - 3600 + 900, "gpt-4", "success", 1, 1, 0);
 
         let buckets = analytics.requests(h - 7200, h + 7200).await;
         assert_eq!(buckets.len(), 2);
@@ -666,9 +639,9 @@ mod tests {
     async fn model_dist_groups_and_orders_desc() {
         let (_dir, conn, analytics) = setup();
         let h = hour_floor();
-        insert_proxy(&conn, h + 10, "gpt-4", "success", 1, 1, 0, "alice");
-        insert_proxy(&conn, h + 20, "gpt-4", "success", 1, 1, 0, "bob");
-        insert_proxy(&conn, h + 30, "llama", "success", 1, 1, 0, "alice");
+        insert_proxy(&conn, h + 10, "gpt-4", "success", 1, 1, 0);
+        insert_proxy(&conn, h + 20, "gpt-4", "success", 1, 1, 0);
+        insert_proxy(&conn, h + 30, "llama", "success", 1, 1, 0);
 
         let dist = analytics.model_dist(h - 3600, h + 3600).await;
         assert_eq!(dist.len(), 2);
@@ -682,7 +655,7 @@ mod tests {
     async fn token_dist_splits_categories() {
         let (_dir, conn, analytics) = setup();
         let h = hour_floor();
-        insert_proxy(&conn, h + 10, "gpt-4", "success", 100, 30, 20, "alice");
+        insert_proxy(&conn, h + 10, "gpt-4", "success", 100, 30, 20);
 
         let dist = analytics.token_dist(h - 3600, h + 3600).await;
         let get = |cat: &str| {
@@ -697,7 +670,7 @@ mod tests {
 
         // cached > prompt is clamped to prompt. Aggregation sums columns
         // first, then splits: prompt=150, completion=35, cached=120.
-        insert_proxy(&conn, h + 20, "llama", "success", 50, 5, 100, "bob");
+        insert_proxy(&conn, h + 20, "llama", "success", 50, 5, 100);
         let dist = analytics.token_dist(h - 3600, h + 3600).await;
         let get = |cat: &str| {
             dist.iter()
@@ -720,7 +693,7 @@ mod tests {
             } else {
                 ("llama", "error")
             };
-            insert_proxy(&conn, h + i * 60, model, status, 10, 10, 0, "alice");
+            insert_proxy(&conn, h + i * 60, model, status, 10, 10, 0);
         }
 
         let params = ProxyLogQueryParams {
@@ -758,7 +731,6 @@ mod tests {
             end_ts: Some(h + 3600),
             model_name: Some("llama".to_string()),
             status: Some("error".to_string()),
-            username: Some("alice".to_string()),
             ..Default::default()
         };
         let result = analytics.query_proxy_logs(params).await;

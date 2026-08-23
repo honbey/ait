@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::cell::OnceCell;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -9,13 +8,11 @@ use leptos::prelude::*;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::auth::{AuthContext, AuthStatus};
 use crate::components::toast::ToastManager;
 use crate::i18n::{I18n, K};
 use reactive_stores::{Patch, Store};
 
 thread_local! {
-    static SUPPRESS_401: Cell<bool> = const { Cell::new(false) };
     static BASE_URL: OnceCell<String> = const { OnceCell::new() };
 }
 
@@ -60,35 +57,17 @@ pub struct Provider {
     pub updated_at: i64,
 }
 
-struct Suppress401Guard;
-
-impl Suppress401Guard {
-    fn new() -> Self {
-        SUPPRESS_401.set(true);
-        Suppress401Guard
-    }
-}
-
-impl Drop for Suppress401Guard {
-    fn drop(&mut self) {
-        SUPPRESS_401.set(false);
-    }
-}
-
 pub fn clear_cache() {
     FETCH_CACHE.with(|c| c.borrow_mut().clear());
 }
 
 fn handle_401(status: u16) {
-    if status != 401 || SUPPRESS_401.get() {
+    if status != 401 {
         return;
     }
     clear_cache();
-    if let Some(auth) = use_context::<AuthContext>() {
-        auth.authenticated.set(AuthStatus::NotAuthenticated);
-        if let (Some(toast), Some(i18n)) = (use_context::<ToastManager>(), use_context::<I18n>()) {
-            toast.error(i18n.t_untracked(K::SessionExpired));
-        }
+    if let (Some(toast), Some(i18n)) = (use_context::<ToastManager>(), use_context::<I18n>()) {
+        toast.error(i18n.t_untracked(K::ApiKeyExpired));
     }
 }
 
@@ -242,57 +221,6 @@ async fn api_get_cached<T: DeserializeOwned>(path: &str, force: bool) -> Result<
     Ok(result)
 }
 
-pub async fn login_api(username: &str, password: &str) -> Result<(), NetError> {
-    let _guard = Suppress401Guard::new();
-    api_post::<serde_json::Value>(
-        "auth/login",
-        &serde_json::json!({ "username": username, "password": password }),
-    )
-    .await?;
-    Ok(())
-}
-
-pub async fn logout_api() -> Result<(), NetError> {
-    let _guard = Suppress401Guard::new();
-    api_post::<serde_json::Value>("auth/logout", &serde_json::json!({})).await?;
-    Ok(())
-}
-
-pub async fn change_password_api(
-    current_password: &str,
-    new_password: &str,
-) -> Result<(), NetError> {
-    let username = use_context::<AuthContext>()
-        .and_then(|auth| auth.username.get_untracked())
-        .ok_or_else(|| NetError::GlooError("not logged in".into()))?;
-    api_put::<serde_json::Value>(
-        &format!("api/users/{}/password", username),
-        &serde_json::json!({
-            "current_password": current_password,
-            "new_password": new_password,
-        }),
-    )
-    .await?;
-    Ok(())
-}
-
-pub async fn check_session() -> Result<Option<String>, NetError> {
-    let _guard = Suppress401Guard::new();
-    let json: serde_json::Value = api_get("auth/session").await?;
-    let authenticated = json
-        .get("authenticated")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if !authenticated {
-        return Ok(None);
-    }
-    let username = json
-        .get("username")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    Ok(username)
-}
-
 pub async fn fetch_providers() -> Result<Vec<Provider>, NetError> {
     api_get("api/providers").await
 }
@@ -354,6 +282,8 @@ pub struct OverviewStats {
     pub token_consumption: u64,
     pub rpm: f64,
     pub tpm: f64,
+    #[serde(default)]
+    pub username: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -447,24 +377,19 @@ pub struct ApiKey {
     pub expires_at: Option<i64>,
 }
 
-pub async fn fetch_api_keys(username: &str) -> Result<Vec<ApiKey>, NetError> {
-    api_get(&format!("api/users/{}/api-keys", username)).await
+pub async fn fetch_api_keys() -> Result<Vec<ApiKey>, NetError> {
+    api_get("api/api-keys").await
 }
 
-pub async fn create_api_key(
-    username: &str,
-    name: &str,
-    expires_at: Option<i64>,
-) -> Result<ApiKey, NetError> {
+pub async fn create_api_key(name: &str, expires_at: Option<i64>) -> Result<ApiKey, NetError> {
     api_post(
-        &format!("api/users/{}/api-keys", username),
+        "api/api-keys",
         &serde_json::json!({ "name": name, "expires_at": expires_at }),
     )
     .await
 }
 
 pub async fn update_api_key(
-    username: &str,
     key_id: &str,
     name: Option<&str>,
     expires_at: Option<i64>,
@@ -480,15 +405,11 @@ pub async fn update_api_key(
     if let Some(e) = enabled {
         body["enabled"] = serde_json::json!(e);
     }
-    api_put(
-        &format!("api/users/{}/api-keys/{}", username, key_id),
-        &body,
-    )
-    .await
+    api_put(&format!("api/api-keys/{}", key_id), &body).await
 }
 
-pub async fn delete_api_key(username: &str, key_id: &str) -> Result<(), NetError> {
-    api_delete(&format!("api/users/{}/api-keys/{}", username, key_id)).await
+pub async fn delete_api_key(key_id: &str) -> Result<(), NetError> {
+    api_delete(&format!("api/api-keys/{}", key_id)).await
 }
 
 pub async fn fetch_overview_stats(
@@ -562,7 +483,6 @@ pub async fn fetch_token_buckets(
 #[allow(dead_code)]
 pub struct ProxyLogEntryResponse {
     pub timestamp: i64,
-    pub username: Option<String>,
     pub api_key_name: Option<String>,
     pub model_name: String,
     pub provider_name: String,

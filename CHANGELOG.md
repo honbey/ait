@@ -1,5 +1,32 @@
 # 更新日志
 
+## [v0.2.0] - (未发布)
+
+### Breaking Changes
+
+- **移除内置用户/密码/会话系统** — 删除 `users`、`sessions` 表，移除 `bootstrap_*`、`session_ttl_*`、`max_api_keys_per_user`、`login_rate_limit` 等配置项
+- **管理接口鉴权外置** — `/api/*` 不再由 Ait 自身鉴权，由外部反向代理（如 nginx + Authelia）保护
+- **API Key 路径变更** — 从 `/api/users/{username}/api-keys` 改为 `/api/api-keys`（全局管理，不再按用户隔离）
+- **日志表删除 `username` 列** — DuckDB `access_log`、`proxy_log`、`audit_log` 不再记录用户名；`proxy_log` 保留 `api_key_name`
+- **`/auth/session` 接口删除** — 管理鉴权完全由反向代理处理，`Remote-User` header 仅用于 overview 问候语
+- **前端移除登录页** — 管理界面不再内置登录/改密功能
+
+### 新增功能
+
+- **部署文档** — 新增 `docs/auth-proxy.md`，提供 nginx + Authelia 配置示例
+- **回归测试** — 新增 `/api/*` 无鉴权可达、`/v1/*` 需 API Key 的端到端验证用例
+
+### 移除
+
+- 删除 `src/handlers/users.rs`、`src/rate_limiter.rs`
+- 移除 `bcrypt` 依赖
+
+### Chore
+
+- 前端 `SessionExpired` 改为 `ApiKeyExpired`
+- `config/ait.toml.example` 更新 `cors_allow_credentials` 注释
+- README 默认配置示例与当前配置同步
+
 ## [v0.1.8] - 2026-08-05
 
 ### 新增功能

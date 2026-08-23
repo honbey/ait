@@ -17,8 +17,6 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub health_detail: bool,
-    pub session_cleanup_interval_secs: u64,
-    pub rate_limiter_cleanup_interval_secs: u64,
     pub cache_cleanup_interval_secs: u64,
     pub cache_max_entries: u64,
     pub graceful_timeout_secs: u64,
@@ -26,21 +24,8 @@ pub struct ServerConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct RateLimitConfig {
-    pub max_attempts: u64,
-    pub window_secs: u64,
-    pub ban_secs: u64,
-}
-
-#[derive(Debug, Deserialize, Clone)]
 pub struct AuthConfig {
     pub enabled: bool,
-    pub session_ttl_secs: u64,
-    pub bootstrap_username: String,
-    pub bootstrap_password: Option<String>,
-    pub max_api_keys_per_user: u64,
-    pub rate_limiter_max_entries: u64,
-    pub login_rate_limit: RateLimitConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -99,20 +84,11 @@ impl ConfigApp {
             .set_default("server.host", "127.0.0.1")?
             .set_default("server.port", 8000u16)?
             .set_default("server.health_detail", false)?
-            .set_default("server.session_cleanup_interval_secs", 3600u64)?
-            .set_default("server.rate_limiter_cleanup_interval_secs", 600u64)?
             .set_default("server.cache_cleanup_interval_secs", 300u64)?
             .set_default("server.cache_max_entries", 1000u64)?
             .set_default("server.graceful_timeout_secs", 10u64)?
             .set_default("server.trusted_proxies", vec!["127.0.0.1", "::1"])?
             .set_default("auth.enabled", true)?
-            .set_default("auth.session_ttl_secs", 86400u64)?
-            .set_default("auth.bootstrap_username", "admin")?
-            .set_default("auth.max_api_keys_per_user", 10u64)?
-            .set_default("auth.rate_limiter_max_entries", 100000u64)?
-            .set_default("auth.login_rate_limit.max_attempts", 5u64)?
-            .set_default("auth.login_rate_limit.window_secs", 300u64)?
-            .set_default("auth.login_rate_limit.ban_secs", 900u64)?
             .set_default("database.path", "./data/ait.db")?
             .set_default("log.path", "./data/ait-logs.duckdb")?
             .set_default("log.retention_days", 30u64)?
@@ -168,10 +144,7 @@ mod tests {
         let config = ConfigApp::new(Some("config/ait.toml.example")).unwrap();
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 8000);
-        assert_eq!(config.server.session_cleanup_interval_secs, 3600);
-        assert_eq!(config.server.rate_limiter_cleanup_interval_secs, 600);
         assert!(config.auth.enabled);
-        assert_eq!(config.auth.max_api_keys_per_user, 10);
         assert_eq!(config.database.path, "./data/ait.db");
         assert_eq!(config.log.path, "./data/ait-logs.duckdb");
         assert_eq!(config.log.retention_days, 30);
@@ -183,9 +156,6 @@ mod tests {
         assert_eq!(config.log.axum, "info");
         assert_eq!(config.log.tower_http_trace, "info");
         assert_eq!(config.log.analytics_timeout_secs, 10);
-        assert_eq!(config.auth.login_rate_limit.max_attempts, 5);
-        assert_eq!(config.auth.login_rate_limit.window_secs, 300);
-        assert_eq!(config.auth.login_rate_limit.ban_secs, 900);
     }
 
     #[test]
@@ -195,10 +165,6 @@ mod tests {
 [server]
 port = 9090
 health_detail = true
-
-[auth]
-bootstrap_username = "custom_admin"
-max_api_keys_per_user = 20
 "#,
         );
         let config = ConfigApp::new(Some(&path)).unwrap();
@@ -206,12 +172,9 @@ max_api_keys_per_user = 20
         // overridden
         assert_eq!(config.server.port, 9090);
         assert!(config.server.health_detail);
-        assert_eq!(config.auth.bootstrap_username, "custom_admin");
-        assert_eq!(config.auth.max_api_keys_per_user, 20);
 
         // still defaults
         assert_eq!(config.server.host, "127.0.0.1");
-        assert_eq!(config.server.session_cleanup_interval_secs, 3600);
         assert_eq!(config.database.path, "./data/ait.db");
         assert_eq!(config.proxy.timeout_secs, 300);
         assert!(config.proxy.stream);
@@ -223,7 +186,6 @@ max_api_keys_per_user = 20
         let config = ConfigApp::new(Some("/nonexistent/path/that/does/not/exist")).unwrap();
         assert_eq!(config.server.port, 8000);
         assert_eq!(config.server.host, "127.0.0.1");
-        assert_eq!(config.auth.max_api_keys_per_user, 10);
         assert_eq!(config.log.retention_days, 30);
         assert_eq!(config.log.analytics_timeout_secs, 10);
         assert_eq!(config.proxy.max_response_body_bytes, 8 * 1024 * 1024);

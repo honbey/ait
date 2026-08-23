@@ -12,7 +12,7 @@ use chrono::Utc;
 use tracing::{debug, trace};
 
 use crate::app::{AppState, ModelCacheEntry, NEGATIVE_CACHE_TTL};
-use crate::db::{Model, Provider, ProxyEvent, RequestId, SessionUser};
+use crate::db::{ApiKeyContext, Model, Provider, ProxyEvent, RequestId};
 use crate::error::{AitError, internal_error, not_found};
 use crate::middleware::CACHE_TTL;
 use crate::providers::create_provider;
@@ -42,7 +42,7 @@ use guard::{ProxyLogGuard, UsageTokens};
 
 pub async fn chat_completions(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
+    Extension(api_key): Extension<ApiKeyContext>,
     Extension(client_ip): Extension<Option<IpAddr>>,
     Extension(request_id): Extension<RequestId>,
     body: bytes::Bytes,
@@ -52,7 +52,7 @@ pub async fn chat_completions(
         .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
     proxy_request(
         state,
-        session,
+        api_key,
         client_ip,
         request_id,
         body,
@@ -64,7 +64,7 @@ pub async fn chat_completions(
 
 pub async fn completions(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
+    Extension(api_key): Extension<ApiKeyContext>,
     Extension(client_ip): Extension<Option<IpAddr>>,
     Extension(request_id): Extension<RequestId>,
     body: bytes::Bytes,
@@ -74,7 +74,7 @@ pub async fn completions(
         .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
     proxy_request(
         state,
-        session,
+        api_key,
         client_ip,
         request_id,
         body,
@@ -86,7 +86,7 @@ pub async fn completions(
 
 pub async fn embeddings(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
+    Extension(api_key): Extension<ApiKeyContext>,
     Extension(client_ip): Extension<Option<IpAddr>>,
     Extension(request_id): Extension<RequestId>,
     body: bytes::Bytes,
@@ -96,7 +96,7 @@ pub async fn embeddings(
         .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
     proxy_request(
         state,
-        session,
+        api_key,
         client_ip,
         request_id,
         body,
@@ -108,7 +108,7 @@ pub async fn embeddings(
 
 pub async fn responses(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
+    Extension(api_key): Extension<ApiKeyContext>,
     Extension(client_ip): Extension<Option<IpAddr>>,
     Extension(request_id): Extension<RequestId>,
     body: bytes::Bytes,
@@ -118,7 +118,7 @@ pub async fn responses(
         .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
     proxy_request(
         state,
-        session,
+        api_key,
         client_ip,
         request_id,
         body,
@@ -152,7 +152,7 @@ pub async fn health(State(state): State<AppState>) -> AxumJson<serde_json::Value
 
 pub async fn list_models_proxy(
     State(state): State<AppState>,
-    Extension(_session): Extension<SessionUser>,
+    Extension(_api_key): Extension<ApiKeyContext>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
     let db = state.db.clone();
     let (models, providers) = crate::run_blocking(move || {
@@ -194,7 +194,7 @@ pub async fn list_models_proxy(
 
 pub async fn proxy_request(
     state: AppState,
-    session: SessionUser,
+    api_key: ApiKeyContext,
     client_ip: Option<IpAddr>,
     request_id: RequestId,
     body: serde_json::Value,
@@ -217,8 +217,7 @@ pub async fn proxy_request(
         state.log_manager.log_proxy(ProxyEvent {
             timestamp: Utc::now(),
             request_id: request_id.0,
-            username: Some(session.username.clone()),
-            api_key_name: session.api_key_name.clone(),
+            api_key_name: api_key.name.clone(),
             model_name: body
                 .get("model")
                 .and_then(|m| m.as_str())
@@ -412,7 +411,7 @@ pub async fn proxy_request(
             upstream,
             provider_name,
             model_name,
-            session.clone(),
+            api_key.clone(),
             start,
             endpoint,
             upstream_model,
@@ -431,8 +430,7 @@ pub async fn proxy_request(
         ProxyEvent {
             timestamp: Utc::now(),
             request_id: request_id.0,
-            username: Some(session.username),
-            api_key_name: session.api_key_name,
+            api_key_name: api_key.name.clone(),
             model_name: model_name.clone(),
             provider_name: provider_name.clone(),
             prompt_tokens,
@@ -516,7 +514,7 @@ fn count_prompt_tokens(body_len: usize) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{RequestId, SessionUser};
+    use crate::db::{ApiKeyContext, RequestId};
     use crate::test_utils::create_test_state_dlp;
     use axum::Extension;
     use bytes::Bytes;
@@ -540,10 +538,9 @@ mod tests {
         assert!(map.is_empty());
     }
 
-    fn session() -> SessionUser {
-        SessionUser {
-            username: "tester".to_string(),
-            api_key_name: Some("test-key".to_string()),
+    fn api_key() -> ApiKeyContext {
+        ApiKeyContext {
+            name: Some("test-key".to_string()),
         }
     }
 
@@ -556,7 +553,7 @@ mod tests {
         });
         let result = chat_completions(
             State(state),
-            Extension(session()),
+            Extension(api_key()),
             Extension(Some("127.0.0.1".parse().unwrap())),
             Extension(RequestId("r1".to_string())),
             Bytes::from(serde_json::to_vec(&body).unwrap()),
@@ -575,7 +572,7 @@ mod tests {
         });
         let result = chat_completions(
             State(state),
-            Extension(session()),
+            Extension(api_key()),
             Extension(Some("127.0.0.1".parse().unwrap())),
             Extension(RequestId("r2".to_string())),
             Bytes::from(serde_json::to_vec(&body).unwrap()),
@@ -594,7 +591,7 @@ mod tests {
         let body = serde_json::json!({ "model": "x", "content": "x".repeat(17) });
         let result = chat_completions(
             State(state),
-            Extension(session()),
+            Extension(api_key()),
             Extension(Some("127.0.0.1".parse().unwrap())),
             Extension(RequestId("r3".to_string())),
             Bytes::from(serde_json::to_vec(&body).unwrap()),

@@ -1,7 +1,6 @@
 use leptos::prelude::*;
 
 use crate::api::{self, BucketEntry};
-use crate::auth::AuthContext;
 use crate::components::error_display::ErrorCard;
 use crate::components::line_chart::{ChartSeries, LineChart};
 use crate::components::pie_chart::{PieChart, PieData};
@@ -92,6 +91,7 @@ struct OverviewData {
     token_consumption: u64,
     rpm: f64,
     tpm: f64,
+    username: Option<String>,
     request_buckets: Vec<BucketEntry>,
     token_buckets: Vec<BucketEntry>,
     model_dist: Vec<api::ModelDistEntry>,
@@ -151,8 +151,6 @@ fn TabButton(
 pub fn Overview() -> impl IntoView {
     use_page_title(move || format!("Ait - {}", t!(Overview)()));
 
-    let auth = use_context::<AuthContext>().expect("AuthContext");
-
     let now = now_timestamp();
     let today = midnight_ts(now);
     // exclusive backend bound (< end_ts), ~1s gap at 23:59:59 is negligible
@@ -190,6 +188,7 @@ pub fn Overview() -> impl IntoView {
                         token_consumption: stats_val.token_consumption,
                         rpm: stats_val.rpm,
                         tpm: stats_val.tpm,
+                        username: stats_val.username,
                         request_buckets: r,
                         token_buckets: t,
                         model_dist: md,
@@ -423,9 +422,13 @@ pub fn Overview() -> impl IntoView {
         .into_any(),
     };
 
-    let greeting = {
-        let user_name = auth.username.get_untracked().unwrap_or_default();
-        tr!(Greeting, &[("username", &user_name)])
+    let greeting = move || {
+        let user_name = overview_resource
+            .get()
+            .and_then(|r| r.ok())
+            .and_then(|data| data.username.clone())
+            .unwrap_or_else(|| "Welcome".to_string());
+        tr!(Greeting, &[("username", &user_name)])()
     };
 
     let start_str = Signal::derive(move || {

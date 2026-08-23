@@ -4,8 +4,6 @@ use leptos_router::{
     components::{ParentRoute, Route, Router, Routes},
 };
 
-use crate::api;
-use crate::auth::{AuthContext, AuthStatus};
 use crate::components::console_layout::ConsoleShell;
 use crate::components::toast::{ToastContainer, ToastManager};
 use crate::components::topbar::Topbar;
@@ -14,7 +12,6 @@ use crate::pages::about::AboutPage;
 use crate::pages::apikeys::ApiKeysPage;
 use crate::pages::docs::DocsPage;
 use crate::pages::home::Home;
-use crate::pages::login::LoginPage;
 use crate::pages::logs::LogsPage;
 use crate::pages::models::ModelsPage;
 use crate::pages::not_found::NotFoundPage;
@@ -47,32 +44,7 @@ pub fn App() -> impl IntoView {
     let i18n = I18n::new(&initial_lang);
     provide_context(i18n.clone());
 
-    let auth = AuthContext::new();
-    provide_context(auth.clone());
     provide_context(ToastManager::new());
-    let _session_check = LocalResource::new(move || {
-        let auth_clone = auth.clone();
-        async move {
-            match api::check_session().await {
-                Ok(Some(uname)) => {
-                    // Apply only while status is still Unknown; a login or
-                    // logout that raced this request must not be overwritten
-                    // by a stale snapshot.
-                    if auth_clone.authenticated.get_untracked() == AuthStatus::Unknown {
-                        auth_clone.set_logged_in(uname);
-                    }
-                }
-                Ok(None) => {
-                    if auth_clone.authenticated.get_untracked() == AuthStatus::Unknown {
-                        auth_clone.set_logged_out();
-                    }
-                }
-                // Network errors must not flip the status; the app may be
-                // offline or the request may have raced a login.
-                Err(_) => {}
-            }
-        }
-    });
 
     let stored_theme = match storage::get_item(storage::THEME_KEY).as_deref() {
         Some("dark") => Some(true),
@@ -111,7 +83,6 @@ pub fn App() -> impl IntoView {
                 <main class="min-h-[calc(100vh-3.5rem)]">
                     <Routes fallback=|| view! { <NotFoundPage /> }>
                         <Route path=StaticSegment("") view=Home />
-                        <Route path=StaticSegment("login") view=LoginPage />
                         <Route path=StaticSegment("docs") view=DocsPage />
                         <Route path=StaticSegment("about") view=AboutPage />
                         <ParentRoute path=StaticSegment("console") view=ConsoleShell>

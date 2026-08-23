@@ -1,13 +1,12 @@
 use crate::app::AppState;
 use crate::config::{
-    AuthConfig, ConfigApp, DatabaseConfig, DlpConfig, LogConfig, ProxyConfig, RateLimitConfig,
-    SecurityConfig, ServerConfig,
+    AuthConfig, ConfigApp, DatabaseConfig, DlpConfig, LogConfig, ProxyConfig, SecurityConfig,
+    ServerConfig,
 };
 use crate::db::{
-    AccessEvent, AuditEvent, Database, LogManager, Model, Provider, ProviderType, ProxyEvent, User,
+    AccessEvent, AuditEvent, Database, LogManager, Model, Provider, ProviderType, ProxyEvent,
 };
 use crate::dlp::DlpScanner;
-use crate::rate_limiter::RateLimiter;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
@@ -21,22 +20,11 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
-pub fn create_test_db(max_api_keys: u64) -> (Database, TempDir) {
+pub fn create_test_db() -> (Database, TempDir) {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("test.db");
-    let db = Database::new(path.to_str().unwrap(), max_api_keys).unwrap();
+    let db = Database::new(path.to_str().unwrap()).unwrap();
     (db, dir)
-}
-
-pub fn create_test_user() -> User {
-    let password_hash = bcrypt::hash("password123", 4).unwrap();
-    User {
-        username: uuid::Uuid::new_v4().to_string(),
-        password_hash,
-        api_keys: vec![],
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-    }
 }
 
 pub fn create_test_provider(id: &str, provider_type: ProviderType, base_url: &str) -> Provider {
@@ -74,26 +62,12 @@ pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
             host: "127.0.0.1".to_string(),
             port: 8000,
             health_detail: false,
-            session_cleanup_interval_secs: 3600,
-            rate_limiter_cleanup_interval_secs: 600,
             cache_cleanup_interval_secs: 300,
             cache_max_entries: 1000,
             graceful_timeout_secs: 10,
             trusted_proxies: vec!["127.0.0.1".parse().unwrap(), "::1".parse().unwrap()],
         },
-        auth: AuthConfig {
-            enabled: true,
-            session_ttl_secs: 86400,
-            bootstrap_username: "admin".to_string(),
-            bootstrap_password: None,
-            max_api_keys_per_user: 10,
-            rate_limiter_max_entries: 100000,
-            login_rate_limit: RateLimitConfig {
-                max_attempts: 5,
-                window_secs: 300,
-                ban_secs: 900,
-            },
-        },
+        auth: AuthConfig { enabled: true },
         database: DatabaseConfig {
             path: db_path.to_string(),
         },
@@ -139,8 +113,7 @@ pub(crate) fn test_config_fast_logs(db_path: &str, log_path: &str) -> ConfigApp 
 }
 
 fn build_state(config: ConfigApp, dir: TempDir) -> (AppState, TempDir) {
-    let db =
-        Arc::new(Database::new(&config.database.path, config.auth.max_api_keys_per_user).unwrap());
+    let db = Arc::new(Database::new(&config.database.path).unwrap());
     let log_manager = LogManager::new(&config.log).unwrap();
     let dlp = DlpScanner::new(&config.security.dlp);
     let state = AppState {
@@ -149,10 +122,8 @@ fn build_state(config: ConfigApp, dir: TempDir) -> (AppState, TempDir) {
         http_client: reqwest::Client::new(),
         log_manager,
         start_time: Utc::now(),
-        login_rate_limiter: RateLimiter::new(1),
         shutdown_token: CancellationToken::new(),
         api_key_cache: Arc::new(DashMap::new()),
-        session_cache: Arc::new(DashMap::new()),
         model_cache: Arc::new(DashMap::new()),
         provider_cache: Arc::new(DashMap::new()),
         ssrf_dns_cache: Arc::new(DashMap::new()),
@@ -203,7 +174,6 @@ pub fn make_proxy_event(model: &str, status: &str, total_tokens: i64) -> ProxyEv
     ProxyEvent {
         timestamp: Utc::now(),
         request_id: uuid::Uuid::new_v4().to_string(),
-        username: Some("alice".to_string()),
         api_key_name: Some("test-key".to_string()),
         model_name: model.to_string(),
         provider_name: "test-provider".to_string(),
@@ -228,7 +198,6 @@ pub fn make_audit_event(action: &str) -> AuditEvent {
     AuditEvent {
         timestamp: Utc::now(),
         request_id: uuid::Uuid::new_v4().to_string(),
-        username: "alice".to_string(),
         action: action.to_string(),
         resource: "api_key".to_string(),
         resource_id: "key-1".to_string(),
@@ -244,7 +213,6 @@ pub fn make_access_event(path: &str, status: i32) -> AccessEvent {
         path: path.to_string(),
         status,
         latency_ms: 42,
-        username: Some("alice".to_string()),
         client_ip: Some("127.0.0.1".to_string()),
     }
 }
@@ -254,42 +222,23 @@ pub fn test_router(state: AppState) -> Router {
     crate::build_app(state)
 }
 
-/// Insert a user directly into the DB, bypassing the handler-level bootstrap.
-/// Uses a low bcrypt cost so tests stay fast.
-pub fn insert_test_user(db: &Database, username: &str, password: &str) {
-    let password_hash = bcrypt::hash(password, 4).unwrap();
-    let user = User {
-        username: username.to_string(),
-        password_hash,
-        api_keys: vec![],
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-    };
-    db.insert_user(user).unwrap();
-}
-
 pub struct TestResponse {
     pub status: StatusCode,
     pub json: Value,
     pub headers: HeaderMap,
 }
 
-/// Send a request through the router. `cookie` is the raw session key, sent as
-/// the `session_key` cookie; `bearer` is a raw API key sent as a Bearer token.
-/// A fake client IP is always injected because the login rate limiter and
-/// client IP extraction require `ConnectInfo`.
+/// Send a request through the router. `bearer` is a raw API key sent as a
+/// Bearer token. A fake client IP is always injected because the client IP
+/// extraction requires `ConnectInfo`.
 pub async fn send_request(
     router: &Router,
     method: Method,
     uri: &str,
-    cookie: Option<&str>,
     bearer: Option<&str>,
     body: Option<Value>,
 ) -> TestResponse {
     let mut builder = Request::builder().method(method).uri(uri);
-    if let Some(cookie) = cookie {
-        builder = builder.header(header::COOKIE, format!("session_key={cookie}"));
-    }
     if let Some(bearer) = bearer {
         builder = builder.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
     }
@@ -317,32 +266,6 @@ pub async fn send_request(
         json,
         headers,
     }
-}
-
-/// Login and return the raw session key from the `Set-Cookie` header.
-pub async fn login_and_cookie(router: &Router, username: &str, password: &str) -> String {
-    let resp = send_request(
-        router,
-        Method::POST,
-        "/auth/login",
-        None,
-        None,
-        Some(json!({"username": username, "password": password})),
-    )
-    .await;
-    assert_eq!(resp.status, StatusCode::OK, "login should succeed");
-    let cookie = resp
-        .headers
-        .get(header::SET_COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .expect("login should set a session cookie");
-    cookie
-        .strip_prefix("session_key=")
-        .expect("cookie should start with session_key=")
-        .split(';')
-        .next()
-        .unwrap()
-        .to_string()
 }
 
 /// Run a blocking closure on a separate thread and fail the test if it does

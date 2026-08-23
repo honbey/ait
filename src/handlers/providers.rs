@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use strum::{EnumMessage, IntoEnumIterator};
 
 use crate::app::AppState;
-use crate::db::{AuditEvent, Provider, ProviderType, ProviderUpdate, RequestId, SessionUser};
+use crate::db::{AuditEvent, Provider, ProviderType, ProviderUpdate, RequestId};
 use crate::error::{AitError, internal_error, not_found};
 use crate::handlers::{ident_chars, validate_string};
 use crate::ssrf;
@@ -125,7 +125,6 @@ fn validate_base_url(url: &str) -> Result<reqwest::Url, AitError> {
 
 pub async fn create_provider(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
     Extension(request_id): Extension<RequestId>,
     Json(input): Json<CreateProviderRequest>,
 ) -> Result<(StatusCode, Json<ProviderResponse>), (StatusCode, Json<AitError>)> {
@@ -172,7 +171,6 @@ pub async fn create_provider(
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
-        username: session.username.clone(),
         action: "create".into(),
         resource: "provider".into(),
         resource_id: inserted.id.clone(),
@@ -184,7 +182,6 @@ pub async fn create_provider(
 
 pub async fn list_providers(
     State(state): State<AppState>,
-    Extension(_session): Extension<SessionUser>,
 ) -> Result<Json<Vec<ProviderResponse>>, (StatusCode, Json<AitError>)> {
     let db = state.db.clone();
     let providers = crate::run_blocking(move || db.list_providers())
@@ -198,7 +195,6 @@ pub async fn list_providers(
 
 pub async fn get_provider(
     State(state): State<AppState>,
-    Extension(_session): Extension<SessionUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ProviderResponse>, (StatusCode, Json<AitError>)> {
     let db = state.db.clone();
@@ -214,7 +210,6 @@ pub async fn get_provider(
 
 pub async fn get_provider_api_key(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
     Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
@@ -229,7 +224,6 @@ pub async fn get_provider_api_key(
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
-        username: session.username,
         action: "view_api_key".into(),
         resource: "provider".into(),
         resource_id: provider.id.clone(),
@@ -245,7 +239,6 @@ pub async fn get_provider_api_key(
 
 pub async fn update_provider(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
     Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
     Json(input): Json<UpdateProviderRequest>,
@@ -309,7 +302,6 @@ pub async fn update_provider(
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
-        username: session.username.clone(),
         action: "update".into(),
         resource: "provider".into(),
         resource_id: id,
@@ -321,7 +313,6 @@ pub async fn update_provider(
 
 pub async fn delete_provider(
     State(state): State<AppState>,
-    Extension(session): Extension<SessionUser>,
     Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
 ) -> Result<(StatusCode,), (StatusCode, Json<AitError>)> {
@@ -342,7 +333,6 @@ pub async fn delete_provider(
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
-        username: session.username.clone(),
         action: "delete".into(),
         resource: "provider".into(),
         resource_id: id,
@@ -370,20 +360,15 @@ pub async fn list_provider_types() -> Json<&'static Vec<serde_json::Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{
-        create_test_state, insert_test_user, login_and_cookie, send_request, test_router,
-    };
+    use crate::test_utils::{create_test_state, send_request, test_router};
     use axum::Router;
     use axum::http::Method;
 
     const BASE_URL: &str = "http://127.0.0.1:8080/";
 
-    async fn setup() -> (Router, String) {
+    async fn setup() -> Router {
         let (state, _dir) = create_test_state();
-        insert_test_user(&state.db, "alice", "secret123");
-        let router = test_router(state);
-        let cookie = login_and_cookie(&router, "alice", "secret123").await;
-        (router, cookie)
+        test_router(state)
     }
 
     fn create_body(name: &str) -> serde_json::Value {
@@ -395,12 +380,11 @@ mod tests {
         })
     }
 
-    async fn create_provider(router: &Router, cookie: &str, name: &str) -> serde_json::Value {
+    async fn create_provider(router: &Router, name: &str) -> serde_json::Value {
         let resp = send_request(
             router,
             Method::POST,
             "/api/providers",
-            Some(cookie),
             None,
             Some(create_body(name)),
         )
@@ -411,8 +395,8 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_returns_created() {
-        let (router, cookie) = setup().await;
-        let json = create_provider(&router, &cookie, "test-provider").await;
+        let router = setup().await;
+        let json = create_provider(&router, "test-provider").await;
         assert_eq!(json["name"], "test-provider");
         assert_eq!(json["type"], "openai_compat");
         assert_eq!(json["base_url"], BASE_URL);
@@ -422,12 +406,11 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_empty_name_bad_request() {
-        let (router, cookie) = setup().await;
+        let router = setup().await;
         let resp = send_request(
             &router,
             Method::POST,
             "/api/providers",
-            Some(&cookie),
             None,
             Some(create_body("   ")),
         )
@@ -438,34 +421,18 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_invalid_base_url_bad_request() {
-        let (router, cookie) = setup().await;
+        let router = setup().await;
         let mut body = create_body("test-provider");
         body["base_url"] = serde_json::json!("not-a-url");
-        let resp = send_request(
-            &router,
-            Method::POST,
-            "/api/providers",
-            Some(&cookie),
-            None,
-            Some(body),
-        )
-        .await;
+        let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
         assert_eq!(resp.status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn list_providers_includes_created() {
-        let (router, cookie) = setup().await;
-        create_provider(&router, &cookie, "test-provider").await;
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/api/providers",
-            Some(&cookie),
-            None,
-            None,
-        )
-        .await;
+        let router = setup().await;
+        create_provider(&router, "test-provider").await;
+        let resp = send_request(&router, Method::GET, "/api/providers", None, None).await;
         assert_eq!(resp.status, StatusCode::OK);
         let providers = resp.json.as_array().expect("list should return an array");
         assert_eq!(providers.len(), 1);
@@ -475,14 +442,13 @@ mod tests {
 
     #[tokio::test]
     async fn update_provider_changes_fields() {
-        let (router, cookie) = setup().await;
-        let json = create_provider(&router, &cookie, "test-provider").await;
+        let router = setup().await;
+        let json = create_provider(&router, "test-provider").await;
         let id = json["id"].as_str().unwrap();
         let resp = send_request(
             &router,
             Method::PUT,
             &format!("/api/providers/{id}"),
-            Some(&cookie),
             None,
             Some(serde_json::json!({
                 "base_url": "http://127.0.0.1:9090/",
@@ -497,14 +463,13 @@ mod tests {
 
     #[tokio::test]
     async fn delete_provider_removes_and_get_returns_404() {
-        let (router, cookie) = setup().await;
-        let json = create_provider(&router, &cookie, "test-provider").await;
+        let router = setup().await;
+        let json = create_provider(&router, "test-provider").await;
         let id = json["id"].as_str().unwrap();
         let resp = send_request(
             &router,
             Method::DELETE,
             &format!("/api/providers/{id}"),
-            Some(&cookie),
             None,
             None,
         )
@@ -514,7 +479,6 @@ mod tests {
             &router,
             Method::GET,
             &format!("/api/providers/{id}"),
-            Some(&cookie),
             None,
             None,
         )
@@ -524,16 +488,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_provider_types_non_empty() {
-        let (router, cookie) = setup().await;
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/api/provider-types",
-            Some(&cookie),
-            None,
-            None,
-        )
-        .await;
+        let router = setup().await;
+        let resp = send_request(&router, Method::GET, "/api/provider-types", None, None).await;
         assert_eq!(resp.status, StatusCode::OK);
         let types = resp.json.as_array().expect("types should be an array");
         assert!(!types.is_empty());

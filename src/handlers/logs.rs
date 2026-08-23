@@ -1,12 +1,11 @@
 use axum::{
-    Extension, Json,
+    Json,
     extract::{Query, State},
     http::StatusCode,
 };
 use serde::Deserialize;
 
 use crate::app::AppState;
-use crate::db::SessionUser;
 use crate::db::models::{PaginatedResponse, ProxyLogEntryResponse, ProxyLogQueryParams};
 use crate::error::AitError;
 
@@ -19,7 +18,6 @@ pub struct ProxyLogQuery {
     pub model_name: Option<String>,
     pub provider_name: Option<String>,
     pub status: Option<String>,
-    pub username: Option<String>,
     pub api_key_name: Option<String>,
     pub endpoint: Option<String>,
     pub is_streaming: Option<bool>,
@@ -32,7 +30,6 @@ const MAX_PER_PAGE: u64 = 100;
 
 pub async fn list_proxy_logs(
     State(state): State<AppState>,
-    Extension(_session): Extension<SessionUser>,
     Query(q): Query<ProxyLogQuery>,
 ) -> Result<Json<PaginatedResponse<ProxyLogEntryResponse>>, (StatusCode, Json<AitError>)> {
     let page = q.page.unwrap_or(1).max(1);
@@ -57,7 +54,6 @@ pub async fn list_proxy_logs(
         model_name: q.model_name,
         provider_name: q.provider_name,
         status: q.status,
-        username: q.username,
         api_key_name: q.api_key_name,
         endpoint: q.endpoint,
         is_streaming: q.is_streaming,
@@ -80,16 +76,14 @@ pub async fn list_proxy_logs(
 mod tests {
     use super::*;
     use crate::test_utils::{
-        create_test_state_fast_logs, insert_test_user, login_and_cookie, make_proxy_event,
-        send_request, test_router,
+        create_test_state_fast_logs, make_proxy_event, send_request, test_router,
     };
     use axum::Router;
     use axum::http::Method;
     use chrono::Utc;
 
-    async fn setup_with_events() -> (Router, String, i64) {
+    async fn setup_with_events() -> (Router, i64) {
         let (state, _dir) = create_test_state_fast_logs();
-        insert_test_user(&state.db, "alice", "secret123");
         let now = Utc::now().timestamp();
         state
             .log_manager
@@ -118,13 +112,12 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         let router = test_router(state);
-        let cookie = login_and_cookie(&router, "alice", "secret123").await;
-        (router, cookie, now)
+        (router, now)
     }
 
     #[tokio::test]
     async fn list_proxy_logs_returns_all_rows_desc() {
-        let (router, cookie, now) = setup_with_events().await;
+        let (router, now) = setup_with_events().await;
         let resp = send_request(
             &router,
             Method::GET,
@@ -133,7 +126,6 @@ mod tests {
                 now - 3600,
                 now + 3600
             ),
-            Some(&cookie),
             None,
             None,
         )
@@ -148,7 +140,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_proxy_logs_filters_and_paginates() {
-        let (router, cookie, now) = setup_with_events().await;
+        let (router, now) = setup_with_events().await;
         let resp = send_request(
             &router,
             Method::GET,
@@ -157,7 +149,6 @@ mod tests {
                 now - 3600,
                 now + 3600
             ),
-            Some(&cookie),
             None,
             None,
         )
@@ -180,7 +171,6 @@ mod tests {
                 now - 3600,
                 now + 3600
             ),
-            Some(&cookie),
             None,
             None,
         )
@@ -199,7 +189,6 @@ mod tests {
                 now - 3600,
                 now + 3600
             ),
-            Some(&cookie),
             None,
             None,
         )
@@ -210,12 +199,11 @@ mod tests {
 
     #[tokio::test]
     async fn list_proxy_logs_rejects_invalid_timestamps() {
-        let (router, cookie, _now) = setup_with_events().await;
+        let (router, _now) = setup_with_events().await;
         let resp = send_request(
             &router,
             Method::GET,
             "/api/data/proxy-log?start_ts=999999999999999999999",
-            Some(&cookie),
             None,
             None,
         )
@@ -225,7 +213,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_proxy_logs_clamps_per_page() {
-        let (router, cookie, now) = setup_with_events().await;
+        let (router, now) = setup_with_events().await;
         let resp = send_request(
             &router,
             Method::GET,
@@ -234,7 +222,6 @@ mod tests {
                 now - 3600,
                 now + 3600
             ),
-            Some(&cookie),
             None,
             None,
         )

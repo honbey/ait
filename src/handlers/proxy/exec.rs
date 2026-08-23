@@ -13,7 +13,7 @@ use reqwest::Request;
 use tracing::{trace, warn};
 
 use crate::app::AppState;
-use crate::db::{ProxyEvent, RequestId, SessionUser};
+use crate::db::{ApiKeyContext, ProxyEvent, RequestId};
 use crate::error::AitError;
 use crate::providers::UpstreamProvider;
 
@@ -149,7 +149,7 @@ pub(crate) async fn proxy_streamed(
     upstream: Arc<dyn UpstreamProvider>,
     provider_name: String,
     model_name: String,
-    session: SessionUser,
+    api_key: ApiKeyContext,
     start: Instant,
     endpoint: String,
     upstream_model: String,
@@ -167,8 +167,7 @@ pub(crate) async fn proxy_streamed(
         // execution succeeds so only the stream writes the final record.
         timestamp: Utc::now(),
         request_id: request_id.0,
-        username: Some(session.username),
-        api_key_name: session.api_key_name,
+        api_key_name: api_key.name.clone(),
         model_name,
         provider_name,
         prompt_tokens,

@@ -50,8 +50,6 @@ cp config/ait.toml.example config/ait.toml
 host = "127.0.0.1"
 port = 8000
 health_detail = false
-session_cleanup_interval_secs = 3600
-rate_limiter_cleanup_interval_secs = 600
 cache_cleanup_interval_secs = 300
 cache_max_entries = 1000
 graceful_timeout_secs = 10
@@ -59,12 +57,6 @@ trusted_proxies = ["127.0.0.1", "::1"]
 
 [auth]
 enabled = true
-session_ttl_secs = 86400
-bootstrap_username = "admin"
-bootstrap_password = "must_replace_with_your_password"
-max_api_keys_per_user = 10
-rate_limiter_max_entries = 100000
-login_rate_limit = { max_attempts = 5, window_secs = 300, ban_secs = 900 }
 
 [database]
 path = "./data/ait.db"
@@ -94,7 +86,6 @@ cors_allowed_origins = []
 cors_allow_credentials = false
 ssrf_allowed_cidrs = []
 
-# 请求体敏感信息检测（DLP）
 [security.dlp]
 enabled = false
 sensitive_values = []
@@ -119,6 +110,15 @@ ait
 ait -c /path/to/config.toml
 ```
 
+## 部署与安全
+
+生产环境下建议在 Ait 前部署 **nginx + Authelia**：
+
+- **`/v1/*`**：不经过 Authelia，由 Ait 自身的 API Key 机制保护。
+- **其他路径**（`/`、`/console/*`、`/api/*`）：由 Authelia 强制双因素鉴权。
+
+详细配置见 [docs/auth-proxy.md](docs/auth-proxy.md)。
+
 ## Web 管理界面
 
 构建前端后将 `frontend/dist/` 与后端二进制一起部署，启动后通过 `http://{host}:{port}` 访问。
@@ -128,7 +128,7 @@ ait -c /path/to/config.toml
 ## OpenAI Compatible 接口
 
 认证方式：`Authorization: Bearer <token>` ，
-可以通过配置文件 `auth.enabled: false` 关闭认证，但 Admin 接口（/api/*）必须认证。
+可以通过配置文件 `auth.enabled: false` 关闭认证。
 
 | 方法 | 路径 | 说明 |
 | ------ | ------ | ------ |

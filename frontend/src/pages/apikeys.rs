@@ -4,7 +4,6 @@ use reactive_stores::{Field, Patch, Store};
 
 use crate::api;
 use crate::api::{ApiKey, ApiKeyStoreFields};
-use crate::auth::AuthContext;
 
 use crate::components::error_display::{ErrorCard, ErrorText};
 use crate::components::modal::{DeleteConfirmModal, FormModalShell, ModalShell};
@@ -53,20 +52,10 @@ pub fn ApiKeysPage() -> impl IntoView {
     use_page_title(move || format!("Ait - {}", t!(ApiKey)()));
     let modal = RwSignal::new(ApiKeyModal::Closed);
     let state = Store::new(ApiKeysStore::default());
-    let auth = use_context::<AuthContext>().expect("AuthContext not provided");
     let created_raw_key = RwSignal::new(Option::<(String, String)>::None);
 
-    let api_keys_rsc = LocalResource::new({
-        let auth = auth.clone();
-        move || {
-            let name = auth.username.get_untracked().unwrap_or_default();
-            async move {
-                if name.is_empty() {
-                    return Err("no username".to_string());
-                }
-                api::fetch_api_keys(&name).await.map_err(|e| e.to_string())
-            }
-        }
+    let api_keys_rsc = LocalResource::new(move || async move {
+        api::fetch_api_keys().await.map_err(|e| e.to_string())
     });
 
     let _sync_store = Effect::new(move |_| match api_keys_rsc.get() {
@@ -293,20 +282,12 @@ pub fn ApiKeysPage() -> impl IntoView {
                     .into_any()
             }
             (ApiKeyModal::Add, None) => {
-                view! {
-                    <ApiKeyFormModal
-                        username=auth.username.get_untracked().unwrap_or_default()
-                        created_raw_key
-                        on_close
-                        on_refetch=do_refetch
-                    />
-                }
+                view! { <ApiKeyFormModal created_raw_key on_close on_refetch=do_refetch /> }
                     .into_any()
             }
             (ApiKeyModal::Edit(key), None) => {
                 view! {
                     <ApiKeyFormModal
-                        username=auth.username.get_untracked().unwrap_or_default()
                         created_raw_key
                         on_close
                         on_refetch=do_refetch
@@ -318,16 +299,11 @@ pub fn ApiKeysPage() -> impl IntoView {
             (ApiKeyModal::Delete(key), None) => {
                 let key_id = key.id().read_untracked().to_owned();
                 let item_name = key.name().read_untracked().to_owned();
-                let uname = auth.username.get_untracked().unwrap_or_default();
                 let delete_action: Action<(), Result<(), String>> = Action::new_local({
-                    let uname = uname.clone();
                     let kid = key_id.clone();
                     move |_: &()| {
-                        let uname = uname.clone();
                         let kid = kid.clone();
-                        async move {
-                            api::delete_api_key(&uname, &kid).await.map_err(|e| e.to_string())
-                        }
+                        async move { api::delete_api_key(&kid).await.map_err(|e| e.to_string()) }
                     }
                 });
                 let on_success = move || {
@@ -363,7 +339,6 @@ struct ApiKeyFormInput {
 
 #[component]
 fn ApiKeyFormModal(
-    username: String,
     created_raw_key: RwSignal<Option<(String, String)>>,
     on_close: impl Fn() + 'static + Clone + Send,
     on_refetch: impl Fn() + 'static + Clone + Send,
@@ -393,11 +368,9 @@ fn ApiKeyFormModal(
     let form_error = RwSignal::new(String::new());
 
     let save_action: Action<ApiKeyFormInput, Result<ApiKey, String>> = Action::new_local({
-        let username = username.clone();
         let edit_id = edit_id.clone();
         move |input: &ApiKeyFormInput| {
             let data = input.clone();
-            let uname = username.clone();
             let edit_id = edit_id.clone();
             async move {
                 let expires_ts = if data.clear_expiry {
@@ -408,17 +381,11 @@ fn ApiKeyFormModal(
                     date_str_to_ts(&data.expires_at)
                 };
                 if let Some(id) = &edit_id {
-                    api::update_api_key(
-                        &uname,
-                        id,
-                        Some(&data.name),
-                        expires_ts,
-                        Some(data.enabled),
-                    )
-                    .await
-                    .map_err(|e| e.to_string())
+                    api::update_api_key(id, Some(&data.name), expires_ts, Some(data.enabled))
+                        .await
+                        .map_err(|e| e.to_string())
                 } else {
-                    api::create_api_key(&uname, &data.name, expires_ts)
+                    api::create_api_key(&data.name, expires_ts)
                         .await
                         .map_err(|e| e.to_string())
                 }

@@ -3,13 +3,9 @@ host = "127.0.0.1"
 port = 8000
 # 健康检查是否返回详细信息（版本、运行时间等）
 health_detail = false
-# 过期 session 自动清理间隔（秒）
-session_cleanup_interval_secs = 3600
-# 频率限制器过期条目清理间隔（秒）
-rate_limiter_cleanup_interval_secs = 600
-# 内存缓存（session / api_key / model / provider）过期条目清理间隔（秒）
+# 内存缓存（api_key / model / provider / ssrf_dns）过期条目清理间隔（秒）
 cache_cleanup_interval_secs = 300
-# 内存缓存条数上限：对全部缓存（session / api_key / model / provider / ssrf_dns）
+# 内存缓存条数上限：对全部缓存（api_key / model / provider / ssrf_dns）
 # 是软阈值（条目超 90% 时 TTL 减半加速淘汰）；
 # 对 model 缓存同时是硬上限（model 名来自请求体、攻击者可控，超出后不再缓存新条目，
 # 防止恶意模型名导致缓存无限制增长）
@@ -20,19 +16,9 @@ graceful_timeout_secs = 10
 trusted_proxies = ["127.0.0.1", "::1"]
 
 [auth]
-# 仅控制 /v1/* 代理接口的认证开关，Admin 接口始终需要认证
+# 控制 /v1/* 代理接口的 API Key 认证开关。
+# /api/* 的管理接口由外部反向代理（如 Authelia）鉴权，与此开关无关。
 enabled = true
-# Session 有效期（秒），Web 登录使用
-session_ttl_secs = 86400
-# 首次启动时自动创建初始管理员
-bootstrap_username = "admin"
-bootstrap_password = "admin123"
-# 每个用户最大 API key 数量
-max_api_keys_per_user = 10
-# 频率限制器 DashMap 最大 IP 条目数，防内存耗尽
-rate_limiter_max_entries = 100000
-# 登录频率限制 (最多5次/300秒，超限封禁900秒)
-login_rate_limit = { max_attempts = 5, window_secs = 300, ban_secs = 900 }
 
 
 [database]
@@ -77,7 +63,7 @@ max_request_body_bytes = 8388608
 [security]
 # 允许的跨域来源域名，空列表则拒绝所有跨域请求（同源部署不需要配置）
 cors_allowed_origins = []
-# 是否允许跨域请求携带凭证（cookie 会话认证）。
+# 是否允许跨域请求携带凭证（外部反向代理鉴权场景）。
 # 跨域部署（前端与后端不同域名）时设为 true；配 "*" 时会自动镜像请求 Origin。
 # 注意：仅在没有 TLS 的本地环境或已确认安全时才开启
 cors_allow_credentials = false

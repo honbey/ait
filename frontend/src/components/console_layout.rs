@@ -1,9 +1,7 @@
 use leptos::prelude::*;
-use leptos_router::components::{Outlet, Redirect};
+use leptos_router::components::Outlet;
 
-use crate::auth::{AuthContext, AuthStatus};
 use crate::components::sidebar::Sidebar;
-use crate::components::skeleton::render_loading;
 
 #[component]
 pub fn ConsoleLayout(children: Children) -> impl IntoView {
@@ -17,20 +15,9 @@ pub fn ConsoleLayout(children: Children) -> impl IntoView {
 
 #[component]
 pub fn ConsoleShell() -> impl IntoView {
-    let auth = use_context::<AuthContext>().expect("AuthContext not provided");
-
-    move || {
-        if auth.authenticated.get() == AuthStatus::Authenticated {
-            view! {
-                <ConsoleLayout>
-                    <Outlet />
-                </ConsoleLayout>
-            }
-            .into_any()
-        } else if auth.authenticated.get() == AuthStatus::NotAuthenticated {
-            view! { <Redirect path="/login" /> }.into_any()
-        } else {
-            render_loading().into_any()
-        }
+    view! {
+        <ConsoleLayout>
+            <Outlet />
+        </ConsoleLayout>
     }
 }

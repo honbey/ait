@@ -11,8 +11,6 @@ use crate::db::DbError;
 pub enum AppInitError {
     Database(Box<dyn std::error::Error + Send + Sync>),
     HttpClient(reqwest::Error),
-    /// `create_user` returns `Result<_, String>` (handlers/users.rs).
-    BootstrapUser(String),
     LogManager(duckdb::Error),
 }
 
@@ -21,9 +19,6 @@ impl std::fmt::Display for AppInitError {
         match self {
             AppInitError::Database(e) => write!(f, "failed to open database: {}", e),
             AppInitError::HttpClient(e) => write!(f, "failed to build HTTP client: {}", e),
-            AppInitError::BootstrapUser(msg) => {
-                write!(f, "failed to bootstrap initial user: {}", msg)
-            }
             AppInitError::LogManager(e) => write!(f, "failed to initialize log database: {}", e),
         }
     }
@@ -160,18 +155,6 @@ pub fn not_found(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
     )
 }
 
-pub fn forbidden(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
-    (
-        StatusCode::FORBIDDEN,
-        Json(AitError {
-            message: msg.into(),
-            code: 403,
-            r#type: "forbidden".to_string(),
-            detail: None,
-        }),
-    )
-}
-
 pub fn unauthorized(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
     (
         StatusCode::UNAUTHORIZED,
@@ -179,18 +162,6 @@ pub fn unauthorized(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
             message: msg.into(),
             code: 401,
             r#type: "auth_error".to_string(),
-            detail: None,
-        }),
-    )
-}
-
-pub fn too_many_requests(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
-    (
-        StatusCode::TOO_MANY_REQUESTS,
-        Json(AitError {
-            message: msg.into(),
-            code: 429,
-            r#type: "rate_limit_error".to_string(),
             detail: None,
         }),
     )
@@ -220,18 +191,11 @@ mod tests {
                 404,
                 "not_found_error",
             ),
-            (|m| forbidden(m), StatusCode::FORBIDDEN, 403, "forbidden"),
             (
                 |m| unauthorized(m),
                 StatusCode::UNAUTHORIZED,
                 401,
                 "auth_error",
-            ),
-            (
-                |m| too_many_requests(m),
-                StatusCode::TOO_MANY_REQUESTS,
-                429,
-                "rate_limit_error",
             ),
         ];
         for (ctor, status, code, ty) in cases {
@@ -288,13 +252,6 @@ mod tests {
     fn app_init_error_display_variants() {
         let db_err = AppInitError::Database(Box::new(std::io::Error::other("disk full")));
         assert!(db_err.to_string().contains("failed to open database"));
-
-        let bootstrap = AppInitError::BootstrapUser("no password".into());
-        assert!(
-            bootstrap
-                .to_string()
-                .contains("failed to bootstrap initial user")
-        );
 
         let log_err = AppInitError::LogManager(duckdb::Error::InvalidParameterName("bad".into()));
         assert!(
