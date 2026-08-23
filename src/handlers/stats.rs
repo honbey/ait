@@ -112,8 +112,7 @@ mod tests {
 
     async fn setup() -> Router {
         let (state, _dir) = create_test_state_fast_logs();
-        let router = test_router(state);
-        router
+        test_router(state)
     }
 
     async fn stats_with_remote_user(header_value: Option<&str>) -> serde_json::Value {
@@ -237,7 +236,7 @@ mod tests {
 
     #[tokio::test]
     async fn overview_stats_rejects_invalid_timestamps() {
-        let (router) = setup().await;
+        let router = setup().await;
         let resp = send_request(
             &router,
             Method::GET,

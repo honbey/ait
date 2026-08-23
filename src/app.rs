@@ -181,7 +181,6 @@ pub(crate) fn cleanup_caches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::AppInitError;
 
     // ── DashMap deadlock prevention tests ──
     //
@@ -366,7 +365,13 @@ mod tests {
         // 200s-old entries survive the normal 300s TTL but not the aggressive
         // 150s TTL triggered when len() > 90% of max_entries.
         let mid_old = Instant::now() - Duration::from_secs(200);
-        api_key_cache.insert("k0".to_string(), (test_api_key_info(), mid_old));
+
+        // Insert 10 entries in api_key_cache so len() > threshold (9),
+        // triggering aggressive TTL = CACHE_TTL/2 = 150s for that cache.
+        for i in 0..10 {
+            api_key_cache.insert(format!("k{i}"), (test_api_key_info(), mid_old));
+        }
+        // Other caches have only 1 entry each -- normal 300s TTL applies.
         model_cache.insert("m0".to_string(), (None, mid_old));
         provider_cache.insert("p0".to_string(), (Arc::new(MockProvider), mid_old));
         ssrf_cache.insert(
@@ -390,13 +395,14 @@ mod tests {
             }
         });
 
-        // len was 10 > threshold 9, so the api_key_cache used CACHE_TTL/2 = 150s
-        // and dropped the 200s-old entry. The other caches hold a single
-        // entry each and keep the normal 300s TTL, except the negative model
-        // cache entry which always expires after NEGATIVE_CACHE_TTL (30s).
-        assert_eq!(api_key_cache.len(), 1);
+        // api_key_cache: len was 10 > threshold 9 -> aggressive TTL 150s ->
+        // all 200s-old entries evicted.
+        assert!(api_key_cache.is_empty());
+        // model_cache: negative entry, NEGATIVE_CACHE_TTL=30s -> evicted.
         assert!(model_cache.is_empty());
+        // provider_cache: len=1, normal 300s TTL, 200s < 300s -> survives.
         assert_eq!(provider_cache.len(), 1);
+        // ssrf_cache: len=1, normal 300s TTL, 200s < 300s -> survives.
         assert_eq!(ssrf_cache.len(), 1);
     }
 
@@ -511,5 +517,21 @@ mod tests {
             result.is_err(),
             "assert_no_deadlock must report the held-guard deadlock"
         );
+    }
+
+    #[tokio::test]
+    async fn app_state_new_initializes_all_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let log_path = dir.path().join("test.duckdb");
+        let config =
+            crate::test_utils::test_config(db_path.to_str().unwrap(), log_path.to_str().unwrap());
+        let state = AppState::new(config).unwrap();
+        assert!(state.config.auth.enabled);
+        assert!(state.api_key_cache.is_empty());
+        assert!(state.model_cache.is_empty());
+        assert!(state.provider_cache.is_empty());
+        assert!(state.ssrf_dns_cache.is_empty());
+        state.shutdown_token.cancel();
     }
 }

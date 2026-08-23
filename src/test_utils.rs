@@ -10,10 +10,10 @@ use crate::dlp::DlpScanner;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
-use axum::http::{HeaderMap, Method, Request, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, Method, Request, StatusCode, header};
 use chrono::Utc;
 use dashmap::DashMap;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
@@ -50,6 +50,24 @@ pub fn create_test_model(name: &str, provider_id: &str) -> Model {
         created_at: Utc::now(),
         updated_at: Utc::now(),
     }
+}
+
+/// Seed a provider and model into the test DB, returning the raw API key.
+/// The provider's `base_url` should point at a mock upstream server.
+pub fn seed_provider_and_model(
+    state: &AppState,
+    provider_type: ProviderType,
+    base_url: &str,
+    model_name: &str,
+) -> String {
+    let provider = state
+        .db
+        .insert_provider(create_test_provider("p1", provider_type, base_url))
+        .unwrap();
+    let model = create_test_model(model_name, &provider.id);
+    state.db.insert_model(model).unwrap();
+    let (_, raw_key) = state.db.insert_api_key("test-key", None).unwrap();
+    raw_key
 }
 
 // ── HTTP integration test helpers ──
@@ -117,10 +135,14 @@ fn build_state(config: ConfigApp, dir: TempDir) -> (AppState, TempDir) {
     let db = Arc::new(Database::new(&config.database.path).unwrap());
     let log_manager = LogManager::new(&config.log).unwrap();
     let dlp = DlpScanner::new(&config.security.dlp);
+    let http_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
     let state = AppState {
         config,
         db,
-        http_client: reqwest::Client::new(),
+        http_client,
         log_manager,
         start_time: Utc::now(),
         shutdown_token: CancellationToken::new(),
@@ -269,6 +291,48 @@ pub async fn send_request(
     }
 }
 
+/// Like `send_request` but with extra custom headers (e.g. `x-forwarded-for`).
+pub async fn send_request_with_headers(
+    router: &Router,
+    method: Method,
+    uri: &str,
+    bearer: Option<&str>,
+    body: Option<Value>,
+    extra_headers: &[(HeaderName, &str)],
+) -> TestResponse {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(bearer) = bearer {
+        builder = builder.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+    }
+    if body.is_some() {
+        builder = builder.header(header::CONTENT_TYPE, "application/json");
+    }
+    for (name, value) in extra_headers {
+        builder = builder.header(name, *value);
+    }
+    let body = body.map(|b| b.to_string()).unwrap_or_default();
+    let mut request = builder.body(Body::from(body)).unwrap();
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+    let response = router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    };
+    TestResponse {
+        status,
+        json,
+        headers,
+    }
+}
+
 /// Run a blocking closure on a separate thread and fail the test if it does
 /// not complete within `timeout`. A timeout means the closure deadlocked on a
 /// non-reentrant lock (e.g. DashMap with parking_lot); a disconnect means the
@@ -331,4 +395,128 @@ pub fn mock_loki_server(status: StatusCode) -> (String, Arc<Mutex<Vec<Value>>>) 
 
     let base_url = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     (base_url, captured)
+}
+
+// ── Mock upstream LLM server ──
+
+/// Captured inbound request to the mock upstream server.
+#[allow(dead_code)]
+pub struct CapturedRequest {
+    pub method: Method,
+    pub path: String,
+    pub headers: HeaderMap,
+    pub body: Value,
+}
+
+/// Start a mock upstream LLM server on `127.0.0.1:0` that responds to any POST
+/// with the given JSON body and status. Captures inbound requests. The server
+/// runs in a detached thread reclaimed when the test process exits.
+pub fn mock_upstream_server(
+    response_body: Value,
+    status: StatusCode,
+) -> (String, Arc<Mutex<Vec<CapturedRequest>>>) {
+    let captured: Arc<Mutex<Vec<CapturedRequest>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured_for_handler = captured.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tx.send(format!("http://{addr}")).unwrap();
+
+            let app =
+                Router::new().fallback(axum::routing::any(move |req: axum::extract::Request| {
+                    let c = captured_for_handler.clone();
+                    async move {
+                        let method = req.method().clone();
+                        let path = req.uri().path().to_string();
+                        let headers = req.headers().clone();
+                        let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
+                            .await
+                            .unwrap_or_default();
+                        let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                        c.lock().unwrap().push(CapturedRequest {
+                            method,
+                            path,
+                            headers,
+                            body,
+                        });
+                        (status, axum::Json(response_body.clone()))
+                    }
+                }));
+            axum::serve(listener, app).await.unwrap();
+        });
+    });
+
+    let base_url = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    (base_url, captured)
+}
+
+/// Start a mock upstream server that returns a redirect (3xx) with a Location
+/// header, so the proxy's redirect-rejection path can be exercised.
+pub fn mock_upstream_redirect() -> String {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tx.send(format!("http://{addr}")).unwrap();
+
+            let app = Router::new().fallback(axum::routing::any(|| async move {
+                (
+                    StatusCode::MOVED_PERMANENTLY,
+                    [("location", "http://elsewhere.example.com")],
+                    "",
+                )
+            }));
+            axum::serve(listener, app).await.unwrap();
+        });
+    });
+
+    rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
+}
+
+/// Start a mock upstream server that returns SSE `text/event-stream` with the
+/// given event lines (each line should include the `data: ` prefix). The events
+/// are joined with `\n\n` boundaries and a final `data: [DONE]\n\n` is appended.
+pub fn mock_upstream_sse_server(events: Vec<String>) -> String {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tx.send(format!("http://{addr}")).unwrap();
+
+            let app = Router::new().fallback(axum::routing::any(move || {
+                let events = events.clone();
+                async move {
+                    let mut body = events.join("\n\n");
+                    body.push_str("\n\ndata: [DONE]\n\n");
+                    (
+                        StatusCode::OK,
+                        [("content-type", "text/event-stream")],
+                        body,
+                    )
+                }
+            }));
+            axum::serve(listener, app).await.unwrap();
+        });
+    });
+
+    rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
 }

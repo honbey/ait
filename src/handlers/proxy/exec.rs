@@ -277,3 +277,46 @@ pub(crate) async fn proxy_streamed(
         .expect("static SSE headers are valid");
     Ok(resp)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, StatusCode};
+
+    #[test]
+    fn collect_x_headers_filters_x_and_retry_after() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-request-id", "abc123".parse().unwrap());
+        headers.insert("x-ratelimit-remaining", "100".parse().unwrap());
+        headers.insert("retry-after", "60".parse().unwrap());
+        headers.insert("content-type", "application/json".parse().unwrap());
+        headers.insert("authorization", "Bearer sk-x".parse().unwrap());
+
+        let collected = collect_x_headers(&headers);
+        assert_eq!(collected.len(), 3);
+        let names: Vec<String> = collected
+            .iter()
+            .map(|(n, _)| n.as_str().to_string())
+            .collect();
+        assert!(names.contains(&"x-request-id".to_string()));
+        assert!(names.contains(&"x-ratelimit-remaining".to_string()));
+        assert!(names.contains(&"retry-after".to_string()));
+    }
+
+    #[test]
+    fn collect_x_headers_empty_when_no_matches() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", "application/json".parse().unwrap());
+        headers.insert("content-length", "42".parse().unwrap());
+        let collected = collect_x_headers(&headers);
+        assert!(collected.is_empty());
+    }
+
+    #[test]
+    fn redirect_error_returns_502() {
+        let (status, json) = redirect_error(StatusCode::MOVED_PERMANENTLY, "test-provider");
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(json.0.code, 502);
+        assert!(json.0.message.contains("redirect"));
+    }
+}

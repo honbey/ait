@@ -72,21 +72,6 @@ pub struct UpdateProviderRequest {
     pub enabled: Option<bool>,
 }
 
-impl From<CreateProviderRequest> for Provider {
-    fn from(r: CreateProviderRequest) -> Self {
-        Provider {
-            id: String::new(),
-            name: r.name,
-            provider_type: r.provider_type,
-            base_url: r.base_url,
-            api_key: r.api_key,
-            enabled: r.enabled,
-            created_at: chrono::DateTime::default(),
-            updated_at: chrono::DateTime::default(),
-        }
-    }
-}
-
 // ── Validation ──
 
 fn validate_base_url(url: &str) -> Result<reqwest::Url, AitError> {
@@ -494,5 +479,160 @@ mod tests {
         let types = resp.json.as_array().expect("types should be an array");
         assert!(!types.is_empty());
         assert!(types.iter().any(|t| t["type"] == "openai_compat"));
+    }
+
+    #[tokio::test]
+    async fn get_provider_returns_provider_by_id() {
+        let router = setup().await;
+        let json = create_provider(&router, "test-provider").await;
+        let id = json["id"].as_str().unwrap();
+        let resp = send_request(
+            &router,
+            Method::GET,
+            &format!("/api/providers/{id}"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["name"], "test-provider");
+        assert_eq!(resp.json["id"], id);
+    }
+
+    #[tokio::test]
+    async fn get_provider_api_key_returns_stored_key() {
+        let router = setup().await;
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/api/providers",
+            None,
+            Some(serde_json::json!({
+                "name": "keyed-provider",
+                "type": "openai_compat",
+                "base_url": BASE_URL,
+                "api_key": "sk-test-secret",
+                "enabled": true,
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::CREATED);
+        let id = resp.json["id"].as_str().unwrap();
+
+        let resp = send_request(
+            &router,
+            Method::GET,
+            &format!("/api/providers/{id}/api-key"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["api_key"], "sk-test-secret");
+    }
+
+    #[tokio::test]
+    async fn get_provider_api_key_not_found() {
+        let router = setup().await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            "/api/providers/nonexistent/api-key",
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_provider_not_found_returns_404() {
+        let router = setup().await;
+        let resp = send_request(
+            &router,
+            Method::DELETE,
+            "/api/providers/nonexistent",
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn create_provider_ftp_scheme_bad_request() {
+        let router = setup().await;
+        let mut body = create_body("ftp-provider");
+        body["base_url"] = serde_json::json!("ftp://example.com");
+        let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_provider_no_host_bad_request() {
+        let router = setup().await;
+        let mut body = create_body("no-host-provider");
+        body["base_url"] = serde_json::json!("http:///");
+        let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_provider_numeric_host_bad_request() {
+        let router = setup().await;
+        let mut body = create_body("numeric-host");
+        body["base_url"] = serde_json::json!("http://1234567890");
+        let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_provider_api_key_too_long_bad_request() {
+        let router = setup().await;
+        let mut body = create_body("long-key-provider");
+        body["api_key"] = serde_json::json!("x".repeat(513));
+        let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_provider_api_key_too_long_bad_request() {
+        let router = setup().await;
+        let json = create_provider(&router, "test-provider").await;
+        let id = json["id"].as_str().unwrap();
+        let resp = send_request(
+            &router,
+            Method::PUT,
+            &format!("/api/providers/{id}"),
+            None,
+            Some(serde_json::json!({"api_key": "x".repeat(513)})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_provider_with_api_key_succeeds() {
+        let router = setup().await;
+        let json = create_provider(&router, "test-provider").await;
+        let id = json["id"].as_str().unwrap();
+        let resp = send_request(
+            &router,
+            Method::PUT,
+            &format!("/api/providers/{id}"),
+            None,
+            Some(serde_json::json!({"api_key": "sk-new-key"})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        let resp = send_request(
+            &router,
+            Method::GET,
+            &format!("/api/providers/{id}/api-key"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.json["api_key"], "sk-new-key");
     }
 }

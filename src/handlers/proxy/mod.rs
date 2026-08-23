@@ -515,8 +515,12 @@ fn count_prompt_tokens(body_len: usize) -> Option<i64> {
 mod tests {
     use super::*;
     use crate::db::{ApiKeyContext, RequestId};
-    use crate::test_utils::create_test_state_dlp;
+    use crate::test_utils::{
+        create_test_state, create_test_state_dlp, mock_upstream_redirect, mock_upstream_server,
+        mock_upstream_sse_server, seed_provider_and_model, send_request, test_router,
+    };
     use axum::Extension;
+    use axum::http::Method;
     use bytes::Bytes;
 
     #[test]
@@ -599,5 +603,300 @@ mod tests {
         .await;
         let (status, _) = result.unwrap_err();
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    // ── Mock upstream integration tests ──
+
+    #[tokio::test]
+    async fn proxy_non_streamed_happy_path() {
+        let (state, _dir) = create_test_state();
+        let (base_url, _captured) = mock_upstream_server(
+            serde_json::json!({
+                "id": "chatcmpl-1",
+                "choices": [{"message": {"role": "assistant", "content": "hello"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+            }),
+            axum::http::StatusCode::OK,
+        );
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            &base_url,
+            "test-model",
+        );
+        let router = test_router(state.clone());
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::OK);
+        assert_eq!(resp.json["model"], "test-model");
+        assert_eq!(resp.json["system_fingerprint"], "ait-proxy");
+    }
+
+    #[tokio::test]
+    async fn proxy_model_not_found_returns_404() {
+        let (state, _dir) = create_test_state();
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            "http://127.0.0.1:1",
+            "test-model",
+        );
+        let router = test_router(state);
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "nonexistent-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn proxy_missing_model_field_returns_400() {
+        let (state, _dir) = create_test_state();
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            "http://127.0.0.1:1",
+            "test-model",
+        );
+        let router = test_router(state);
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({"messages": [{"role": "user", "content": "hi"}]})),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn proxy_upstream_error_returns_upstream_status() {
+        let (state, _dir) = create_test_state();
+        let (base_url, _captured) = mock_upstream_server(
+            serde_json::json!({"error": "rate limited"}),
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+        );
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            &base_url,
+            "test-model",
+        );
+        let router = test_router(state);
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn proxy_upstream_redirect_returns_502() {
+        let (state, _dir) = create_test_state();
+        let base_url = mock_upstream_redirect();
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            &base_url,
+            "test-model",
+        );
+        let router = test_router(state);
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn proxy_upstream_connection_failure_returns_502() {
+        let (state, _dir) = create_test_state();
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            "http://127.0.0.1:1",
+            "test-model",
+        );
+        let router = test_router(state);
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn proxy_streamed_happy_path() {
+        let (state, _dir) = create_test_state();
+        let base_url = mock_upstream_sse_server(vec![
+            r#"data: {"choices":[{"delta":{"content":"hello"}}]}"#.to_string(),
+            r#"data: {"choices":[{"delta":{"content":" world"}}]}"#.to_string(),
+        ]);
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            &base_url,
+            "test-model",
+        );
+        let router = test_router(state);
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "test-model",
+                "stream": true,
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::OK);
+        assert_eq!(
+            resp.headers.get("content-type").unwrap(),
+            "text/event-stream"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_models_proxy_returns_enabled_models() {
+        let (state, _dir) = create_test_state();
+        seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            "http://127.0.0.1:1",
+            "test-model",
+        );
+        let router = test_router(state);
+        let resp = send_request(&router, Method::GET, "/v1/models", None, None).await;
+        assert_eq!(resp.status, axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn list_models_proxy_with_key_returns_enabled_models() {
+        let (state, _dir) = create_test_state();
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            "http://127.0.0.1:1",
+            "test-model",
+        );
+        let router = test_router(state);
+        let resp = send_request(&router, Method::GET, "/v1/models", Some(&raw_key), None).await;
+        assert_eq!(resp.status, axum::http::StatusCode::OK);
+        let data = resp.json["data"]
+            .as_array()
+            .expect("data should be an array");
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0]["id"], "test-model");
+        assert_eq!(data[0]["object"], "model");
+    }
+
+    #[tokio::test]
+    async fn health_returns_ok_status() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let resp = send_request(&router, Method::GET, "/health", None, None).await;
+        assert_eq!(resp.status, axum::http::StatusCode::OK);
+        assert_eq!(resp.json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn health_detail_returns_version_and_uptime() {
+        let (mut state, _dir) = create_test_state();
+        state.config.server.health_detail = true;
+        let router = test_router(state);
+        let resp = send_request(&router, Method::GET, "/health", None, None).await;
+        assert_eq!(resp.status, axum::http::StatusCode::OK);
+        assert_eq!(resp.json["status"], "ok");
+        assert!(resp.json.get("version").is_some());
+        assert!(resp.json.get("uptime_secs").is_some());
+    }
+
+    #[tokio::test]
+    async fn proxy_cache_hit_serves_second_request() {
+        let (state, _dir) = create_test_state();
+        let (base_url, _captured) = mock_upstream_server(
+            serde_json::json!({
+                "id": "chatcmpl-1",
+                "choices": [{"message": {"role": "assistant", "content": "hello"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+            }),
+            axum::http::StatusCode::OK,
+        );
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            &base_url,
+            "test-model",
+        );
+        let router = test_router(state);
+        let body = serde_json::json!({
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "hi"}],
+        });
+        let resp1 = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(resp1.status, axum::http::StatusCode::OK);
+        let resp2 = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(body),
+        )
+        .await;
+        assert_eq!(resp2.status, axum::http::StatusCode::OK);
+    }
+
+    #[test]
+    fn count_prompt_tokens_estimates_from_body_len() {
+        assert_eq!(count_prompt_tokens(0), None);
+        assert_eq!(count_prompt_tokens(99), Some(33));
+        assert_eq!(count_prompt_tokens(100), Some(33));
     }
 }

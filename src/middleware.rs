@@ -155,3 +155,121 @@ pub async fn access_log_middleware(
 
     response
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::test_utils::{
+        create_test_state, send_request, send_request_with_headers, test_router,
+    };
+    use axum::http::{Method, StatusCode, header};
+
+    async fn create_key(router: &axum::Router, name: &str) -> String {
+        let resp = send_request(
+            router,
+            Method::POST,
+            "/api/api-keys",
+            None,
+            Some(serde_json::json!({"name": name})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::CREATED);
+        resp.json["key"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn auth_disabled_skips_authentication() {
+        let (mut state, _dir) = create_test_state();
+        state.config.auth.enabled = false;
+        let router = test_router(state);
+        let resp = send_request(&router, Method::GET, "/v1/models", None, None).await;
+        assert_eq!(resp.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn cache_hit_serves_second_request() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let raw_key = create_key(&router, "test-key").await;
+
+        let resp1 = send_request(&router, Method::GET, "/v1/models", Some(&raw_key), None).await;
+        assert_eq!(resp1.status, StatusCode::OK);
+
+        let resp2 = send_request(&router, Method::GET, "/v1/models", Some(&raw_key), None).await;
+        assert_eq!(resp2.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn expired_api_key_rejected() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let past_ts = chrono::Utc::now().timestamp() - 3600;
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/api/api-keys",
+            None,
+            Some(serde_json::json!({"name": "expired-key", "expires_at": past_ts})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::CREATED);
+        let raw_key = resp.json["key"].as_str().unwrap().to_string();
+
+        let resp = send_request(&router, Method::GET, "/v1/models", Some(&raw_key), None).await;
+        assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn x_forwarded_for_sets_client_ip() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let raw_key = create_key(&router, "test-key").await;
+
+        let resp = send_request_with_headers(
+            &router,
+            Method::GET,
+            "/v1/models",
+            Some(&raw_key),
+            None,
+            &[(
+                header::HeaderName::from_static("x-forwarded-for"),
+                "10.20.30.40",
+            )],
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn x_real_ip_sets_client_ip() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let raw_key = create_key(&router, "test-key").await;
+
+        let resp = send_request_with_headers(
+            &router,
+            Method::GET,
+            "/v1/models",
+            Some(&raw_key),
+            None,
+            &[(header::HeaderName::from_static("x-real-ip"), "10.20.30.40")],
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn missing_bearer_token_rejected() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let resp = send_request(&router, Method::GET, "/v1/models", None, None).await;
+        assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn invalid_bearer_token_rejected() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let resp = send_request(&router, Method::GET, "/v1/models", Some("fake-key"), None).await;
+        assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+    }
+}

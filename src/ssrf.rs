@@ -279,4 +279,163 @@ mod tests {
             &["192.168.3.130".to_string()]
         ));
     }
+
+    // ── is_blocked_v4 remaining arms ──
+
+    #[test]
+    fn v4_0_network_blocked() {
+        assert!(!allowed("0.0.0.0"));
+    }
+
+    #[test]
+    fn v4_10_private_blocked() {
+        assert!(!allowed("10.0.0.1"));
+    }
+
+    #[test]
+    fn v4_172_16_private_blocked() {
+        assert!(!allowed("172.16.0.1"));
+    }
+
+    #[test]
+    fn v4_172_31_private_blocked() {
+        assert!(!allowed("172.31.255.255"));
+    }
+
+    #[test]
+    fn v4_192_168_private_blocked() {
+        assert!(!allowed("192.168.1.1"));
+    }
+
+    #[test]
+    fn v4_100_64_carrier_nat_blocked() {
+        assert!(!allowed("100.64.0.1"));
+    }
+
+    #[test]
+    fn v4_198_18_testing_blocked() {
+        assert!(!allowed("198.18.0.1"));
+    }
+
+    #[test]
+    fn v4_169_254_linklocal_blocked() {
+        assert!(!allowed("169.254.1.1"));
+    }
+
+    // ── is_blocked_v6 remaining arms ──
+
+    #[test]
+    fn v6_unique_local_blocked() {
+        assert!(!allowed("fc00::1"));
+    }
+
+    #[test]
+    fn v6_fd00_unique_local_blocked() {
+        assert!(!allowed("fd12:3456:789a::1"));
+    }
+
+    #[test]
+    fn v6_link_local_blocked() {
+        assert!(!allowed("fe80::1"));
+    }
+
+    // ── ip_in_cidr / ipv4_in_prefix / ipv6_in_prefix ──
+
+    #[test]
+    fn ipv4_in_prefix_len_0_matches_all() {
+        assert!(ip_in_cidr(&"8.8.8.8".parse().unwrap(), "0.0.0.0/0"));
+    }
+
+    #[test]
+    fn ipv6_in_prefix_matches() {
+        assert!(ip_in_cidr(&"2001:db8::1".parse().unwrap(), "2001:db8::/32"));
+    }
+
+    #[test]
+    fn ipv6_in_prefix_mismatch() {
+        assert!(!ip_in_cidr(
+            &"2001:dead::1".parse().unwrap(),
+            "2001:db8::/32"
+        ));
+    }
+
+    #[test]
+    fn ipv6_bare_ip_treated_as_128() {
+        assert!(ip_in_cidr(&"2001:db8::1".parse().unwrap(), "2001:db8::1"));
+        assert!(!ip_in_cidr(&"2001:db8::2".parse().unwrap(), "2001:db8::1"));
+    }
+
+    #[test]
+    fn ip_in_cidr_invalid_cidr_returns_false() {
+        assert!(!ip_in_cidr(
+            &"8.8.28"
+                .parse::<IpAddr>()
+                .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            "not-an-ip"
+        ));
+    }
+
+    #[test]
+    fn ip_in_cidr_v4_v6_mismatch_returns_false() {
+        assert!(!ip_in_cidr(&"8.8.8.8".parse().unwrap(), "2001:db8::/32"));
+    }
+
+    #[test]
+    fn ipv6_in_prefix_len_0_matches_all() {
+        assert!(ip_in_cidr(&"2001:db8::1".parse().unwrap(), "::/0"));
+    }
+
+    // ── check_ssrf / check_ssrf_config ──
+
+    #[tokio::test]
+    async fn check_ssrf_config_no_host_returns_bad_request() {
+        let dns_cache = Arc::new(DashMap::new());
+        let url = reqwest::Url::parse("http:///no-host").unwrap();
+        let result =
+            check_ssrf_config(&url, &["127.0.0.1/8".to_string()], &dns_cache, "test").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("host"));
+    }
+
+    #[tokio::test]
+    async fn check_ssrf_config_blocked_returns_bad_request() {
+        let dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
+        dns_cache.insert(
+            "internal.test".to_string(),
+            (vec!["10.0.0.1".parse().unwrap()], Instant::now()),
+        );
+        let url = reqwest::Url::parse("http://internal.test/api").unwrap();
+        let result = check_ssrf_config(&url, &[], &dns_cache, "test").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("blocked"));
+    }
+
+    #[tokio::test]
+    async fn check_ssrf_blocked_returns_502() {
+        let dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
+        dns_cache.insert(
+            "internal.test".to_string(),
+            (vec!["10.0.0.1".parse().unwrap()], Instant::now()),
+        );
+        let url = reqwest::Url::parse("http://internal.test/api").unwrap();
+        let result = check_ssrf(&url, &[], &dns_cache, "test").await;
+        assert!(result.is_err());
+        let (status, _) = result.unwrap_err();
+        assert_eq!(status, axum::http::StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn check_ssrf_config_allowed_returns_ok() {
+        let dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
+        dns_cache.insert(
+            "allowed.test".to_string(),
+            (vec!["127.0.0.1".parse().unwrap()], Instant::now()),
+        );
+        let url = reqwest::Url::parse("http://allowed.test/api").unwrap();
+        let result =
+            check_ssrf_config(&url, &["127.0.0.1/8".to_string()], &dns_cache, "test").await;
+        assert!(result.is_ok());
+    }
 }

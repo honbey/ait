@@ -190,10 +190,9 @@ pub async fn update_api_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{create_test_state, test_router};
+    use crate::test_utils::{create_test_state, send_request, test_router};
     use axum::Router;
     use axum::http::Method;
-    use tower::ServiceExt;
 
     async fn create_key(router: &Router, name: &str) -> serde_json::Value {
         let resp = send_request(
@@ -210,55 +209,6 @@ mod tests {
             "create key should succeed"
         );
         resp.json
-    }
-
-    async fn send_request(
-        router: &Router,
-        method: Method,
-        uri: &str,
-        bearer: Option<&str>,
-        body: Option<serde_json::Value>,
-    ) -> TestResponse {
-        let mut builder = axum::http::Request::builder().method(method).uri(uri);
-        if let Some(bearer) = bearer {
-            builder = builder.header(
-                axum::http::header::AUTHORIZATION,
-                format!("Bearer {bearer}"),
-            );
-        }
-        if body.is_some() {
-            builder = builder.header(axum::http::header::CONTENT_TYPE, "application/json");
-        }
-        let body = body.map(|b| b.to_string()).unwrap_or_default();
-        let mut request = builder.body(axum::body::Body::from(body)).unwrap();
-        request
-            .extensions_mut()
-            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                [127, 0, 0, 1],
-                0,
-            ))));
-        let response = router.clone().oneshot(request).await.unwrap();
-        let status = response.status();
-        let headers = response.headers().clone();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json = if bytes.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
-        };
-        TestResponse {
-            status,
-            json,
-            headers,
-        }
-    }
-
-    struct TestResponse {
-        status: StatusCode,
-        json: serde_json::Value,
-        headers: axum::http::HeaderMap,
     }
 
     #[tokio::test]
@@ -287,6 +237,99 @@ mod tests {
         .await;
         assert_eq!(resp.status, StatusCode::BAD_REQUEST);
         assert_eq!(resp.json["code"], 400);
+    }
+
+    #[tokio::test]
+    async fn create_api_key_invalid_expires_at_bad_request() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/api/api-keys",
+            None,
+            Some(serde_json::json!({"name": "test-key", "expires_at": i64::MAX})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn list_api_keys_returns_created_keys() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        create_key(&router, "key-a").await;
+        create_key(&router, "key-b").await;
+        let resp = send_request(&router, Method::GET, "/api/api-keys", None, None).await;
+        assert_eq!(resp.status, StatusCode::OK);
+        let keys = resp.json.as_array().expect("list should return an array");
+        assert_eq!(keys.len(), 2);
+        assert!(keys.iter().any(|k| k["name"] == "key-a"));
+        assert!(keys.iter().any(|k| k["name"] == "key-b"));
+    }
+
+    #[tokio::test]
+    async fn update_api_key_name_succeeds() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let json = create_key(&router, "old-name").await;
+        let key_id = json["id"].as_str().unwrap();
+        let resp = send_request(
+            &router,
+            Method::PUT,
+            &format!("/api/api-keys/{key_id}"),
+            None,
+            Some(serde_json::json!({"name": "new-name"})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.json["name"], "new-name");
+    }
+
+    #[tokio::test]
+    async fn update_api_key_clears_expires_at_with_zero() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let json = create_key(&router, "test-key").await;
+        let key_id = json["id"].as_str().unwrap();
+        let future_ts = Utc::now().timestamp() + 86400;
+        let resp = send_request(
+            &router,
+            Method::PUT,
+            &format!("/api/api-keys/{key_id}"),
+            None,
+            Some(serde_json::json!({"expires_at": future_ts})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert!(resp.json["expires_at"].as_i64().is_some());
+        let resp = send_request(
+            &router,
+            Method::PUT,
+            &format!("/api/api-keys/{key_id}"),
+            None,
+            Some(serde_json::json!({"expires_at": 0})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert!(resp.json["expires_at"].is_null());
+    }
+
+    #[tokio::test]
+    async fn update_api_key_invalid_expires_at_bad_request() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        let json = create_key(&router, "test-key").await;
+        let key_id = json["id"].as_str().unwrap();
+        let resp = send_request(
+            &router,
+            Method::PUT,
+            &format!("/api/api-keys/{key_id}"),
+            None,
+            Some(serde_json::json!({"expires_at": i64::MAX})),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

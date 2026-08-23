@@ -240,3 +240,292 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::LogManager;
+    use crate::providers::UpstreamProvider;
+    use crate::test_utils::{create_test_state_fast_logs, make_proxy_event};
+    use futures_util::stream;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio_util::sync::CancellationToken;
+
+    struct MockUpstream;
+
+    #[async_trait::async_trait]
+    impl UpstreamProvider for MockUpstream {
+        async fn build_request(
+            &self,
+            _client: &reqwest::Client,
+            _body: serde_json::Value,
+            _stream: bool,
+            _upstream_model: &str,
+            _upstream_path: &str,
+        ) -> Result<reqwest::Request, String> {
+            unreachable!()
+        }
+
+        fn transform_response(&self, body: &[u8], model_name: &str) -> Vec<u8> {
+            let Ok(mut val) = serde_json::from_slice::<serde_json::Value>(body) else {
+                return body.to_vec();
+            };
+            crate::providers::inject_default_shadow(&mut val, model_name);
+            serde_json::to_vec(&val).unwrap_or_else(|_| body.to_vec())
+        }
+    }
+
+    fn make_stream(
+        inner: impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + Unpin,
+        log_manager: LogManager,
+    ) -> SseTransformStream<impl Stream<Item = Result<bytes::Bytes, std::io::Error>>> {
+        let token = CancellationToken::new();
+        SseTransformStream {
+            inner,
+            buf: bytes::BytesMut::new(),
+            upstream: Arc::new(MockUpstream),
+            model_name: "test-model".to_string(),
+            user_tokens: None,
+            log_manager,
+            event: make_proxy_event("test-model", "200", 0),
+            start: Instant::now(),
+            done: false,
+            shutdown_fut: Box::pin(token.cancelled_owned()),
+            idle_timeout: Duration::from_secs(60),
+            last_data_time: Instant::now(),
+        }
+    }
+
+    fn poll_stream<S: Stream<Item = Result<bytes::Bytes, std::io::Error>> + Unpin>(
+        s: &mut S,
+    ) -> Option<Result<bytes::Bytes, std::io::Error>> {
+        let waker = futures_util::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        match Pin::new(s).poll_next(&mut cx) {
+            Poll::Ready(item) => item,
+            Poll::Pending => None,
+        }
+    }
+
+    #[test]
+    fn find_event_boundary_double_newline() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
+            state.log_manager,
+        );
+        let mut s = s;
+        s.buf.extend_from_slice(b"data: hello\n\ndata: world\n\n");
+        assert_eq!(s.find_event_boundary(), Some(13));
+    }
+
+    #[test]
+    fn find_event_boundary_crlf() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
+            state.log_manager,
+        );
+        let mut s = s;
+        s.buf.extend_from_slice(b"data: hello\r\n\r\ndata: world");
+        assert_eq!(s.find_event_boundary(), Some(15));
+    }
+
+    #[test]
+    fn find_event_boundary_no_boundary() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
+            state.log_manager,
+        );
+        let mut s = s;
+        s.buf.extend_from_slice(b"data: hello without boundary");
+        assert_eq!(s.find_event_boundary(), None);
+    }
+
+    #[test]
+    fn transform_event_rewrites_data_lines() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
+            state.log_manager,
+        );
+        let mut s = s;
+        let event = b"data: {\"choices\":[]}\n\n";
+        let transformed = s.transform_event(event);
+        let text = std::str::from_utf8(&transformed).unwrap();
+        assert!(text.contains("data: "));
+        assert!(text.contains("model"));
+        assert!(text.contains("ait-proxy"));
+    }
+
+    #[test]
+    fn transform_event_non_utf8_passthrough() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
+            state.log_manager,
+        );
+        let mut s = s;
+        let event = &[0xFF, 0xFE, 0xFD];
+        let transformed = s.transform_event(event);
+        assert_eq!(transformed, event);
+    }
+
+    #[test]
+    fn try_extract_usage_captures_tokens() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
+            state.log_manager,
+        );
+        let mut s = s;
+        let payload = br#"{"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"#;
+        s.try_extract_usage_from(payload);
+        assert_eq!(s.user_tokens.as_ref().unwrap().prompt_tokens, Some(10));
+        assert_eq!(s.user_tokens.as_ref().unwrap().total_tokens, Some(15));
+    }
+
+    #[test]
+    fn try_extract_usage_ignores_zero_tokens() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
+            state.log_manager,
+        );
+        let mut s = s;
+        let payload = br#"{"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}"#;
+        s.try_extract_usage_from(payload);
+        assert!(s.user_tokens.is_none());
+    }
+
+    #[test]
+    fn force_split_oversized_under_cap_returns_none() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
+            state.log_manager,
+        );
+        let mut s = s;
+        s.buf.extend_from_slice(b"small buffer");
+        assert_eq!(s.force_split_oversized().unwrap(), None);
+    }
+
+    #[test]
+    fn force_split_oversized_with_newline_splits() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
+            state.log_manager,
+        );
+        let mut s = s;
+        s.buf
+            .extend_from_slice(&vec![b'x'; MAX_SSE_BUFFER_BYTES + 100]);
+        s.buf.extend_from_slice(b"\n");
+        s.buf.extend_from_slice(b"remaining");
+        let result = s.force_split_oversized().unwrap();
+        assert!(result.is_some());
+        assert!(result.unwrap() > MAX_SSE_BUFFER_BYTES);
+    }
+
+    #[test]
+    fn force_split_oversized_no_newline_returns_error() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
+            state.log_manager,
+        );
+        let mut s = s;
+        s.buf
+            .extend_from_slice(&vec![b'x'; MAX_SSE_BUFFER_BYTES + 100]);
+        assert!(s.force_split_oversized().is_err());
+    }
+
+    #[test]
+    fn stream_processes_complete_event() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let chunks: Vec<Result<bytes::Bytes, std::io::Error>> = vec![
+            Ok(bytes::Bytes::from_static(b"data: {\"choices\":[]}\n\n")),
+            Ok(bytes::Bytes::from_static(b"data: [DONE]\n\n")),
+        ];
+        let mut s = make_stream(stream::iter(chunks), state.log_manager);
+        let item = poll_stream(&mut s);
+        assert!(item.is_some());
+        let chunk = item.unwrap().unwrap();
+        let text = std::str::from_utf8(&chunk).unwrap();
+        assert!(text.contains("data: "));
+    }
+
+    #[test]
+    fn stream_finalizes_on_inner_end() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let chunks: Vec<Result<bytes::Bytes, std::io::Error>> =
+            vec![Ok(bytes::Bytes::from_static(b"data: {\"choices\":[]}\n\n"))];
+        let mut s = make_stream(stream::iter(chunks), state.log_manager);
+        let _first = poll_stream(&mut s);
+        let second = poll_stream(&mut s);
+        assert!(second.is_none());
+        assert!(s.done);
+    }
+
+    #[test]
+    fn stream_propagates_inner_error() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let chunks: Vec<Result<bytes::Bytes, std::io::Error>> = vec![Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "upstream gone",
+        ))];
+        let mut s = make_stream(stream::iter(chunks), state.log_manager);
+        let item = poll_stream(&mut s);
+        assert!(item.is_some());
+        assert!(item.unwrap().is_err());
+        assert!(s.done);
+    }
+
+    #[test]
+    fn drop_without_done_writes_499_log() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let chunks: Vec<Result<bytes::Bytes, std::io::Error>> = vec![];
+        let s = make_stream(stream::iter(chunks), state.log_manager);
+        assert!(!s.done);
+        drop(s);
+    }
+
+    #[test]
+    fn stream_fail_on_oversized_buffer_without_newline() {
+        let (state, _dir) = create_test_state_fast_logs();
+        // Feed a single chunk larger than MAX_SSE_BUFFER_BYTES with no newline,
+        // so force_split_oversized returns Err and poll_next calls fail_stream.
+        let big = bytes::Bytes::from(vec![b'x'; MAX_SSE_BUFFER_BYTES + 100]);
+        let chunks: Vec<Result<bytes::Bytes, std::io::Error>> = vec![Ok(big)];
+        let mut s = make_stream(stream::iter(chunks), state.log_manager);
+        let item = poll_stream(&mut s);
+        assert!(item.is_none());
+        assert!(s.done);
+        assert_eq!(s.event.status, "502");
+        assert!(s.event.error_message.is_some());
+    }
+
+    #[test]
+    fn finalize_stream_flushes_remaining_buffer() {
+        let (state, _dir) = create_test_state_fast_logs();
+        // Feed an event followed by an incomplete chunk (no trailing newline).
+        // The first poll yields the complete event; the second poll hits
+        // Poll::Ready(None) on the inner stream and finalize_stream should
+        // flush the remaining buffer as a final chunk.
+        let chunks: Vec<Result<bytes::Bytes, std::io::Error>> = vec![
+            Ok(bytes::Bytes::from_static(b"data: {\"choices\":[]}\n\n")),
+            Ok(bytes::Bytes::from_static(b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}")),
+        ];
+        let mut s = make_stream(stream::iter(chunks), state.log_manager);
+        let first = poll_stream(&mut s);
+        assert!(first.is_some());
+        let second = poll_stream(&mut s);
+        assert!(second.is_some());
+        let chunk = second.unwrap().unwrap();
+        let text = std::str::from_utf8(&chunk).unwrap();
+        assert!(text.contains("data: "));
+        assert!(s.done);
+    }
+}
