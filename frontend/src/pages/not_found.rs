@@ -7,7 +7,7 @@ use crate::t;
 
 #[component]
 pub fn NotFoundPage() -> impl IntoView {
-    use_page_title(move || format!("Ait - {}", t!(PageNotFound)()));
+    use_page_title(move || format!("{} - Ait", t!(PageNotFound)()));
     view! {
         <div class="min-h-[calc(100vh-3.5rem)] flex items-center justify-center bg-gray-50 dark:bg-gray-900">
             <div class="text-center px-4">

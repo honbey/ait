@@ -149,7 +149,7 @@ fn TabButton(
 
 #[component]
 pub fn Overview() -> impl IntoView {
-    use_page_title(move || format!("Ait - {}", t!(Overview)()));
+    use_page_title(move || format!("{} - Ait", t!(Overview)()));
 
     let now = now_timestamp();
     let today = midnight_ts(now);

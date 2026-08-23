@@ -48,7 +48,7 @@ fn DocLinkCard(
 
 #[component]
 pub fn DocsPage() -> impl IntoView {
-    use_page_title(move || format!("Ait - {}", t!(Docs)()));
+    use_page_title(move || format!("{} - Ait", t!(Docs)()));
     view! {
         <div class="min-h-[calc(100vh-3.5rem)] bg-gray-50 dark:bg-gray-900">
             <div class="max-w-4xl mx-auto px-6 py-8">

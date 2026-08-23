@@ -31,7 +31,7 @@ type ModelModal = EntityModal<Model>;
 
 #[component]
 pub fn ModelsPage() -> impl IntoView {
-    use_page_title(move || format!("Ait - {}", t!(Models)()));
+    use_page_title(move || format!("{} - Ait", t!(Models)()));
     let modal = RwSignal::new(ModelModal::Closed);
     let state = Store::new(ModelsStore::default());
 

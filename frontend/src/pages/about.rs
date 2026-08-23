@@ -9,7 +9,7 @@ const PROJECT_LICENSE: &str = "MIT";
 
 #[component]
 pub fn AboutPage() -> impl IntoView {
-    use_page_title(move || format!("Ait - {}", t!(About)()));
+    use_page_title(move || format!("{} - Ait", t!(About)()));
     view! {
         <div class="min-h-[calc(100vh-3.5rem)] bg-gray-50 dark:bg-gray-900">
             <div class="max-w-2xl mx-auto px-6 py-8">

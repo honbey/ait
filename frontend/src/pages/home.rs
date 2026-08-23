@@ -7,7 +7,7 @@ use crate::t;
 
 #[component]
 pub fn Home() -> impl IntoView {
-    use_page_title(move || format!("Ait - {}", t!(IndexTitle)()));
+    use_page_title(move || format!("{} - Ait", t!(IndexTitle)()));
 
     move || {
         view! {
