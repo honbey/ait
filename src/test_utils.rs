@@ -1,7 +1,7 @@
 use crate::app::AppState;
 use crate::config::{
-    AuthConfig, ConfigApp, DatabaseConfig, DlpConfig, LogConfig, ProxyConfig, SecurityConfig,
-    ServerConfig,
+    AuthConfig, ConfigApp, DatabaseConfig, DlpConfig, LogConfig, LokiConfig, ProxyConfig,
+    SecurityConfig, ServerConfig,
 };
 use crate::db::{
     AccessEvent, AuditEvent, Database, LogManager, Model, Provider, ProviderType, ProxyEvent,
@@ -15,7 +15,7 @@ use chrono::Utc;
 use dashmap::DashMap;
 use serde_json::{Value, json};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
@@ -82,6 +82,7 @@ pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
             axum: "info".to_string(),
             tower_http_trace: "info".to_string(),
             analytics_timeout_secs: 10,
+            loki: LokiConfig::default(),
         },
         proxy: ProxyConfig {
             timeout_secs: 300,
@@ -291,4 +292,43 @@ pub fn assert_no_deadlock<T: Send + 'static>(
             panic!("operation panicked before sending a result")
         }
     }
+}
+
+// ── Mock Loki server ──
+
+/// Start a mock Loki server on `127.0.0.1:0` that captures push payloads and
+/// responds with `status`. Returns `(base_url, captured_payloads)`. The server
+/// runs in a detached thread reclaimed when the test process exits.
+pub fn mock_loki_server(status: StatusCode) -> (String, Arc<Mutex<Vec<Value>>>) {
+    let captured: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured_for_handler = captured.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tx.send(format!("http://{addr}")).unwrap();
+
+            let app = Router::new().route(
+                "/loki/api/v1/push",
+                axum::routing::post(move |body: axum::body::Bytes| {
+                    let c = captured_for_handler.clone();
+                    async move {
+                        let payload: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                        c.lock().unwrap().push(payload);
+                        status
+                    }
+                }),
+            );
+            axum::serve(listener, app).await.unwrap();
+        });
+    });
+
+    let base_url = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    (base_url, captured)
 }

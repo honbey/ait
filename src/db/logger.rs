@@ -6,6 +6,7 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 
 use super::analytics::Analytics;
+use super::loki::LokiSink;
 use super::models::{
     AccessEvent, AuditEvent, BucketEntry, LogEvent, ModelDistEntry, ProxyEvent,
     ProxyLogQueryParams, ProxyLogQueryResult, TokenDistEntry,
@@ -16,6 +17,7 @@ pub struct LogManager {
     sender: mpsc::SyncSender<LogEvent>,
     analytics: Analytics,
     worker_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    loki: Option<LokiSink>,
 }
 
 /// Create the log tables and indexes if they do not exist yet.
@@ -91,26 +93,51 @@ impl LogManager {
             }
         });
 
+        let loki = if config.loki.enabled && !config.loki.url.is_empty() {
+            match LokiSink::new(&config.loki) {
+                Ok(sink) => {
+                    info!("[loki] push enabled -> {}", config.loki.url);
+                    Some(sink)
+                }
+                Err(e) => {
+                    warn!("[loki] init failed, sink disabled: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Ok(Self {
             sender,
             analytics,
             worker_handle: Arc::new(Mutex::new(Some(handle))),
+            loki,
         })
     }
 
     pub fn log_access(&self, event: AccessEvent) {
+        if let Some(loki) = &self.loki {
+            loki.send(LogEvent::Access(event.clone()));
+        }
         if let Err(e) = self.sender.try_send(LogEvent::Access(event)) {
             warn!("[logs] access buffer full, dropping event: {e}");
         }
     }
 
     pub fn log_proxy(&self, event: ProxyEvent) {
+        if let Some(loki) = &self.loki {
+            loki.send(LogEvent::Proxy(Box::new(event.clone())));
+        }
         if let Err(e) = self.sender.try_send(LogEvent::Proxy(Box::new(event))) {
             warn!("[logs] proxy buffer full, dropping event: {e}");
         }
     }
 
     pub fn log_audit(&self, event: AuditEvent) {
+        if let Some(loki) = &self.loki {
+            loki.send(LogEvent::Audit(event.clone()));
+        }
         if let Err(e) = self.sender.try_send(LogEvent::Audit(event)) {
             warn!("[logs] audit buffer full, dropping event: {e}");
         }
@@ -154,6 +181,9 @@ impl LogManager {
             && let Some(handle) = guard.take()
         {
             let _ = handle.join();
+        }
+        if let Some(loki) = &self.loki {
+            loki.shutdown();
         }
         self.analytics.shutdown();
     }

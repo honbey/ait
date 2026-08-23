@@ -161,6 +161,7 @@ pub struct ApiKeyContext {
     pub name: Option<String>,
 }
 
+#[derive(Clone, Serialize)]
 pub struct AccessEvent {
     pub timestamp: DateTime<Utc>,
     pub request_id: String,
@@ -171,7 +172,7 @@ pub struct AccessEvent {
     pub client_ip: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct ProxyEvent {
     pub timestamp: DateTime<Utc>,
     pub request_id: String,
@@ -194,6 +195,7 @@ pub struct ProxyEvent {
     pub client_ip: Option<String>,
 }
 
+#[derive(Clone, Serialize)]
 pub struct AuditEvent {
     pub timestamp: DateTime<Utc>,
     pub request_id: String,
@@ -277,6 +279,7 @@ pub struct ProxyLogQueryResult {
 #[derive(Debug, Clone)]
 pub struct RequestId(pub String);
 
+#[derive(Clone)]
 pub enum LogEvent {
     Access(AccessEvent),
     Proxy(Box<ProxyEvent>),

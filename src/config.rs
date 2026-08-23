@@ -1,5 +1,6 @@
 use config::{Config, ConfigError, Environment, File, FileFormat};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::net::IpAddr;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -45,6 +46,61 @@ pub struct LogConfig {
     pub axum: String,
     pub tower_http_trace: String,
     pub analytics_timeout_secs: u64,
+    #[serde(default)]
+    pub loki: LokiConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LokiConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default = "default_loki_labels")]
+    pub labels: HashMap<String, String>,
+    #[serde(default = "default_loki_batch")]
+    pub batch_size: u64,
+    #[serde(default = "default_loki_interval")]
+    pub interval_secs: u64,
+    #[serde(default = "default_loki_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub basic_auth_user: Option<String>,
+    #[serde(default)]
+    pub basic_auth_password: Option<String>,
+    #[serde(default)]
+    pub bearer_token: Option<String>,
+}
+
+impl Default for LokiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: String::new(),
+            labels: default_loki_labels(),
+            batch_size: default_loki_batch(),
+            interval_secs: default_loki_interval(),
+            timeout_secs: default_loki_timeout(),
+            basic_auth_user: None,
+            basic_auth_password: None,
+            bearer_token: None,
+        }
+    }
+}
+
+fn default_loki_labels() -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    m.insert("app".to_string(), "ait".to_string());
+    m
+}
+fn default_loki_batch() -> u64 {
+    100
+}
+fn default_loki_interval() -> u64 {
+    5
+}
+fn default_loki_timeout() -> u64 {
+    5
 }
 
 #[derive(Debug, Deserialize, Clone)]
