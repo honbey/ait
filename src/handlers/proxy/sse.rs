@@ -516,7 +516,9 @@ mod tests {
         // flush the remaining buffer as a final chunk.
         let chunks: Vec<Result<bytes::Bytes, std::io::Error>> = vec![
             Ok(bytes::Bytes::from_static(b"data: {\"choices\":[]}\n\n")),
-            Ok(bytes::Bytes::from_static(b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}")),
+            Ok(bytes::Bytes::from_static(
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}",
+            )),
         ];
         let mut s = make_stream(stream::iter(chunks), state.log_manager);
         let first = poll_stream(&mut s);
