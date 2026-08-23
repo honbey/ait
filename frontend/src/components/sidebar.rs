@@ -32,11 +32,6 @@ pub fn Sidebar() -> impl IntoView {
                 <NavItem icon="fa-cube" label=t!(Models) href="/console/models" />
                 <NavItem icon="fa-key" label=t!(ApiKey) href="/console/apikeys" />
                 <NavItem icon="fa-list" label=t!(LogQuery) href="/console/logs" />
-                <NavItem
-                    icon="fa-comment"
-                    label=t!(TextGeneration)
-                    href="/console/text-generation"
-                />
             </nav>
             <div class="p-4 border-t border-gray-200 dark:border-gray-700 text-xs text-gray-400 dark:text-gray-500">
                 <p>{format!("Ait v{}", env!("CARGO_PKG_VERSION"))}</p>

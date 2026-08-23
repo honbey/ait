@@ -17,7 +17,6 @@ use crate::pages::models::ModelsPage;
 use crate::pages::not_found::NotFoundPage;
 use crate::pages::overview::Overview;
 use crate::pages::providers::ProvidersPage;
-use crate::pages::text_gen::TextGenPage;
 use crate::storage;
 
 fn prefers_dark_scheme() -> bool {
@@ -92,7 +91,6 @@ pub fn App() -> impl IntoView {
                             <Route path=StaticSegment("apikeys") view=ApiKeysPage />
                             <Route path=StaticSegment("logs") view=LogsPage />
                             <Route path=StaticSegment("models") view=ModelsPage />
-                            <Route path=StaticSegment("text-generation") view=TextGenPage />
                         </ParentRoute>
                     </Routes>
                 </main>
