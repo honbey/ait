@@ -27,16 +27,67 @@ struct WorkerState {
     bearer_token: Option<String>,
 }
 
+#[derive(Debug)]
+pub enum LokiInitError {
+    /// Push URL is not a valid absolute http(s) URL.
+    InvalidUrl(String),
+    /// reqwest blocking client failed to build.
+    Client(reqwest::Error),
+}
+
+impl std::fmt::Display for LokiInitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidUrl(url) => write!(f, "invalid Loki url: {url}"),
+            Self::Client(e) => write!(f, "HTTP client init failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for LokiInitError {}
+
+/// Check a label name against the Loki push API naming rule
+/// `[a-zA-Z_][a-zA-Z0-9_]*`.
+fn is_valid_label_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Drop static labels whose names would make every push fail with HTTP 400.
+fn sanitize_static_labels(raw: &HashMap<String, String>) -> HashMap<String, String> {
+    let mut valid = HashMap::new();
+    for (k, v) in raw {
+        if is_valid_label_name(k) {
+            valid.insert(k.clone(), v.clone());
+        } else {
+            warn!("[loki] dropping invalid label name {k:?} (must match [a-zA-Z_][a-zA-Z0-9_]*)");
+        }
+    }
+    valid
+}
+
 impl LokiSink {
-    pub fn new(config: &LokiConfig) -> Result<Self, reqwest::Error> {
+    pub fn new(config: &LokiConfig) -> Result<Self, LokiInitError> {
+        let push_url = format!("{}/loki/api/v1/push", config.url.trim_end_matches('/'));
+        match reqwest::Url::parse(&push_url) {
+            Ok(u) if matches!(u.scheme(), "http" | "https") => {}
+            _ => return Err(LokiInitError::InvalidUrl(push_url)),
+        }
+
+        if config.basic_auth_user.is_some() != config.basic_auth_password.is_some() {
+            warn!("[loki] basic_auth requires both user and password; auth disabled");
+        }
+
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
-            .build()?;
+            .build()
+            .map_err(LokiInitError::Client)?;
 
         let state = WorkerState {
             client,
-            push_url: format!("{}/loki/api/v1/push", config.url.trim_end_matches('/')),
-            static_labels: config.labels.clone(),
+            push_url,
+            static_labels: sanitize_static_labels(&config.labels),
             basic_auth_user: config.basic_auth_user.clone(),
             basic_auth_password: config.basic_auth_password.clone(),
             bearer_token: config.bearer_token.clone(),
@@ -178,7 +229,7 @@ fn event_timestamp(event: &LogEvent) -> DateTime<Utc> {
 }
 
 /// Compute Loki labels for an event: static labels from config plus
-/// event-specific low-cardinality labels.
+/// bounded-cardinality fields only; unbounded fields stay in the JSON line.
 fn event_to_labels(
     event: &LogEvent,
     static_labels: &HashMap<String, String>,
@@ -191,14 +242,11 @@ fn event_to_labels(
         LogEvent::Access(e) => {
             labels.insert("event_type".into(), "access".into());
             labels.insert("method".into(), e.method.clone());
-            labels.insert("path".into(), e.path.clone());
         }
         LogEvent::Proxy(e) => {
             labels.insert("event_type".into(), "proxy".into());
-            labels.insert("provider_name".into(), e.provider_name.clone());
             labels.insert("model_name".into(), e.model_name.clone());
             labels.insert("status".into(), e.status.clone());
-            labels.insert("endpoint".into(), e.endpoint.clone());
             labels.insert("is_streaming".into(), e.is_streaming.to_string());
         }
         LogEvent::Audit(e) => {
@@ -305,6 +353,9 @@ mod tests {
         assert_eq!(result.get("model_name"), Some(&"gpt-4o".to_string()));
         assert_eq!(result.get("status"), Some(&"success".to_string()));
         assert!(result.contains_key("is_streaming"));
+        // Unbounded fields must stay out of labels (they remain in the line)
+        assert!(!result.contains_key("provider_name"));
+        assert!(!result.contains_key("endpoint"));
     }
 
     #[test]
@@ -314,7 +365,7 @@ mod tests {
         let result = event_to_labels(&access, &labels);
         assert_eq!(result.get("event_type"), Some(&"access".to_string()));
         assert_eq!(result.get("method"), Some(&"GET".to_string()));
-        assert_eq!(result.get("path"), Some(&"/api/providers".to_string()));
+        assert!(!result.contains_key("path"), "path is unbounded, line-only");
 
         let audit = LogEvent::Audit(make_audit_event("create", "provider"));
         let result = event_to_labels(&audit, &labels);
@@ -379,6 +430,52 @@ mod tests {
         assert!(config.url.is_empty());
         assert_eq!(config.batch_size, 100);
         assert_eq!(config.interval_secs, 5);
+    }
+
+    #[test]
+    fn test_sanitize_static_labels_drops_invalid_names() {
+        let mut raw = HashMap::new();
+        raw.insert("app".to_string(), "ait".to_string());
+        raw.insert("bad-name".to_string(), "x".to_string());
+        raw.insert("1start".to_string(), "y".to_string());
+        raw.insert(String::new(), "z".to_string());
+
+        let result = sanitize_static_labels(&raw);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("app"), Some(&"ait".to_string()));
+    }
+
+    #[test]
+    fn test_is_valid_label_name() {
+        assert!(is_valid_label_name("app"));
+        assert!(is_valid_label_name("_private"));
+        assert!(is_valid_label_name("env_2"));
+        assert!(!is_valid_label_name(""));
+        assert!(!is_valid_label_name("bad-name"));
+        assert!(!is_valid_label_name("1start"));
+        assert!(!is_valid_label_name("has space"));
+        assert!(!is_valid_label_name("点"));
+    }
+
+    #[test]
+    fn test_loki_sink_invalid_url_fails_fast() {
+        let mut config = LokiConfig {
+            enabled: true,
+            ..Default::default()
+        };
+
+        config.url = "not a url".to_string();
+        assert!(matches!(
+            LokiSink::new(&config),
+            Err(LokiInitError::InvalidUrl(_))
+        ));
+
+        // Non-http(s) schemes are rejected too
+        config.url = "ftp://example.com".to_string();
+        assert!(matches!(
+            LokiSink::new(&config),
+            Err(LokiInitError::InvalidUrl(_))
+        ));
     }
 
     // ── Integration tests (mock HTTP server) ──
