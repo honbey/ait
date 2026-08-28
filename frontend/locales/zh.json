@@ -6,6 +6,7 @@
   "action_updated": "更新",
   "actions": "操作",
   "add": "添加{{ entity }}",
+  "all": "全部",
   "api_key": "API 密钥",
   "api_key_create": "创建密钥",
   "api_key_expired": "API 密钥无效或已过期",

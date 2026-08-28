@@ -34,6 +34,8 @@ pub fn ModelsPage() -> impl IntoView {
     use_page_title(move || format!("{} - Ait", t!(Models)()));
     let modal = RwSignal::new(ModelModal::Closed);
     let state = Store::new(ModelsStore::default());
+    // Empty string matches all providers
+    let provider_filter = RwSignal::new(String::new());
 
     let providers_resource = LocalResource::new(|| async move {
         let providers = api::fetch_providers().await.unwrap_or_else(|e| {
@@ -62,10 +64,54 @@ pub fn ModelsPage() -> impl IntoView {
 
     let do_refetch = move || models_rsc.refetch();
 
+    let filter_select_cls = "w-44 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 \
+        rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 \
+        focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none";
+
     view! {
-        <h1 class=CLASS_PAGE_TITLE>{tr!(ListTitle, &[("entity", &t!(Models)())])}</h1>
+        <div class="flex items-center justify-between">
+            <h1 class=CLASS_PAGE_TITLE style="margin-bottom: 0">
+                {tr!(ListTitle, &[("entity", &t!(Models)())])}
+            </h1>
+            <select
+                id="filter-provider"
+                title=t!(Providers)
+                class=filter_select_cls
+                on:change=move |ev| provider_filter.set(event_target_value(&ev))
+            >
+                <option value="" selected=move || provider_filter.get().is_empty()>
+                    {t!(All)}
+                </option>
+                {move || {
+                    let current = provider_filter.get_untracked();
+                    providers_resource
+                        .get()
+                        .map(|providers| {
+                            providers
+                                .iter()
+                                .map(|(id, name)| {
+                                    view! {
+                                        <option value=id.clone() selected=current == *id>
+                                            {name.clone()}
+                                        </option>
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                }}
+            </select>
+        </div>
         <DataTableCard
-            item_count=Signal::derive(move || state.items().read().len())
+            item_count=Signal::derive(move || {
+                let filter = provider_filter.get();
+                state
+                    .items()
+                    .read()
+                    .iter()
+                    .filter(|m| filter.is_empty() || m.provider_id == filter)
+                    .count()
+            })
             on_refresh=do_refetch
             on_add=move || modal.set(ModelModal::Add)
             add_label=trs!(Add, &[("entity", &ts!(Models))])
@@ -110,58 +156,63 @@ pub fn ModelsPage() -> impl IntoView {
                                             key=|row| row.clone().name().read_untracked().to_owned()
                                             let:model
                                         >
-                                            <tr class="odd:bg-gray-50 dark:odd:bg-gray-800/50">
-                                                {
-                                                    let m: Field<Model> = model.into();
-                                                    view! {
-                                                        <td class="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">
-                                                            {m.name().read_untracked().to_owned()}
-                                                        </td>
-                                                        <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
-                                                            {move || {
-                                                                providers_resource
-                                                                    .get()
-                                                                    .map(|ref pairs| {
-                                                                        provider_display_name(&m.provider_id().get(), pairs)
-                                                                            .to_string()
-                                                                    })
-                                                                    .unwrap_or_else(|| m.provider_id().get())
-                                                            }}
-                                                        </td>
-                                                        <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
-                                                            {move || m.upstream_model().get()}
-                                                        </td>
-                                                        <td class="px-6 py-4">
-                                                            {move || status_badge(m.enabled().get())}
-                                                        </td>
-                                                        <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
-                                                            {move || timestamp_str(m.updated_at().get())}
-                                                        </td>
-                                                        <td class="px-6 py-4 text-center whitespace-nowrap">
-                                                            <div class="flex items-center justify-center gap-3">
-                                                                <button
-                                                                    class=CLASS_ICON_BTN
-                                                                    on:click=move |_| modal.set(ModelModal::Detail(m))
-                                                                >
-                                                                    <i class="fas fa-eye text-xs"></i>
-                                                                </button>
-                                                                <button
-                                                                    class=CLASS_ICON_BTN
-                                                                    on:click=move |_| modal.set(ModelModal::Edit(m))
-                                                                >
-                                                                    <i class="fas fa-pen text-xs"></i>
-                                                                </button>
-                                                                <button
-                                                                    class=CLASS_ICON_BTN
-                                                                    on:click=move |_| modal.set(ModelModal::Delete(m))
-                                                                >
-                                                                    <i class="fas fa-trash text-xs"></i>
-                                                                </button>
-                                                            </div>
-                                                        </td>
-                                                    }
+                                            {
+                                                let m: Field<Model> = model.into();
+                                                view! {
+                                                    <Show when=move || {
+                                                        provider_filter.get().is_empty()
+                                                            || m.provider_id().get() == provider_filter.get()
+                                                    }>
+                                                        <tr class="odd:bg-gray-50 dark:odd:bg-gray-800/50">
+                                                            <td class="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">
+                                                                {m.name().read_untracked().to_owned()}
+                                                            </td>
+                                                            <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
+                                                                {move || {
+                                                                    providers_resource
+                                                                        .get()
+                                                                        .map(|ref pairs| {
+                                                                            provider_display_name(&m.provider_id().get(), pairs)
+                                                                                .to_string()
+                                                                        })
+                                                                        .unwrap_or_else(|| { m.provider_id().get() })
+                                                                }}
+                                                            </td>
+                                                            <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
+                                                                {move || m.upstream_model().get()}
+                                                            </td>
+                                                            <td class="px-6 py-4">
+                                                                {move || status_badge(m.enabled().get())}
+                                                            </td>
+                                                            <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
+                                                                {move || timestamp_str(m.updated_at().get())}
+                                                            </td>
+                                                            <td class="px-6 py-4 text-center whitespace-nowrap">
+                                                                <div class="flex items-center justify-center gap-3">
+                                                                    <button
+                                                                        class=CLASS_ICON_BTN
+                                                                        on:click=move |_| { modal.set(ModelModal::Detail(m)) }
+                                                                    >
+                                                                        <i class="fas fa-eye text-xs"></i>
+                                                                    </button>
+                                                                    <button
+                                                                        class=CLASS_ICON_BTN
+                                                                        on:click=move |_| { modal.set(ModelModal::Edit(m)) }
+                                                                    >
+                                                                        <i class="fas fa-pen text-xs"></i>
+                                                                    </button>
+                                                                    <button
+                                                                        class=CLASS_ICON_BTN
+                                                                        on:click=move |_| { modal.set(ModelModal::Delete(m)) }
+                                                                    >
+                                                                        <i class="fas fa-trash text-xs"></i>
+                                                                    </button>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    </Show>
                                                 }
-                                            </tr>
+                                            }
                                         </For>
                                     </tbody>
                                 </table>

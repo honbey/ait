@@ -6,6 +6,7 @@
   "action_updated": "updated",
   "actions": "Actions",
   "add": "Add {{ entity }}",
+  "all": "All",
   "api_key": "API Key",
   "api_key_create": "Create API Key",
   "api_key_expired": "API key invalid or expired",
