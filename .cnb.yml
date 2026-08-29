@@ -1,0 +1,17 @@
+$:
+  vscode:
+    clouddev:
+      docker:
+        image: docker.cnb.cool/honbey/cnb-dev-env:latest
+      services:
+        - vscode
+        - docker
+      stages:
+        - name: "WebIDE"
+          script: echo "Done."
+        - name: "Link workspace"
+          script: |
+            mkdir -p /root/workspace/{cnb,github}
+            ln -sfn /workspace /root/workspace/cnb/ait
+            ln -sfn /workspace /root/workspace/github/ait
+            ls -l /root/workspace/{cnb,github}/
