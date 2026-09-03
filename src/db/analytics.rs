@@ -87,6 +87,23 @@ macro_rules! analytics_method {
     };
 }
 
+/// Run a query, containing any panic.
+///
+/// The worker thread owns the DuckDB connection, so a panic would unwind past
+/// the receive loop, drop the receiver, and permanently fail every subsequent
+/// analytics query with an empty result and no visible failure. Dropping the
+/// `resp` sender makes the caller's `await` yield `Err`, which the public
+/// methods already map to `Default`.
+fn run_guarded<T>(label: &str, query: impl FnOnce() -> T) -> Option<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(query)) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            error!("[analytics] {label} panicked; returning empty result");
+            None
+        }
+    }
+}
+
 impl Analytics {
     pub fn new(conn: Connection, timeout_secs: u64) -> Self {
         let (tx, rx) = mpsc::channel::<AnalyticsRequest>();
@@ -98,45 +115,73 @@ impl Analytics {
                         end_ts,
                         resp,
                     } => {
-                        let _ = resp.send(total_requests_impl(&conn, start_ts, end_ts));
+                        if let Some(value) = run_guarded("total_requests", || {
+                            total_requests_impl(&conn, start_ts, end_ts)
+                        }) {
+                            let _ = resp.send(value);
+                        }
                     }
                     AnalyticsRequest::TotalTokens {
                         start_ts,
                         end_ts,
                         resp,
                     } => {
-                        let _ = resp.send(total_tokens_impl(&conn, start_ts, end_ts));
+                        if let Some(value) = run_guarded("total_tokens", || {
+                            total_tokens_impl(&conn, start_ts, end_ts)
+                        }) {
+                            let _ = resp.send(value);
+                        }
                     }
                     AnalyticsRequest::Requests {
                         start_ts,
                         end_ts,
                         resp,
                     } => {
-                        let _ = resp.send(requests_impl(&conn, start_ts, end_ts));
+                        if let Some(value) =
+                            run_guarded("requests", || requests_impl(&conn, start_ts, end_ts))
+                        {
+                            let _ = resp.send(value);
+                        }
                     }
                     AnalyticsRequest::Tokens {
                         start_ts,
                         end_ts,
                         resp,
                     } => {
-                        let _ = resp.send(tokens_impl(&conn, start_ts, end_ts));
+                        if let Some(value) =
+                            run_guarded("tokens", || tokens_impl(&conn, start_ts, end_ts))
+                        {
+                            let _ = resp.send(value);
+                        }
                     }
                     AnalyticsRequest::ModelDist {
                         start_ts,
                         end_ts,
                         resp,
                     } => {
-                        let _ = resp.send(model_dist_impl(&conn, start_ts, end_ts));
+                        if let Some(value) =
+                            run_guarded("model_dist", || model_dist_impl(&conn, start_ts, end_ts))
+                        {
+                            let _ = resp.send(value);
+                        }
                     }
                     AnalyticsRequest::TokenDist {
                         start_ts,
                         end_ts,
                         resp,
                     } => {
-                        let _ = resp.send(token_dist_impl(&conn, start_ts, end_ts));
+                        if let Some(value) =
+                            run_guarded("token_dist", || token_dist_impl(&conn, start_ts, end_ts))
+                        {
+                            let _ = resp.send(value);
+                        }
                     }
                     AnalyticsRequest::QueryProxyLogs { params, resp } => {
-                        let _ = resp.send(query_proxy_logs_impl(&conn, *params));
+                        if let Some(value) = run_guarded("query_proxy_logs", || {
+                            query_proxy_logs_impl(&conn, *params)
+                        }) {
+                            let _ = resp.send(value);
+                        }
                     }
                     AnalyticsRequest::Shutdown => {
                         let _ = conn.execute_batch("CHECKPOINT");
@@ -468,8 +513,12 @@ fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> Prox
         }
     };
 
-    // Data query
-    let offset = (params.page.saturating_sub(1)) * params.per_page;
+    // Data query. Both operands are user-controlled, so saturate instead of
+    // overflowing: an arithmetic panic here would kill the analytics worker.
+    let offset = params
+        .page
+        .saturating_sub(1)
+        .saturating_mul(params.per_page);
     let data_sql = format!(
         "SELECT timestamp, api_key_name, model_name, provider_name, \
          prompt_tokens, completion_tokens, total_tokens, cached_tokens, latency_ms, status, \

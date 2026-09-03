@@ -27,12 +27,15 @@ pub struct ProxyLogQuery {
 }
 
 const MAX_PER_PAGE: u64 = 100;
+/// Upper bound for `page`. Without it `page * per_page` overflows and panics
+/// the analytics worker thread, permanently disabling every analytics query.
+const MAX_PAGE: u64 = 1_000_000;
 
 pub async fn list_proxy_logs(
     State(state): State<AppState>,
     Query(q): Query<ProxyLogQuery>,
 ) -> Result<Json<PaginatedResponse<ProxyLogEntryResponse>>, (StatusCode, Json<AitError>)> {
-    let page = q.page.unwrap_or(1).max(1);
+    let page = q.page.unwrap_or(1).clamp(1, MAX_PAGE);
     let per_page = q.per_page.unwrap_or(20).clamp(1, MAX_PER_PAGE);
 
     if let Some(ts) = q.start_ts

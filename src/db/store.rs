@@ -3,7 +3,7 @@ use rusqlite::{Connection, Row, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use uuid::Uuid;
 
 use super::models::*;
@@ -146,6 +146,15 @@ fn create_tables(conn: &Connection) -> Result<(), DbError> {
 // ---------------------------------------------------------------------------
 
 impl Database {
+    /// Acquire the connection lock, recovering from a poisoned mutex.
+    ///
+    /// Every DB operation runs inside `run_blocking`, so a panic there is
+    /// contained; without this recovery the poisoned mutex would make every
+    /// later request fail for the lifetime of the process.
+    fn lock_conn(&self) -> MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(parent) = Path::new(path).parent() {
             fs::create_dir_all(parent)?;
@@ -170,7 +179,7 @@ impl Database {
         provider.created_at = now;
         provider.updated_at = now;
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute(
             "INSERT INTO providers (id, name, type, base_url, api_key, enabled, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -191,7 +200,7 @@ impl Database {
     }
 
     pub fn update_provider(&self, updates: &ProviderUpdate) -> Result<Provider, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let now = Utc::now();
 
         let mut provider = {
@@ -251,7 +260,7 @@ impl Database {
     }
 
     pub fn delete_provider(&self, id: &str) -> Result<bool, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let rows = conn
             .execute("DELETE FROM providers WHERE id = ?1", params![id])
             .map_err(to_storage)?;
@@ -259,7 +268,7 @@ impl Database {
     }
 
     pub fn get_provider(&self, id: &str) -> Result<Option<Provider>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let result = conn.query_row(
             "SELECT id, name, type, base_url, api_key, enabled, created_at, updated_at
              FROM providers WHERE id = ?1",
@@ -274,7 +283,7 @@ impl Database {
     }
 
     pub fn count_providers(&self) -> Result<usize, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))
             .map_err(to_storage)?;
@@ -282,7 +291,7 @@ impl Database {
     }
 
     pub fn list_providers(&self) -> Result<Vec<Provider>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, type, base_url, api_key, enabled, created_at, updated_at
@@ -307,7 +316,7 @@ impl Database {
         model.created_at = now;
         model.updated_at = now;
 
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.lock_conn();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(to_storage)?;
@@ -353,7 +362,7 @@ impl Database {
     }
 
     pub fn update_model(&self, updates: &ModelUpdate) -> Result<Model, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let now = Utc::now();
 
         let mut model = {
@@ -403,7 +412,7 @@ impl Database {
     }
 
     pub fn delete_model(&self, name: &str) -> Result<bool, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let rows = conn
             .execute("DELETE FROM models WHERE name = ?1", params![name])
             .map_err(to_storage)?;
@@ -411,7 +420,7 @@ impl Database {
     }
 
     pub fn get_model(&self, name: &str) -> Result<Option<Model>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let result = conn.query_row(
             "SELECT id, name, provider_id, upstream_model, enabled, created_at, updated_at
              FROM models WHERE name = ?1",
@@ -426,7 +435,7 @@ impl Database {
     }
 
     pub fn count_models(&self) -> Result<usize, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM models", [], |row| row.get(0))
             .map_err(to_storage)?;
@@ -434,7 +443,7 @@ impl Database {
     }
 
     pub fn list_models(&self) -> Result<Vec<Model>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, provider_id, upstream_model, enabled, created_at, updated_at
@@ -452,7 +461,7 @@ impl Database {
     // --- resolve_model: hot path ---
 
     pub fn resolve_model(&self, model_name: &str) -> Result<Option<(Model, Provider)>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let result = conn.query_row(
             "SELECT m.id, m.name, m.provider_id, m.upstream_model, m.enabled, m.created_at, m.updated_at,
                     p.id, p.name, p.type, p.base_url, p.api_key, p.enabled, p.created_at, p.updated_at
@@ -517,7 +526,7 @@ impl Database {
         let now_ts = now.timestamp();
         let expires_ts = expires_at.map(|dt| dt.timestamp());
 
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.lock_conn();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(to_storage)?;
@@ -555,7 +564,7 @@ impl Database {
     }
 
     pub fn list_api_keys(&self) -> Result<Vec<ApiKey>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn
             .prepare(
                 "SELECT id, key_hash, display, name, created_at, updated_at, enabled, expires_at
@@ -572,7 +581,7 @@ impl Database {
 
     pub fn get_api_key_by_raw(&self, api_key: &str) -> Result<Option<ApiKeyInfo>, DbError> {
         let api_hash = hash_key(api_key);
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let result = conn.query_row(
             "SELECT id, name, enabled, expires_at, created_at
              FROM api_keys WHERE key_hash = ?1",
@@ -587,7 +596,7 @@ impl Database {
     }
 
     pub fn delete_api_key(&self, key_id: &str) -> Result<String, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
 
         let hash: String = conn
             .query_row(
@@ -609,7 +618,7 @@ impl Database {
     }
 
     pub fn update_api_key(&self, updates: &ApiKeyUpdate) -> Result<(ApiKey, String), DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let now = Utc::now();
 
         let mut api_key = {

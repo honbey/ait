@@ -33,7 +33,9 @@ opt-level = "z"
 
 [profile.dev]
 debug = "line-tables-only"
-panic = "abort"
+# Do NOT set `panic = "abort"`: it turns any panic in a request path —
+# including arithmetic overflow, which is enabled below — into a process-wide
+# denial of service instead of a failed request.
 opt-level = 1
 lto = false
 incremental = true
