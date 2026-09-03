@@ -14,6 +14,12 @@ cache_max_entries = 1000
 graceful_timeout_secs = 10
 # 允许设置 X-Forwarded-For 的可信代理 IP，空数组则不信任任何 XFF
 trusted_proxies = ["127.0.0.1", "::1"]
+# X-Forwarded-For 链中位于 Ait 前面的可信代理层数。
+# 客户端 IP 取 XFF 倒数第 N 项：最近一层可信代理追加的是它实际看到的
+# 对端地址，最左侧的项由客户端控制、可任意伪造。
+# 设为 0 则忽略 XFF（x-real-ip 仍生效）；XFF 项数不足 N 或所选项无法
+# 解析为 IP 时，回退到 x-real-ip / 直连地址。
+trusted_proxy_hops = 1
 
 [auth]
 # 控制 /v1/* 代理接口的 API Key 认证开关。

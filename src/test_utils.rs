@@ -84,6 +84,7 @@ pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
             cache_max_entries: 1000,
             graceful_timeout_secs: 10,
             trusted_proxies: vec!["127.0.0.1".parse().unwrap(), "::1".parse().unwrap()],
+            trusted_proxy_hops: 1,
         },
         auth: AuthConfig { enabled: true },
         database: DatabaseConfig {

@@ -22,6 +22,11 @@ pub struct ServerConfig {
     pub cache_max_entries: u64,
     pub graceful_timeout_secs: u64,
     pub trusted_proxies: Vec<IpAddr>,
+    /// Number of trusted reverse proxies in front of Ait. X-Forwarded-For is
+    /// read `hops` entries from the right: the nearest trusted proxy appends
+    /// the peer it saw, so leftmost entries are client-controlled and can be
+    /// freely spoofed. `0` ignores the header entirely.
+    pub trusted_proxy_hops: usize,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -148,6 +153,7 @@ impl ConfigApp {
             .set_default("server.cache_max_entries", 1000u64)?
             .set_default("server.graceful_timeout_secs", 10u64)?
             .set_default("server.trusted_proxies", vec!["127.0.0.1", "::1"])?
+            .set_default("server.trusted_proxy_hops", 1u64)?
             .set_default("auth.enabled", true)?
             .set_default("database.path", "./data/ait.db")?
             .set_default("log.path", "./data/ait-logs.duckdb")?
@@ -219,6 +225,7 @@ mod tests {
         let config = ConfigApp::new(Some("config/ait.toml.example")).unwrap();
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 8000);
+        assert_eq!(config.server.trusted_proxy_hops, 1);
         assert!(config.auth.enabled);
         assert_eq!(config.database.path, "./data/ait.db");
         assert_eq!(config.log.path, "./data/ait-logs.duckdb");
@@ -331,6 +338,18 @@ retention_every = 0
         );
         let err = ConfigApp::new(Some(&path)).unwrap_err();
         assert!(err.to_string().contains("retention_every"));
+    }
+
+    #[test]
+    fn trusted_proxy_hops_override() {
+        let (_dir, path) = write_toml(
+            r#"
+[server]
+trusted_proxy_hops = 3
+"#,
+        );
+        let config = ConfigApp::new(Some(&path)).unwrap();
+        assert_eq!(config.server.trusted_proxy_hops, 3);
     }
 
     #[test]
