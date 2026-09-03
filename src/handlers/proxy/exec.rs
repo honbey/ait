@@ -274,6 +274,7 @@ pub(crate) async fn proxy_streamed(
     let sse_stream = SseTransformStream {
         inner: raw_stream,
         buf: bytes::BytesMut::new(),
+        scanned: 0,
         upstream,
         model_name: model_name_for_transform,
         user_tokens: None,

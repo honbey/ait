@@ -21,6 +21,12 @@ const MAX_SSE_BUFFER_BYTES: usize = 1024 * 1024;
 pub(crate) struct SseTransformStream<S> {
     pub(crate) inner: S,
     pub(crate) buf: bytes::BytesMut,
+    /// Bytes of `buf` already scanned for an event boundary. Each scan only
+    /// inspects the tail beyond this offset (keeping the last 3 bytes
+    /// unscanned so a `\r\n\r\n` boundary straddling two chunks is not
+    /// missed), which keeps the search linear in new bytes instead of
+    /// rescanning the whole buffer on every poll.
+    pub(crate) scanned: usize,
     pub(crate) upstream: Arc<dyn UpstreamProvider>,
     pub(crate) model_name: String,
     pub(crate) user_tokens: Option<UsageTokens>,
@@ -45,14 +51,19 @@ pub(crate) struct SseTransformStream<S> {
 }
 
 impl<S> SseTransformStream<S> {
-    fn find_event_boundary(&self) -> Option<usize> {
-        if let Some(i) = self.buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            return Some(i + 4);
+    fn find_event_boundary(&mut self) -> Option<usize> {
+        let start = self.scanned.min(self.buf.len());
+        let hay = &self.buf[start..];
+        if let Some(i) = hay.windows(4).position(|w| w == b"\r\n\r\n") {
+            return Some(start + i + 4);
         }
-        self.buf
-            .windows(2)
-            .position(|w| w == b"\n\n")
-            .map(|i| i + 2)
+        if let Some(i) = hay.windows(2).position(|w| w == b"\n\n") {
+            return Some(start + i + 2);
+        }
+        // Nothing found: mark the scan position, keeping the last 3 bytes
+        // unmarked so a boundary completed by the next chunk is still seen.
+        self.scanned = self.buf.len().saturating_sub(3);
+        None
     }
 
     /// If the buffer exceeds the cap without an event boundary, split at the
@@ -82,6 +93,7 @@ impl<S> SseTransformStream<S> {
 
     fn split_event(&mut self, event_end: usize) -> bytes::Bytes {
         let event = self.buf.split_to(event_end);
+        self.scanned = 0;
         let transformed = self.transform_event(&event);
         self.event.response_body_size =
             Some(self.event.response_body_size.unwrap_or(0) + transformed.len() as i64);
@@ -338,6 +350,7 @@ mod tests {
         SseTransformStream {
             inner,
             buf: bytes::BytesMut::new(),
+            scanned: 0,
             upstream: Arc::new(MockUpstream),
             model_name: "test-model".to_string(),
             user_tokens: None,
@@ -399,6 +412,36 @@ mod tests {
         let mut s = s;
         s.buf.extend_from_slice(b"data: hello without boundary");
         assert_eq!(s.find_event_boundary(), None);
+    }
+
+    #[tokio::test]
+    async fn find_event_boundary_crlf_straddling_chunks() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
+            state.log_manager,
+        );
+        let mut s = s;
+        // A \r\n\r\n completed by the second chunk must still be found even
+        // though the first scan already advanced the cursor past its start.
+        s.buf.extend_from_slice(b"ab\r\n");
+        assert_eq!(s.find_event_boundary(), None);
+        s.buf.extend_from_slice(b"\r\nx");
+        assert_eq!(s.find_event_boundary(), Some(6));
+    }
+
+    #[tokio::test]
+    async fn find_event_boundary_lf_straddling_chunks() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
+            state.log_manager,
+        );
+        let mut s = s;
+        s.buf.extend_from_slice(b"a\n");
+        assert_eq!(s.find_event_boundary(), None);
+        s.buf.extend_from_slice(b"\nb");
+        assert_eq!(s.find_event_boundary(), Some(3));
     }
 
     #[tokio::test]
