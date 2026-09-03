@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use gloo_net::Error as NetError;
@@ -12,6 +12,10 @@ struct I18nInner {
     lang: RwSignal<String>,
     translations: RwSignal<HashMap<String, String>>,
     cache: RwLock<HashMap<String, HashMap<String, String>>>,
+    /// Locales with an in-flight network fetch. Switching language rapidly
+    /// re-enters `fetch_and_cache` before the first request resolves; without
+    /// this set every toggle would fire another request for the same locale.
+    in_flight: RwLock<HashSet<String>>,
 }
 
 #[derive(Clone)]
@@ -24,6 +28,7 @@ impl I18n {
             lang: RwSignal::new(initial_lang.to_string()),
             translations: RwSignal::new(default.clone()),
             cache: RwLock::new(HashMap::from([(initial_lang.to_string(), default)])),
+            in_flight: RwLock::new(HashSet::new()),
         };
         Self(Arc::new(inner))
     }
@@ -84,10 +89,13 @@ impl I18n {
         })
     }
 
-    // Multiple fetch_and_cache calls for the same language are not deduplicated,
-    // leading to redundant network requests.
-    // Only the latest language's fetch will update the translations.
+    /// Fetch a locale in the background and cache it. Concurrent calls for the
+    /// same language are deduplicated. Only the language matching the current
+    /// selection updates the live translations.
     fn fetch_and_cache(&self, lang: &str) {
+        if !self.0.in_flight.write().unwrap().insert(lang.to_string()) {
+            return;
+        }
         let this = self.clone();
         let lang = lang.to_string();
         spawn_local(async move {
@@ -106,6 +114,7 @@ impl I18n {
                     eprintln!("Failed to load locale {}: {:?}", lang, e);
                 }
             }
+            this.0.in_flight.write().unwrap().remove(&lang);
         });
     }
 
