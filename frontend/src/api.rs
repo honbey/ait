@@ -274,8 +274,12 @@ pub async fn delete_provider(id: &str) -> Result<(), NetError> {
     api_delete(&format!("api/providers/{}", id)).await
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct OverviewStats {
+    #[serde(default)]
+    pub range_start: i64,
+    #[serde(default)]
+    pub range_end: i64,
     pub provider_count: u64,
     pub model_count: u64,
     pub api_request_count: u64,
@@ -284,6 +288,14 @@ pub struct OverviewStats {
     pub tpm: f64,
     #[serde(default)]
     pub username: Option<String>,
+    #[serde(default)]
+    pub request_buckets: Vec<BucketEntry>,
+    #[serde(default)]
+    pub token_buckets: Vec<BucketEntry>,
+    #[serde(default)]
+    pub model_dist: Vec<ModelDistEntry>,
+    #[serde(default)]
+    pub token_dist: Vec<TokenDistEntry>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -419,60 +431,6 @@ pub async fn fetch_overview_stats(
 ) -> Result<OverviewStats, NetError> {
     api_get_cached(
         &format!("api/stats?start_ts={}&end_ts={}", start_ts, end_ts),
-        force,
-    )
-    .await
-}
-
-pub async fn fetch_model_dist(
-    start_ts: i64,
-    end_ts: i64,
-    force: bool,
-) -> Result<Vec<ModelDistEntry>, NetError> {
-    api_get_cached(
-        &format!(
-            "api/data/model-dist?start_ts={}&end_ts={}",
-            start_ts, end_ts
-        ),
-        force,
-    )
-    .await
-}
-
-pub async fn fetch_token_dist(
-    start_ts: i64,
-    end_ts: i64,
-    force: bool,
-) -> Result<Vec<TokenDistEntry>, NetError> {
-    api_get_cached(
-        &format!(
-            "api/data/token-dist?start_ts={}&end_ts={}",
-            start_ts, end_ts
-        ),
-        force,
-    )
-    .await
-}
-
-pub async fn fetch_request_buckets(
-    start_ts: i64,
-    end_ts: i64,
-    force: bool,
-) -> Result<Vec<BucketEntry>, NetError> {
-    api_get_cached(
-        &format!("api/data/requests?start_ts={}&end_ts={}", start_ts, end_ts),
-        force,
-    )
-    .await
-}
-
-pub async fn fetch_token_buckets(
-    start_ts: i64,
-    end_ts: i64,
-    force: bool,
-) -> Result<Vec<BucketEntry>, NetError> {
-    api_get_cached(
-        &format!("api/data/tokens?start_ts={}&end_ts={}", start_ts, end_ts),
         force,
     )
     .await

@@ -186,7 +186,13 @@ mod http_tests {
         // Wait for all three events to be flushed.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            if state.log_manager.total_requests(h - 7200, h + 7200).await >= 3 {
+            if state
+                .log_manager
+                .overview(h - 7200, h + 7200)
+                .await
+                .total_requests
+                >= 3
+            {
                 break;
             }
             assert!(

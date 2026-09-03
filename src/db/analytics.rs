@@ -8,8 +8,8 @@ use tokio::time::timeout;
 use tracing::{error, warn};
 
 use super::models::{
-    BucketEntry, ModelDistEntry, ProxyLogEntryResponse, ProxyLogQueryParams, ProxyLogQueryResult,
-    TokenDistEntry,
+    BucketEntry, ModelDistEntry, OverviewMetrics, ProxyLogEntryResponse, ProxyLogQueryParams,
+    ProxyLogQueryResult, TokenDistEntry,
 };
 
 #[derive(Clone)]
@@ -20,16 +20,6 @@ pub struct Analytics {
 }
 
 enum AnalyticsRequest {
-    TotalRequests {
-        start_ts: i64,
-        end_ts: i64,
-        resp: oneshot::Sender<u64>,
-    },
-    TotalTokens {
-        start_ts: i64,
-        end_ts: i64,
-        resp: oneshot::Sender<u64>,
-    },
     Requests {
         start_ts: i64,
         end_ts: i64,
@@ -53,6 +43,11 @@ enum AnalyticsRequest {
     QueryProxyLogs {
         params: Box<ProxyLogQueryParams>,
         resp: oneshot::Sender<ProxyLogQueryResult>,
+    },
+    Overview {
+        start_ts: i64,
+        end_ts: i64,
+        resp: oneshot::Sender<OverviewMetrics>,
     },
     Shutdown,
 }
@@ -110,28 +105,6 @@ impl Analytics {
         let handle = std::thread::spawn(move || {
             for req in rx {
                 match req {
-                    AnalyticsRequest::TotalRequests {
-                        start_ts,
-                        end_ts,
-                        resp,
-                    } => {
-                        if let Some(value) = run_guarded("total_requests", || {
-                            total_requests_impl(&conn, start_ts, end_ts)
-                        }) {
-                            let _ = resp.send(value);
-                        }
-                    }
-                    AnalyticsRequest::TotalTokens {
-                        start_ts,
-                        end_ts,
-                        resp,
-                    } => {
-                        if let Some(value) = run_guarded("total_tokens", || {
-                            total_tokens_impl(&conn, start_ts, end_ts)
-                        }) {
-                            let _ = resp.send(value);
-                        }
-                    }
                     AnalyticsRequest::Requests {
                         start_ts,
                         end_ts,
@@ -183,6 +156,17 @@ impl Analytics {
                             let _ = resp.send(value);
                         }
                     }
+                    AnalyticsRequest::Overview {
+                        start_ts,
+                        end_ts,
+                        resp,
+                    } => {
+                        if let Some(value) =
+                            run_guarded("overview", || overview_impl(&conn, start_ts, end_ts))
+                        {
+                            let _ = resp.send(value);
+                        }
+                    }
                     AnalyticsRequest::Shutdown => {
                         let _ = conn.execute_batch("CHECKPOINT");
                         break;
@@ -197,12 +181,39 @@ impl Analytics {
         }
     }
 
-    analytics_method!(total_requests, TotalRequests, u64);
-    analytics_method!(total_tokens, TotalTokens, u64);
     analytics_method!(requests, Requests, Vec<BucketEntry>);
     analytics_method!(tokens, Tokens, Vec<BucketEntry>);
     analytics_method!(model_dist, ModelDist, Vec<ModelDistEntry>);
     analytics_method!(token_dist, TokenDist, Vec<TokenDistEntry>);
+
+    /// All overview aggregates in one worker round trip. Individual queries
+    /// still run sequentially inside the worker, but the caller pays one
+    /// channel hop and one HTTP request instead of six.
+    pub async fn overview(&self, start_ts: i64, end_ts: i64) -> OverviewMetrics {
+        let (resp, rx) = oneshot::channel();
+        if self
+            .tx
+            .send(AnalyticsRequest::Overview {
+                start_ts,
+                end_ts,
+                resp,
+            })
+            .is_err()
+        {
+            error!("[analytics] overview channel send failed");
+            return OverviewMetrics::default();
+        }
+        match timeout(self.timeout, rx).await {
+            Ok(inner) => inner.unwrap_or_else(|_| {
+                warn!("[analytics] overview oneshot cancelled");
+                OverviewMetrics::default()
+            }),
+            Err(_) => {
+                warn!("[analytics] overview timed out");
+                OverviewMetrics::default()
+            }
+        }
+    }
 
     pub async fn query_proxy_logs(&self, params: ProxyLogQueryParams) -> ProxyLogQueryResult {
         let (resp, rx) = oneshot::channel();
@@ -419,6 +430,17 @@ fn token_dist_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> Vec<TokenDi
     ]
 }
 
+fn overview_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> OverviewMetrics {
+    OverviewMetrics {
+        total_requests: total_requests_impl(conn, start_ts, end_ts),
+        total_tokens: total_tokens_impl(conn, start_ts, end_ts),
+        request_buckets: requests_impl(conn, start_ts, end_ts),
+        token_buckets: tokens_impl(conn, start_ts, end_ts),
+        model_dist: model_dist_impl(conn, start_ts, end_ts),
+        token_dist: token_dist_impl(conn, start_ts, end_ts),
+    }
+}
+
 fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> ProxyLogQueryResult {
     use duckdb::types::ToSql;
 
@@ -633,32 +655,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn total_requests_and_tokens_filter_by_range() {
+    async fn overview_totals_filter_by_range() {
         let (_dir, conn, analytics) = setup();
         insert_proxy(&conn, hour_floor() + 100, "gpt-4", "success", 10, 20, 5);
         insert_proxy(&conn, hour_floor() - 3000, "llama", "success", 30, 40, 0);
 
-        let requests = analytics
-            .total_requests(hour_floor() - 7200, hour_floor() + 7200)
+        let wide = analytics
+            .overview(hour_floor() - 7200, hour_floor() + 7200)
             .await;
-        assert_eq!(requests, 2);
-        let tokens = analytics
-            .total_tokens(hour_floor() - 7200, hour_floor() + 7200)
-            .await;
-        assert_eq!(tokens, 100);
+        assert_eq!(wide.total_requests, 2);
+        assert_eq!(wide.total_tokens, 100);
 
         // Narrow range excludes the second event.
-        let requests = analytics
-            .total_requests(hour_floor() - 1800, hour_floor() + 1800)
+        let narrow = analytics
+            .overview(hour_floor() - 1800, hour_floor() + 1800)
             .await;
-        assert_eq!(requests, 1);
+        assert_eq!(narrow.total_requests, 1);
     }
 
     #[tokio::test]
     async fn empty_range_returns_zero() {
         let (_dir, _conn, analytics) = setup();
-        assert_eq!(analytics.total_requests(0, 1).await, 0);
-        assert_eq!(analytics.total_tokens(0, 1).await, 0);
+        let m = analytics.overview(0, 1).await;
+        assert_eq!(m.total_requests, 0);
+        assert_eq!(m.total_tokens, 0);
         assert!(analytics.requests(0, 1).await.is_empty());
         assert!(analytics.model_dist(0, 1).await.is_empty());
         let dist = analytics.token_dist(0, 1).await;
@@ -729,6 +749,33 @@ mod tests {
         };
         assert_eq!(get("uncached_input"), 30);
         assert_eq!(get("cached_input"), 120);
+        assert_eq!(get("output"), 35);
+    }
+
+    #[tokio::test]
+    async fn overview_returns_all_aggregates() {
+        let (_dir, conn, analytics) = setup();
+        let h = hour_floor();
+        insert_proxy(&conn, h + 10, "gpt-4", "success", 100, 30, 20);
+        insert_proxy(&conn, h + 20, "llama", "success", 10, 5, 0);
+
+        let m = analytics.overview(h - 3600, h + 3600).await;
+        assert_eq!(m.total_requests, 2);
+        assert_eq!(m.total_tokens, 145);
+        assert_eq!(m.request_buckets.len(), 1);
+        assert_eq!(m.request_buckets[0].count, 2);
+        assert_eq!(m.token_buckets.len(), 1);
+        assert_eq!(m.token_buckets[0].count, 145);
+        assert_eq!(m.model_dist.len(), 2);
+        let get = |cat: &str| {
+            m.token_dist
+                .iter()
+                .find(|e| e.category == cat)
+                .map(|e| e.count)
+                .unwrap_or(0)
+        };
+        assert_eq!(get("uncached_input"), 90);
+        assert_eq!(get("cached_input"), 20);
         assert_eq!(get("output"), 35);
     }
 

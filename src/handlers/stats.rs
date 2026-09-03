@@ -8,6 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
+use crate::db::models::{BucketEntry, ModelDistEntry, TokenDistEntry};
 
 use crate::error::{AitError, internal_error};
 use crate::handlers::analytics::validate_ts_range;
@@ -23,6 +24,10 @@ pub struct StatsQuery {
 
 #[derive(Serialize)]
 pub struct OverviewStats {
+    /// Effective (validated/clamped) query range, so the frontend charts fill
+    /// exactly the window the aggregates were computed over.
+    pub range_start: i64,
+    pub range_end: i64,
     pub provider_count: usize,
     pub model_count: usize,
     pub api_request_count: u64,
@@ -32,6 +37,10 @@ pub struct OverviewStats {
     /// Caller identity reported by the upstream authenticator; used only for
     /// the overview greeting, not for authentication.
     pub username: Option<String>,
+    pub request_buckets: Vec<BucketEntry>,
+    pub token_buckets: Vec<BucketEntry>,
+    pub model_dist: Vec<ModelDistEntry>,
+    pub token_dist: Vec<TokenDistEntry>,
 }
 
 fn is_trusted_proxy(ip: IpAddr, trusted: &[IpAddr]) -> bool {
@@ -75,16 +84,17 @@ pub async fn overview_stats(
         .await
         .map_err(internal_error)?
         .map_err(|e| AitError::from_db_error(e).into_response())?;
-    let api_request_count = state
-        .log_manager
-        .total_requests(range.start, range.end)
-        .await;
-    let token_consumption = state.log_manager.total_tokens(range.start, range.end).await;
+
+    let metrics = state.log_manager.overview(range.start, range.end).await;
+    let api_request_count = metrics.total_requests;
+    let token_consumption = metrics.total_tokens;
 
     let rpm = ((api_request_count as f64 / range_mins) * 100.0).round() / 100.0;
     let tpm = ((token_consumption as f64 / range_mins) * 100.0).round() / 100.0;
 
     Ok(Json(OverviewStats {
+        range_start: range.start,
+        range_end: range.end,
         provider_count,
         model_count,
         api_request_count,
@@ -92,6 +102,10 @@ pub async fn overview_stats(
         rpm,
         tpm,
         username,
+        request_buckets: metrics.request_buckets,
+        token_buckets: metrics.token_buckets,
+        model_dist: metrics.model_dist,
+        token_dist: metrics.token_dist,
     }))
 }
 
@@ -197,8 +211,9 @@ mod tests {
         loop {
             let count = state
                 .log_manager
-                .total_requests(now - 3600, now + 3600)
-                .await;
+                .overview(now - 3600, now + 3600)
+                .await
+                .total_requests;
             if count >= 2 {
                 break;
             }
@@ -232,6 +247,27 @@ mod tests {
         assert_eq!(resp.json["api_request_count"], 2);
         assert_eq!(resp.json["token_consumption"], 450);
         assert_eq!(resp.json["provider_count"], 0);
+        // Effective range echoes the requested window; data payloads ride
+        // along in the same response.
+        assert_eq!(resp.json["range_start"], now - 3600);
+        assert_eq!(resp.json["range_end"], now + 3600);
+        let buckets = resp.json["request_buckets"].as_array().unwrap();
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0]["count"], 2);
+        let dist = resp.json["model_dist"].as_array().unwrap();
+        assert_eq!(dist.len(), 2);
+        let get = |cat: &str| {
+            resp.json["token_dist"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["category"] == cat)
+                .and_then(|e| e["count"].as_u64())
+                .unwrap_or(0)
+        };
+        assert_eq!(get("uncached_input"), 10);
+        assert_eq!(get("cached_input"), 10);
+        assert_eq!(get("output"), 40);
     }
 
     #[tokio::test]

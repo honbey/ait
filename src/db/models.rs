@@ -223,6 +223,18 @@ pub struct TokenDistEntry {
     pub count: u64,
 }
 
+/// All analytics aggregates the console overview needs, produced by a single
+/// analytics-worker round trip instead of one request per metric.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct OverviewMetrics {
+    pub total_requests: u64,
+    pub total_tokens: u64,
+    pub request_buckets: Vec<BucketEntry>,
+    pub token_buckets: Vec<BucketEntry>,
+    pub model_dist: Vec<ModelDistEntry>,
+    pub token_dist: Vec<TokenDistEntry>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ProxyLogEntryResponse {

@@ -102,8 +102,9 @@ mod tests {
         loop {
             if state
                 .log_manager
-                .total_requests(now - 3600, now + 3600)
+                .overview(now - 3600, now + 3600)
                 .await
+                .total_requests
                 >= 3
             {
                 break;

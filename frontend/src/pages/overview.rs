@@ -92,23 +92,6 @@ fn fill_daily_range(daily: &[BucketEntry], start_ts: i64, end_ts: i64) -> Vec<Bu
     result
 }
 
-#[derive(Clone)]
-struct OverviewData {
-    start_ts: i64,
-    end_ts: i64,
-    provider_count: u64,
-    model_count: u64,
-    api_request_count: u64,
-    token_consumption: u64,
-    rpm: f64,
-    tpm: f64,
-    username: Option<String>,
-    request_buckets: Vec<BucketEntry>,
-    token_buckets: Vec<BucketEntry>,
-    model_dist: Vec<api::ModelDistEntry>,
-    token_dist: Vec<api::TokenDistEntry>,
-}
-
 #[component]
 fn StatCard(
     icon: &'static str,
@@ -176,44 +159,21 @@ pub fn Overview() -> impl IntoView {
     let (left_tab, set_left_tab) = signal(0usize);
     let (right_tab, set_right_tab) = signal(0usize);
 
-    let overview_resource: LocalResource<Result<OverviewData, String>> = LocalResource::new({
-        move || {
+    let overview_resource: LocalResource<Result<api::OverviewStats, String>> =
+        LocalResource::new(move || {
             let s = start_ts.get_untracked();
             let e = end_ts.get_untracked();
             let force = force_refresh.get_untracked();
             async move {
-                let (stats, req_b, tok_b, mdl, tok_d) = futures_util::join!(
-                    api::fetch_overview_stats(s, e, force),
-                    api::fetch_request_buckets(s, e, force),
-                    api::fetch_token_buckets(s, e, force),
-                    api::fetch_model_dist(s, e, force),
-                    api::fetch_token_dist(s, e, force),
-                );
-                match (stats, req_b, tok_b, mdl, tok_d) {
-                    (Ok(stats_val), Ok(r), Ok(t), Ok(md), Ok(td)) => Ok(OverviewData {
-                        start_ts: s,
-                        end_ts: e,
-                        provider_count: stats_val.provider_count,
-                        model_count: stats_val.model_count,
-                        api_request_count: stats_val.api_request_count,
-                        token_consumption: stats_val.token_consumption,
-                        rpm: stats_val.rpm,
-                        tpm: stats_val.tpm,
-                        username: stats_val.username,
-                        request_buckets: r,
-                        token_buckets: t,
-                        model_dist: md,
-                        token_dist: td,
-                    }),
-                    (Err(e), _, _, _, _)
-                    | (_, Err(e), _, _, _)
-                    | (_, _, Err(e), _, _)
-                    | (_, _, _, Err(e), _)
-                    | (_, _, _, _, Err(e)) => Err(e.to_string()),
-                }
+                let result = api::fetch_overview_stats(s, e, force)
+                    .await
+                    .map_err(|e| e.to_string());
+                // One-shot flag: later refetches go through the response cache
+                // again unless the user asks for a fresh pull.
+                set_force_refresh.set(false);
+                result
             }
-        }
-    });
+        });
 
     let try_refetch = move || {
         // Either boundary alone is enough to refresh; requiring both would
@@ -278,8 +238,8 @@ pub fn Overview() -> impl IntoView {
             .map(|data| {
                 let req_filled = fill_daily_range(
                     &aggregate_daily(&data.request_buckets),
-                    data.start_ts,
-                    data.end_ts,
+                    data.range_start,
+                    data.range_end,
                 );
                 req_filled
                     .iter()
@@ -297,8 +257,8 @@ pub fn Overview() -> impl IntoView {
             .map(|data| {
                 let req_filled = fill_daily_range(
                     &aggregate_daily(&data.request_buckets),
-                    data.start_ts,
-                    data.end_ts,
+                    data.range_start,
+                    data.range_end,
                 );
                 vec![ChartSeries {
                     name: "Requests".to_string(),
@@ -316,8 +276,8 @@ pub fn Overview() -> impl IntoView {
             .map(|data| {
                 let tok_filled = fill_daily_range(
                     &aggregate_daily(&data.token_buckets),
-                    data.start_ts,
-                    data.end_ts,
+                    data.range_start,
+                    data.range_end,
                 );
                 tok_filled
                     .iter()
@@ -335,8 +295,8 @@ pub fn Overview() -> impl IntoView {
             .map(|data| {
                 let tok_filled = fill_daily_range(
                     &aggregate_daily(&data.token_buckets),
-                    data.start_ts,
-                    data.end_ts,
+                    data.range_start,
+                    data.range_end,
                 );
                 vec![ChartSeries {
                     name: "Tokens".to_string(),
@@ -383,9 +343,11 @@ pub fn Overview() -> impl IntoView {
 
     let has_chart_data = Memo::new(move |_| matches!(overview_resource.get(), Some(Ok(_))));
 
-    let content = move || match overview_resource.get() {
-        None => overview_skeleton().into_any(),
-        Some(Err(e)) => view! { <ErrorCard message=e.clone() /> }.into_any(),
+    let content = move || {
+        match overview_resource.get() {
+            None => overview_skeleton().into_any(),
+            Some(Err(e)) => view! { <ErrorCard message=e.clone() on_retry=Box::new(move || overview_resource.refetch()) /> }
+            .into_any(),
         Some(Ok(data)) => view! {
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
                 <StatCard
@@ -433,6 +395,7 @@ pub fn Overview() -> impl IntoView {
             </div>
         }
         .into_any(),
+        }
     };
 
     let greeting = move || {

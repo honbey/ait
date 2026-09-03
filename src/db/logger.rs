@@ -8,7 +8,7 @@ use tracing::{error, info, warn};
 use super::analytics::Analytics;
 use super::loki::LokiSink;
 use super::models::{
-    AccessEvent, AuditEvent, BucketEntry, LogEvent, ModelDistEntry, ProxyEvent,
+    AccessEvent, AuditEvent, BucketEntry, LogEvent, ModelDistEntry, OverviewMetrics, ProxyEvent,
     ProxyLogQueryParams, ProxyLogQueryResult, TokenDistEntry,
 };
 
@@ -143,14 +143,6 @@ impl LogManager {
         }
     }
 
-    pub async fn total_requests(&self, start_ts: i64, end_ts: i64) -> u64 {
-        self.analytics.total_requests(start_ts, end_ts).await
-    }
-
-    pub async fn total_tokens(&self, start_ts: i64, end_ts: i64) -> u64 {
-        self.analytics.total_tokens(start_ts, end_ts).await
-    }
-
     pub async fn requests(&self, start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
         self.analytics.requests(start_ts, end_ts).await
     }
@@ -165,6 +157,10 @@ impl LogManager {
 
     pub async fn token_dist(&self, start_ts: i64, end_ts: i64) -> Vec<TokenDistEntry> {
         self.analytics.token_dist(start_ts, end_ts).await
+    }
+
+    pub async fn overview(&self, start_ts: i64, end_ts: i64) -> OverviewMetrics {
+        self.analytics.overview(start_ts, end_ts).await
     }
 
     pub async fn query_proxy_logs(&self, params: ProxyLogQueryParams) -> ProxyLogQueryResult {
@@ -497,7 +493,10 @@ mod tests {
         let now = Utc::now().timestamp();
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            let count = manager.total_requests(now - 3600, now + 3600).await;
+            let count = manager
+                .overview(now - 3600, now + 3600)
+                .await
+                .total_requests;
             if count >= 1 {
                 break;
             }
