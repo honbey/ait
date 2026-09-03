@@ -496,7 +496,8 @@ fn ProviderFormModal(
                 </label>
                 <input
                     id="form-api-key"
-                    type="text"
+                    type="password"
+                    autocomplete="off"
                     class=CLASS_INPUT
                     placeholder=ts!(ApiKey)
                     prop:value=api_key

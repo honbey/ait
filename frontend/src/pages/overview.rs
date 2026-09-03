@@ -47,6 +47,12 @@ fn next_local_midnight(cur: i64) -> i64 {
     (next.get_time() / 1000.0) as i64
 }
 
+/// Upper bound on filled day buckets. A start date typed far in the past
+/// (e.g. `0001-01-01`) would otherwise make the fill loop iterate hundreds of
+/// thousands of times and freeze the page; beyond the cap the raw daily data
+/// is returned un-filled.
+const MAX_FILLED_DAYS: usize = 1000;
+
 fn fill_daily_range(daily: &[BucketEntry], start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
     let sd = js_sys::Date::new(&((start_ts as f64) * 1000.0).into());
     let ed = js_sys::Date::new(&((end_ts as f64) * 1000.0).into());
@@ -62,6 +68,11 @@ fn fill_daily_range(daily: &[BucketEntry], start_ts: i64, end_ts: i64) -> Vec<Bu
     );
     let start_day_ts = (start_day.get_time() / 1000.0) as i64;
     let end_day_ts = (end_day.get_time() / 1000.0) as i64;
+
+    let span_days = ((end_day_ts - start_day_ts) / 86400).max(0) as usize + 1;
+    if span_days > MAX_FILLED_DAYS {
+        return daily.to_vec();
+    }
 
     let mut result = Vec::new();
     let mut i = 0;
@@ -205,7 +216,9 @@ pub fn Overview() -> impl IntoView {
     });
 
     let try_refetch = move || {
-        if start_dirty.get_untracked() && end_dirty.get_untracked() {
+        // Either boundary alone is enough to refresh; requiring both would
+        // silently drop the change when only one date input is edited.
+        if start_dirty.get_untracked() || end_dirty.get_untracked() {
             let now = now_timestamp();
             let (start, end) = clamp_range(start_ts.get_untracked(), end_ts.get_untracked(), now);
             set_start_ts.set(start);
