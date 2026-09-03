@@ -70,7 +70,7 @@ pub fn LineChart(
 ) -> impl IntoView {
     let node = NodeRef::<leptos::html::Div>::new();
     let chart = echarts::use_chart(node);
-    let dark = use_context::<RwSignal<bool>>();
+    let dark = use_context::<Memo<bool>>();
 
     Effect::new(move || {
         let option = build_line_option(

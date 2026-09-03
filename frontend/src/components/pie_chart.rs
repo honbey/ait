@@ -72,7 +72,7 @@ fn build_pie_option(data: &[PieData], dark: bool) -> JsValue {
 pub fn PieChart(id: &'static str, data: Signal<Vec<PieData>>) -> impl IntoView {
     let node = NodeRef::<leptos::html::Div>::new();
     let chart = echarts::use_chart(node);
-    let dark = use_context::<RwSignal<bool>>();
+    let dark = use_context::<Memo<bool>>();
 
     Effect::new(move || {
         let dark = dark.map(|d| d.get()).unwrap_or(false);
