@@ -45,12 +45,15 @@ pub fn validate_ts_range(
 
     let max_range = (retention_days as i64 + 1) * 86400;
 
+    // Clamp `end` on its own so the bound holds whichever range correction
+    // below applies; folding it into the chain let a future `end` through
+    // whenever `start >= end` short-circuited on the first arm.
+    let end = end.min(now + 3600);
+
     let (start, end) = if start >= end {
         (end - 86400, end)
     } else if end - start > max_range {
         (end - max_range, end)
-    } else if end > now + 3600 {
-        (start, now + 3600)
     } else {
         (start, end)
     };
@@ -128,6 +131,16 @@ mod tests {
         let range = validate_ts_range(Some(now - 3600), Some(now + 7200), 30).unwrap();
         assert_eq!(range.end, now + 3600);
         assert_eq!(range.start, now - 3600);
+    }
+
+    #[test]
+    fn future_end_is_clamped_even_when_start_after_end() {
+        let now = Utc::now().timestamp();
+        // Both bounds far in the future: the previous mutually-exclusive chain
+        // short-circuited on `start >= end` and let `end` through unclamped.
+        let range = validate_ts_range(Some(now + 10_000), Some(now + 20_000), 30).unwrap();
+        assert_eq!(range.end, now + 3600);
+        assert_eq!(range.start, now + 3600 - 86400);
     }
 
     #[test]
