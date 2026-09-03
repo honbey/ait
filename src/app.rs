@@ -29,7 +29,7 @@ pub struct AppState {
     pub log_manager: LogManager,
     pub start_time: DateTime<Utc>,
     pub shutdown_token: CancellationToken,
-    pub api_key_cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>>,
+    pub api_key_cache: Arc<DashMap<String, (Option<ApiKeyInfo>, Instant)>>,
     pub model_cache: Arc<DashMap<String, ModelCacheEntry>>,
     pub provider_cache: Arc<DashMap<String, ProviderCacheEntry>>,
     pub ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
@@ -72,7 +72,8 @@ impl AppState {
         // will exit immediately without orphaned background tasks.
         let log_manager = LogManager::new(&config.log).map_err(AppInitError::LogManager)?;
 
-        let api_key_cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>> = Arc::new(DashMap::new());
+        let api_key_cache: Arc<DashMap<String, (Option<ApiKeyInfo>, Instant)>> =
+            Arc::new(DashMap::new());
         let model_cache: Arc<DashMap<String, ModelCacheEntry>> = Arc::new(DashMap::new());
         let provider_cache: Arc<DashMap<String, ProviderCacheEntry>> = Arc::new(DashMap::new());
         let ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
@@ -114,7 +115,7 @@ impl AppState {
 /// enforces it as a hard cap at insertion time (see insert_model_cache).
 #[allow(clippy::too_many_arguments)]
 fn spawn_caches_cleanup(
-    api_key_cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>>,
+    api_key_cache: Arc<DashMap<String, (Option<ApiKeyInfo>, Instant)>>,
     model_cache: Arc<DashMap<String, ModelCacheEntry>>,
     provider_cache: Arc<DashMap<String, ProviderCacheEntry>>,
     ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
@@ -155,7 +156,7 @@ fn spawn_caches_cleanup(
 /// enforces it as a hard cap at insertion time (see insert_model_cache).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cleanup_caches(
-    api_key_cache: &DashMap<String, (ApiKeyInfo, Instant)>,
+    api_key_cache: &DashMap<String, (Option<ApiKeyInfo>, Instant)>,
     model_cache: &DashMap<String, ModelCacheEntry>,
     provider_cache: &DashMap<String, ProviderCacheEntry>,
     ssrf_dns_cache: &DashMap<String, (Vec<IpAddr>, Instant)>,
@@ -170,7 +171,16 @@ pub(crate) fn cleanup_caches(
         }
     };
     let ttl = aggressive(api_key_cache.len());
-    api_key_cache.retain(|_, v| v.1.elapsed() < ttl);
+    // Negative entries (known-invalid tokens) use the short negative TTL so a
+    // miss flood is evicted quickly instead of crowding out positive entries.
+    api_key_cache.retain(|_, v| {
+        let entry_ttl = if v.0.is_none() {
+            NEGATIVE_CACHE_TTL
+        } else {
+            ttl
+        };
+        v.1.elapsed() < entry_ttl
+    });
     let ttl = aggressive(model_cache.len());
     // compute before retain: calling len() inside the retain
     // closure would take a read lock while holding the write
@@ -229,7 +239,7 @@ mod tests {
         }
     }
 
-    fn new_api_key_cache() -> Arc<DashMap<String, (ApiKeyInfo, Instant)>> {
+    fn new_api_key_cache() -> Arc<DashMap<String, (Option<ApiKeyInfo>, Instant)>> {
         Arc::new(DashMap::new())
     }
 
@@ -296,8 +306,8 @@ mod tests {
         let provider_cache = new_provider_cache();
         let ssrf_cache = new_ssrf_cache();
 
-        api_key_cache.insert("k-old".to_string(), (test_api_key_info(), stale()));
-        api_key_cache.insert("k-new".to_string(), (test_api_key_info(), fresh()));
+        api_key_cache.insert("k-old".to_string(), (Some(test_api_key_info()), stale()));
+        api_key_cache.insert("k-new".to_string(), (Some(test_api_key_info()), fresh()));
         // Negative model cache entry (unknown model) and a positive one.
         model_cache.insert("neg".to_string(), (None, stale()));
         model_cache.insert(
@@ -380,8 +390,11 @@ mod tests {
         // Insert 10 entries in api_key_cache so len() > threshold (9),
         // triggering aggressive TTL = CACHE_TTL/2 = 150s for that cache.
         for i in 0..10 {
-            api_key_cache.insert(format!("k{i}"), (test_api_key_info(), mid_old));
+            api_key_cache.insert(format!("k{i}"), (Some(test_api_key_info()), mid_old));
         }
+        // Negative entries take the short NEGATIVE_CACHE_TTL regardless of the
+        // aggressive TTL, so this 200s-old one is evicted either way.
+        api_key_cache.insert("k-neg".to_string(), (None, mid_old));
         // Other caches have only 1 entry each -- normal 300s TTL applies.
         model_cache.insert("m0".to_string(), (None, mid_old));
         provider_cache.insert("p0".to_string(), (Arc::new(MockProvider), mid_old));
@@ -425,7 +438,7 @@ mod tests {
         let ssrf_cache = new_ssrf_cache();
         // Seed entries so the cleanup task has something to walk.
         for i in 0..50 {
-            api_key_cache.insert(format!("k{i}"), (test_api_key_info(), fresh()));
+            api_key_cache.insert(format!("k{i}"), (Some(test_api_key_info()), fresh()));
         }
 
         let cleanup_api = api_key_cache.clone();
@@ -456,7 +469,7 @@ mod tests {
                 handles.push(std::thread::spawn(move || {
                     for i in 0..200 {
                         let key = format!("w{i}");
-                        api_key_cache.insert(key.clone(), (test_api_key_info(), fresh()));
+                        api_key_cache.insert(key.clone(), (Some(test_api_key_info()), fresh()));
                         model_cache.insert(key.clone(), (None, fresh()));
                         provider_cache.insert(key.clone(), (Arc::new(MockProvider), fresh()));
                         ssrf_cache.insert(key.clone(), (vec!["1.2.3.4".parse().unwrap()], fresh()));

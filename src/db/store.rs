@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
+use tracing::warn;
 use uuid::Uuid;
 
 use super::models::*;
@@ -43,12 +44,14 @@ impl std::error::Error for DbError {}
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Out-of-range timestamps must not panic inside spawn_blocking (the mutex
+// would be poisoned for every later request); clamp to the epoch instead.
 fn ts(ts: i64) -> DateTime<Utc> {
-    DateTime::from_timestamp(ts, 0).unwrap()
+    DateTime::from_timestamp(ts, 0).unwrap_or(DateTime::UNIX_EPOCH)
 }
 
 fn opt_ts(ts: Option<i64>) -> Option<DateTime<Utc>> {
-    ts.map(|t| DateTime::from_timestamp(t, 0).unwrap())
+    ts.map(|t| DateTime::from_timestamp(t, 0).unwrap_or(DateTime::UNIX_EPOCH))
 }
 
 fn to_storage(e: rusqlite::Error) -> DbError {
@@ -298,11 +301,15 @@ impl Database {
                  FROM providers ORDER BY name",
             )
             .map_err(to_storage)?;
-        let items = stmt
-            .query_map([], row_to_provider)
-            .map_err(to_storage)?
-            .flatten()
-            .collect();
+        let rows = stmt.query_map([], row_to_provider).map_err(to_storage)?;
+        let mut items = Vec::new();
+        for row in rows {
+            match row {
+                Ok(item) => items.push(item),
+                // Iterator::flatten would drop conversion errors silently.
+                Err(e) => warn!("list_providers: skipped unreadable row: {e}"),
+            }
+        }
         Ok(items)
     }
 
@@ -450,11 +457,14 @@ impl Database {
                  FROM models ORDER BY name",
             )
             .map_err(to_storage)?;
-        let items = stmt
-            .query_map([], row_to_model)
-            .map_err(to_storage)?
-            .flatten()
-            .collect();
+        let rows = stmt.query_map([], row_to_model).map_err(to_storage)?;
+        let mut items = Vec::new();
+        for row in rows {
+            match row {
+                Ok(item) => items.push(item),
+                Err(e) => warn!("list_models: skipped unreadable row: {e}"),
+            }
+        }
         Ok(items)
     }
 
@@ -571,11 +581,14 @@ impl Database {
                  FROM api_keys ORDER BY created_at",
             )
             .map_err(to_storage)?;
-        let items = stmt
-            .query_map([], row_to_api_key)
-            .map_err(to_storage)?
-            .flatten()
-            .collect();
+        let rows = stmt.query_map([], row_to_api_key).map_err(to_storage)?;
+        let mut items = Vec::new();
+        for row in rows {
+            match row {
+                Ok(item) => items.push(item),
+                Err(e) => warn!("list_api_keys: skipped unreadable row: {e}"),
+            }
+        }
         Ok(items)
     }
 

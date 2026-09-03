@@ -406,14 +406,13 @@ pub fn LogsPage() -> impl IntoView {
                         <select
                             id="filter-endpoint"
                             class=select_cls
+                            prop:value=move || endpoint.get()
                             on:change=move |ev| {
                                 let v = event_target_value(&ev);
                                 set_endpoint.set(v);
                             }
                         >
-                            <option value="" selected>
-                                {move || t!(LogEndpointAll)}
-                            </option>
+                            <option value="">{move || t!(LogEndpointAll)}</option>
                             <option value="/chat/completions">{"/chat/completions"}</option>
                             <option value="/completions">{"/completions"}</option>
                             <option value="/embeddings">{"/embeddings"}</option>
@@ -423,6 +422,11 @@ pub fn LogsPage() -> impl IntoView {
                         <select
                             id="filter-streaming"
                             class=select_cls
+                            prop:value=move || match is_streaming.get() {
+                                Some(true) => "true".to_string(),
+                                Some(false) => "false".to_string(),
+                                None => String::new(),
+                            }
                             on:change=move |ev| {
                                 let v = event_target_value(&ev);
                                 set_is_streaming
@@ -435,9 +439,7 @@ pub fn LogsPage() -> impl IntoView {
                                     );
                             }
                         >
-                            <option value="" selected>
-                                {move || t!(LogStreamingAll)}
-                            </option>
+                            <option value="">{move || t!(LogStreamingAll)}</option>
                             <option value="true">{"Streaming"}</option>
                             <option value="false">{"Non-streaming"}</option>
                         </select>

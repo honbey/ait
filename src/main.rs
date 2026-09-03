@@ -22,6 +22,7 @@ use axum::routing::{Router, delete, get, post, put};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
+use tokio::signal::unix::SignalKind;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
@@ -95,12 +96,20 @@ async fn main() {
     tokio::pin!(server);
 
     let shutdown_watcher = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl-C handler");
+        // Docker, Kubernetes and systemd stop the container with SIGTERM;
+        // without this handler the process dies immediately and the log
+        // worker's unflushed buffer is lost.
+        let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = sigterm.recv() => {}
+        }
         tracing::info!("Shutdown requested, waiting for in-flight requests...");
         shutdown_token.cancel();
 
+        let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
         tokio::select! {
             _ = tokio::time::sleep(graceful_timeout) => {
                 tracing::warn!("Graceful shutdown timeout, forcing exit");
@@ -109,6 +118,11 @@ async fn main() {
             }
             _ = tokio::signal::ctrl_c() => {
                 tracing::warn!("Forced shutdown via Ctrl+C");
+                log_manager.shutdown();
+                std::process::exit(0);
+            }
+            _ = sigterm.recv() => {
+                tracing::warn!("Forced shutdown via SIGTERM");
                 log_manager.shutdown();
                 std::process::exit(0);
             }
