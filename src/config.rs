@@ -108,6 +108,10 @@ pub struct ProxyConfig {
     pub timeout_secs: u64,
     pub stream: bool,
     pub sse_idle_timeout_secs: u64,
+    /// Hard cap on the total lifetime of a streaming response. Without it an
+    /// upstream that trickles a byte before each idle deadline keeps the
+    /// connection open indefinitely.
+    pub sse_max_duration_secs: u64,
     pub connect_timeout_secs: u64,
     pub max_response_body_bytes: u64,
     pub max_request_body_bytes: u64,
@@ -159,6 +163,7 @@ impl ConfigApp {
             .set_default("proxy.timeout_secs", 300u64)?
             .set_default("proxy.stream", true)?
             .set_default("proxy.sse_idle_timeout_secs", 60u64)?
+            .set_default("proxy.sse_max_duration_secs", 1800u64)?
             .set_default("proxy.connect_timeout_secs", 30u64)?
             .set_default("proxy.max_response_body_bytes", 8u64 * 1024 * 1024)?
             .set_default("proxy.max_request_body_bytes", 8u64 * 1024 * 1024)?
@@ -176,6 +181,20 @@ impl ConfigApp {
         if app.log.retention_every == 0 {
             return Err(ConfigError::Message(
                 "log.retention_every must be >= 1 (0 crashes the log worker)".to_string(),
+            ));
+        }
+
+        // Mirroring arbitrary origins while allowing credentials lets any site
+        // read authenticated responses, so refuse to start instead of silently
+        // downgrading to a permissive CORS policy.
+        if app.security.cors_allow_credentials
+            && app.security.cors_allowed_origins.iter().any(|o| o == "*")
+        {
+            return Err(ConfigError::Message(
+                "security.cors_allowed_origins = [\"*\"] cannot be combined with \
+                 security.cors_allow_credentials = true: it reflects any Origin \
+                 while allowing credentials. List explicit origins instead."
+                    .to_string(),
             ));
         }
 
@@ -235,6 +254,41 @@ health_detail = true
         assert_eq!(config.proxy.timeout_secs, 300);
         assert!(config.proxy.stream);
         assert_eq!(config.proxy.max_response_body_bytes, 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn wildcard_cors_origin_with_credentials_is_rejected() {
+        let (_dir, path) = write_toml(
+            r#"
+[security]
+cors_allowed_origins = ["*"]
+cors_allow_credentials = true
+"#,
+        );
+        let err = ConfigApp::new(Some(&path)).unwrap_err();
+        assert!(
+            err.to_string().contains("cors_allow_credentials"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn wildcard_cors_origin_without_credentials_is_accepted() {
+        let (_dir, path) = write_toml(
+            r#"
+[security]
+cors_allowed_origins = ["*"]
+"#,
+        );
+        let config = ConfigApp::new(Some(&path)).unwrap();
+        assert_eq!(config.security.cors_allowed_origins, vec!["*".to_string()]);
+        assert!(!config.security.cors_allow_credentials);
+    }
+
+    #[test]
+    fn sse_max_duration_secs_has_default() {
+        let config = ConfigApp::new(Some("config/ait.toml.example")).unwrap();
+        assert_eq!(config.proxy.sse_max_duration_secs, 1800);
     }
 
     #[test]

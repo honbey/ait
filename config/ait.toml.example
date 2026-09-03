@@ -51,8 +51,11 @@ tower_http_trace = "info"
 timeout_secs = 300
 # 连接上游超时时间（秒）
 connect_timeout_secs = 30
-# SSE 空闲超时时间（秒）
+# SSE 空闲超时时间（秒）：上游静默超过该时长后断开流
 sse_idle_timeout_secs = 60
+# 流式响应总时长上限（秒）：防止上游每隔一段时间发送一个字节
+# 无限维持连接；0 表示不限制
+sse_max_duration_secs = 1800
 # 是否支持流失传输
 stream = true
 # 响应体大小上限（字节），超出直接返回 400
@@ -64,8 +67,8 @@ max_request_body_bytes = 8388608
 # 允许的跨域来源域名，空列表则拒绝所有跨域请求（同源部署不需要配置）
 cors_allowed_origins = []
 # 是否允许跨域请求携带凭证（外部反向代理鉴权场景）。
-# 跨域部署（前端与后端不同域名）时设为 true；配 "*" 时会自动镜像请求 Origin。
-# 注意：仅在没有 TLS 的本地环境或已确认安全时才开启
+# 跨域部署（前端与后端不同域名）时设为 true。
+# 注意：cors_allowed_origins 含 "*" 时与凭证互斥，两者同时配置会拒绝启动
 cors_allow_credentials = false
 # SSRF 白名单 CIDR（空列表则阻断所有私有 IP 出站请求）
 # 例如 ssrf_allowed_cidrs = ["127.0.0.1/32", "::1/128"] 允许本机 Ollama/LocalAI
