@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use chrono::serde::ts_seconds;
@@ -193,10 +193,20 @@ pub async fn get_provider(
     Ok(Json(ProviderResponse::from(provider)))
 }
 
+#[derive(Deserialize)]
+pub struct RevealQuery {
+    pub reveal: Option<bool>,
+}
+
+/// Return a provider's upstream API key.
+///
+/// The key is masked unless `?reveal=true` is passed, so listing providers or
+/// opening a detail view no longer exposes credentials by side effect.
 pub async fn get_provider_api_key(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
+    Query(query): Query<RevealQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
     let db = state.db.clone();
     let id_clone = id.clone();
@@ -206,10 +216,17 @@ pub async fn get_provider_api_key(
         .map_err(|e| AitError::from_db_error(e).into_response())?
         .ok_or_else(|| not_found(format!("Provider '{}' not found", id)))?;
 
+    let reveal = query.reveal.unwrap_or(false);
+
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
-        action: "view_api_key".into(),
+        action: if reveal {
+            "view_api_key"
+        } else {
+            "view_api_key_masked"
+        }
+        .into(),
         resource: "provider".into(),
         resource_id: provider.id.clone(),
         detail: None,
@@ -218,7 +235,14 @@ pub async fn get_provider_api_key(
     Ok(Json(serde_json::json!({
         "id": provider.id,
         "name": provider.name,
-        "api_key": provider.api_key,
+        "api_key": if reveal {
+            provider.api_key
+        } else {
+            provider
+                .api_key
+                .as_ref()
+                .map(|k| crate::db::models::mask_api_key(k))
+        },
     })))
 }
 
@@ -500,6 +524,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_provider_api_key_is_masked_without_reveal() {
+        let router = setup().await;
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/api/providers",
+            None,
+            Some(serde_json::json!({
+                "name": "masked-provider",
+                "type": "openai_compat",
+                "base_url": BASE_URL,
+                "api_key": "sk-test-secret",
+                "enabled": true,
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::CREATED);
+        let id = resp.json["id"].as_str().unwrap();
+
+        let resp = send_request(
+            &router,
+            Method::GET,
+            &format!("/api/providers/{id}/api-key"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        let masked = resp.json["api_key"].as_str().unwrap();
+        assert_ne!(masked, "sk-test-secret");
+        assert!(!masked.contains("test-secret"));
+    }
+
+    #[tokio::test]
     async fn get_provider_api_key_returns_stored_key() {
         let router = setup().await;
         let resp = send_request(
@@ -522,7 +580,7 @@ mod tests {
         let resp = send_request(
             &router,
             Method::GET,
-            &format!("/api/providers/{id}/api-key"),
+            &format!("/api/providers/{id}/api-key?reveal=true"),
             None,
             None,
         )
@@ -628,7 +686,7 @@ mod tests {
         let resp = send_request(
             &router,
             Method::GET,
-            &format!("/api/providers/{id}/api-key"),
+            &format!("/api/providers/{id}/api-key?reveal=true"),
             None,
             None,
         )
