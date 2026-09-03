@@ -16,9 +16,11 @@ pub(crate) use blocking::run_blocking;
 #[cfg(test)]
 mod test_utils;
 
+use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, Method, header};
 use axum::routing::{Router, delete, get, post, put};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
@@ -186,19 +188,13 @@ fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer 
     }
 
     if allowed_origins.iter().any(|o| o == "*") {
-        return if allow_credentials {
-            // `*` combined with credentials is rejected by browsers; mirror the
-            // request origin instead so cross-origin cookie auth can work
-            CorsLayer::new()
-                .allow_origin(AllowOrigin::mirror_request())
-                .allow_methods(methods)
-                .allow_headers(headers)
-                .allow_credentials(true)
-        } else {
-            CorsLayer::permissive()
-                .allow_methods(methods)
-                .allow_headers(headers)
-        };
+        // `ConfigApp::new` rejects `*` together with `cors_allow_credentials`,
+        // so reaching this branch means credentials are off. Reflecting the
+        // request Origin while allowing credentials would let any site read
+        // authenticated responses, hence the hard failure at startup.
+        return CorsLayer::permissive()
+            .allow_methods(methods)
+            .allow_headers(headers);
     }
 
     let origins: Vec<_> = allowed_origins
@@ -213,6 +209,30 @@ fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer 
         .allow_methods(methods)
         .allow_headers(headers)
         .allow_credentials(allow_credentials)
+}
+
+/// Relative path of the built frontend bundle inside a deployment root.
+const FRONTEND_DIST: &str = "frontend/dist";
+
+/// Root of the built frontend bundle.
+///
+/// Prefers the directory beside the executable (the deployed layout) and falls
+/// back to a CWD-relative path for `cargo run`, so serving the UI no longer
+/// depends on being started from the workspace root. A candidate is only used
+/// when it actually contains `index.html`.
+fn frontend_dist_dir() -> PathBuf {
+    let candidates = [
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join(FRONTEND_DIST))),
+        Some(PathBuf::from(FRONTEND_DIST)),
+    ];
+    candidates
+        .iter()
+        .flatten()
+        .find(|dir| dir.join("index.html").is_file())
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from(FRONTEND_DIST))
 }
 
 fn build_app(state: app::AppState) -> Router {
@@ -263,21 +283,30 @@ fn build_app(state: app::AppState) -> Router {
         .route("/embeddings", post(embeddings))
         .route("/responses", post(responses))
         .route("/models", get(list_models_proxy))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            access_log_middleware,
-        ))
+        // Innermost-first: the body limit rejects oversized bodies before the
+        // handler parses them, and access_log wraps auth so that rejected
+        // requests still appear in the audit trail.
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
         ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            access_log_middleware,
+        ))
+        .layer(if state.config.proxy.max_request_body_bytes == 0 {
+            DefaultBodyLimit::disable()
+        } else {
+            DefaultBodyLimit::max(state.config.proxy.max_request_body_bytes as usize)
+        })
         .fallback(|| async { not_found("404 not found") });
 
     // Serve frontend static files
-    let frontend_root = ServeDir::new("frontend/dist");
+    let dist = frontend_dist_dir();
+    let frontend_root = ServeDir::new(&dist);
     let frontend_spa = frontend_root
         .clone()
-        .fallback(ServeFile::new("frontend/dist/index.html"));
+        .fallback(ServeFile::new(dist.join("index.html")));
 
     let trace_level = parse_level(&state.config.log.tower_http_trace);
     let cors = cors_layer(
@@ -345,6 +374,14 @@ mod tests {
         assert_eq!(parse_level("verbose"), tracing::Level::INFO);
     }
 
+    #[test]
+    fn frontend_dist_dir_resolves_to_frontend_dist() {
+        // Both resolutions (beside the executable or CWD relative) must end
+        // with the same path components.
+        let dir = frontend_dist_dir();
+        assert!(dir.ends_with(FRONTEND_DIST), "unexpected dir: {dir:?}");
+    }
+
     fn cors_router(cors: CorsLayer) -> Router {
         Router::new()
             .route("/", axum::routing::get(|| async { "ok" }))
@@ -388,13 +425,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cors_layer_wildcard_with_credentials_mirrors_origin() {
+    async fn cors_layer_wildcard_never_mirrors_origin() {
+        // `*` must stay a literal `*` and must never carry credentials even if
+        // the flag is passed: config load rejects that combination.
         let router = cors_router(cors_layer(&["*".to_string()], true));
         assert_eq!(
             get_with_origin(&router, "https://app.example.com")
                 .await
                 .as_deref(),
-            Some("https://app.example.com")
+            Some("*")
+        );
+        assert!(
+            get_with_origin(&router, "https://app.example.com")
+                .await
+                .is_some()
         );
     }
 

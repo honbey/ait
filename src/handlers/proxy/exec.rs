@@ -10,6 +10,7 @@ use axum::{
 use chrono::Utc;
 use futures_util::StreamExt;
 use reqwest::Request;
+use tokio::time::sleep;
 use tracing::{trace, warn};
 
 use crate::app::AppState;
@@ -48,6 +49,7 @@ fn redirect_error(status: StatusCode, provider_name: &str) -> (StatusCode, Json<
 
 pub(crate) async fn proxy_non_streamed(
     state: AppState,
+    client: reqwest::Client,
     request: Request,
     upstream: Arc<dyn UpstreamProvider>,
     model_name: &str,
@@ -59,7 +61,7 @@ pub(crate) async fn proxy_non_streamed(
         "proxy_non_streamed: execute start, elapsed={}ms",
         start.elapsed().as_millis()
     );
-    let response = state.http_client.execute(request).await.map_err(|e| {
+    let response = client.execute(request).await.map_err(|e| {
         tracing::warn!("Failed to connect to provider '{}': {}", provider.name, e);
         AitError::upstream_error(502, "upstream request failed").into_response()
     })?;
@@ -145,6 +147,7 @@ pub(crate) async fn proxy_non_streamed(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn proxy_streamed(
     state: AppState,
+    client: reqwest::Client,
     request: Request,
     upstream: Arc<dyn UpstreamProvider>,
     provider_name: String,
@@ -195,7 +198,7 @@ pub(crate) async fn proxy_streamed(
         model = base_event.model_name,
         "proxy_streamed: execute start"
     );
-    let response = state.http_client.execute(request).await.map_err(|e| {
+    let response = client.execute(request).await.map_err(|e| {
         tracing::warn!("Failed to connect to provider: {}", e);
         guard.event.error_message = Some(e.to_string());
         guard.finalize(&UsageTokens::default(), "502");
@@ -256,6 +259,18 @@ pub(crate) async fn proxy_streamed(
         })
     });
 
+    let idle_timeout = Duration::from_secs(state.config.proxy.sse_idle_timeout_secs);
+    // Zero disables the cap for the two new guards; `sse_idle_timeout_secs`
+    // keeps its literal meaning so existing configs behave unchanged.
+    let max_duration = match state.config.proxy.sse_max_duration_secs {
+        0 => Duration::MAX,
+        secs => Duration::from_secs(secs),
+    };
+    let max_bytes = match state.config.proxy.max_response_body_bytes {
+        0 => usize::MAX,
+        bytes => bytes as usize,
+    };
+
     let sse_stream = SseTransformStream {
         inner: raw_stream,
         buf: bytes::BytesMut::new(),
@@ -267,8 +282,11 @@ pub(crate) async fn proxy_streamed(
         start,
         done: false,
         shutdown_fut: Box::pin(state.shutdown_token.clone().cancelled_owned()),
-        idle_timeout: Duration::from_secs(state.config.proxy.sse_idle_timeout_secs),
-        last_data_time: Instant::now(),
+        idle_timeout,
+        idle_timer: Box::pin(sleep(idle_timeout)),
+        max_duration,
+        total_bytes: 0,
+        max_bytes,
     };
 
     let body = Body::from_stream(sse_stream);

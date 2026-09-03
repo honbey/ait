@@ -106,6 +106,7 @@ pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
             timeout_secs: 300,
             stream: true,
             sse_idle_timeout_secs: 60,
+            sse_max_duration_secs: 1800,
             connect_timeout_secs: 30,
             max_response_body_bytes: 8 * 1024 * 1024,
             max_request_body_bytes: 8 * 1024 * 1024,
@@ -150,6 +151,7 @@ fn build_state(config: ConfigApp, dir: TempDir) -> (AppState, TempDir) {
         model_cache: Arc::new(DashMap::new()),
         provider_cache: Arc::new(DashMap::new()),
         ssrf_dns_cache: Arc::new(DashMap::new()),
+        pinned_clients: Arc::new(DashMap::new()),
         dlp,
     };
     (state, dir)

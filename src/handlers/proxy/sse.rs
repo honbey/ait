@@ -5,6 +5,7 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 
 use futures_util::Stream;
+use tokio::time::Sleep;
 use tokio_util::sync::WaitForCancellationFutureOwned;
 
 use crate::db::{LogManager, ProxyEvent};
@@ -29,7 +30,18 @@ pub(crate) struct SseTransformStream<S> {
     pub(crate) shutdown_fut: Pin<Box<WaitForCancellationFutureOwned>>,
     pub(crate) done: bool,
     pub(crate) idle_timeout: Duration,
-    pub(crate) last_data_time: Instant,
+    /// Wakes the task when the idle deadline expires. Without it a silent
+    /// upstream leaves the task parked forever, because returning
+    /// `Poll::Pending` from the inner stream does not re-poll this one.
+    pub(crate) idle_timer: Pin<Box<Sleep>>,
+    /// Hard cap on total stream lifetime; an upstream that trickles a byte
+    /// before each idle deadline would otherwise hold the connection open
+    /// indefinitely.
+    pub(crate) max_duration: Duration,
+    /// Cumulative bytes forwarded, capped so a long-lived stream cannot exceed
+    /// the configured response size limit across many events.
+    pub(crate) total_bytes: usize,
+    pub(crate) max_bytes: usize,
 }
 
 impl<S> SseTransformStream<S> {
@@ -90,6 +102,26 @@ impl<S> SseTransformStream<S> {
         if self.event.time_to_first_token_ms.is_none() {
             self.event.time_to_first_token_ms = Some(self.start.elapsed().as_millis() as i64);
         }
+    }
+
+    /// Re-arm the idle deadline. Called whenever upstream data arrives; the
+    /// timer is what actually wakes this task when upstream goes silent.
+    fn reset_idle_timer(&mut self) {
+        let deadline = tokio::time::Instant::from_std(Instant::now() + self.idle_timeout);
+        self.idle_timer.as_mut().reset(deadline);
+    }
+
+    /// End the stream with a 504, recording `msg` as the failure reason.
+    fn timeout_stream(&mut self, msg: &str) -> Poll<Option<Result<bytes::Bytes, std::io::Error>>> {
+        self.event.status = "504".to_string();
+        self.event.error_message = Some(msg.to_string());
+        tracing::warn!(
+            model = self.event.model_name,
+            provider = self.event.provider_name,
+            "{}",
+            msg
+        );
+        self.finalize_stream()
     }
 
     fn finalize_log(&mut self) {
@@ -169,6 +201,17 @@ where
             return Poll::Ready(None);
         }
 
+        if this.start.elapsed() >= this.max_duration {
+            return this.timeout_stream("SSE stream exceeded max duration");
+        }
+
+        // The idle deadline can only fire if something wakes this task, so the
+        // timer is polled on every turn. Returning Pending below leaves the
+        // timer as the sole wake-up source for a silent upstream.
+        if Pin::new(&mut this.idle_timer).poll(cx).is_ready() {
+            return this.timeout_stream("SSE stream idle timeout");
+        }
+
         if let Some(event_end) = this.find_event_boundary() {
             return Poll::Ready(Some(Ok(this.split_event(event_end))));
         }
@@ -193,7 +236,11 @@ where
         loop {
             match Pin::new(&mut this.inner).poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
-                    this.last_data_time = Instant::now();
+                    this.reset_idle_timer();
+                    this.total_bytes += bytes.len();
+                    if this.total_bytes > this.max_bytes {
+                        return this.fail_stream("502", "SSE stream exceeded max response size");
+                    }
                     this.buf.extend_from_slice(&bytes);
                     this.record_ttfb();
                     if let Some(event_end) = this.find_event_boundary() {
@@ -222,20 +269,9 @@ where
                     return Poll::Ready(Some(Err(e)));
                 }
                 Poll::Ready(None) => return this.finalize_stream(),
-                Poll::Pending => {
-                    if this.last_data_time.elapsed() >= this.idle_timeout {
-                        this.event.status = "504".to_string();
-                        this.event.error_message = Some("SSE stream idle timeout".to_string());
-                        tracing::warn!(
-                            model = this.event.model_name,
-                            provider = this.event.provider_name,
-                            idle_secs = this.last_data_time.elapsed().as_secs(),
-                            "SSE stream idle timeout"
-                        );
-                        return this.finalize_stream();
-                    }
-                    return Poll::Pending;
-                }
+                // The idle timer polled above is the wake-up source here;
+                // re-checking elapsed time would never run without it.
+                Poll::Pending => return Poll::Pending,
             }
         }
     }
@@ -250,6 +286,7 @@ mod tests {
     use futures_util::stream;
     use std::pin::Pin;
     use std::task::{Context, Poll};
+    use tokio::time::sleep;
     use tokio_util::sync::CancellationToken;
 
     struct MockUpstream;
@@ -280,6 +317,23 @@ mod tests {
         inner: impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + Unpin,
         log_manager: LogManager,
     ) -> SseTransformStream<impl Stream<Item = Result<bytes::Bytes, std::io::Error>>> {
+        make_stream_with(
+            inner,
+            log_manager,
+            Duration::from_secs(60),
+            Duration::MAX,
+            usize::MAX,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn make_stream_with(
+        inner: impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + Unpin,
+        log_manager: LogManager,
+        idle_timeout: Duration,
+        max_duration: Duration,
+        max_bytes: usize,
+    ) -> SseTransformStream<impl Stream<Item = Result<bytes::Bytes, std::io::Error>>> {
         let token = CancellationToken::new();
         SseTransformStream {
             inner,
@@ -292,8 +346,11 @@ mod tests {
             start: Instant::now(),
             done: false,
             shutdown_fut: Box::pin(token.cancelled_owned()),
-            idle_timeout: Duration::from_secs(60),
-            last_data_time: Instant::now(),
+            idle_timeout,
+            idle_timer: Box::pin(sleep(idle_timeout)),
+            max_duration,
+            total_bytes: 0,
+            max_bytes,
         }
     }
 
@@ -308,8 +365,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn find_event_boundary_double_newline() {
+    #[tokio::test]
+    async fn find_event_boundary_double_newline() {
         let (state, _dir) = create_test_state_fast_logs();
         let s = make_stream(
             stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
@@ -320,8 +377,8 @@ mod tests {
         assert_eq!(s.find_event_boundary(), Some(13));
     }
 
-    #[test]
-    fn find_event_boundary_crlf() {
+    #[tokio::test]
+    async fn find_event_boundary_crlf() {
         let (state, _dir) = create_test_state_fast_logs();
         let s = make_stream(
             stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
@@ -332,8 +389,8 @@ mod tests {
         assert_eq!(s.find_event_boundary(), Some(15));
     }
 
-    #[test]
-    fn find_event_boundary_no_boundary() {
+    #[tokio::test]
+    async fn find_event_boundary_no_boundary() {
         let (state, _dir) = create_test_state_fast_logs();
         let s = make_stream(
             stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
@@ -344,8 +401,8 @@ mod tests {
         assert_eq!(s.find_event_boundary(), None);
     }
 
-    #[test]
-    fn transform_event_rewrites_data_lines() {
+    #[tokio::test]
+    async fn transform_event_rewrites_data_lines() {
         let (state, _dir) = create_test_state_fast_logs();
         let s = make_stream(
             stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
@@ -360,8 +417,8 @@ mod tests {
         assert!(text.contains("ait-proxy"));
     }
 
-    #[test]
-    fn transform_event_non_utf8_passthrough() {
+    #[tokio::test]
+    async fn transform_event_non_utf8_passthrough() {
         let (state, _dir) = create_test_state_fast_logs();
         let s = make_stream(
             stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
@@ -373,8 +430,8 @@ mod tests {
         assert_eq!(transformed, event);
     }
 
-    #[test]
-    fn try_extract_usage_captures_tokens() {
+    #[tokio::test]
+    async fn try_extract_usage_captures_tokens() {
         let (state, _dir) = create_test_state_fast_logs();
         let s = make_stream(
             stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
@@ -387,8 +444,8 @@ mod tests {
         assert_eq!(s.user_tokens.as_ref().unwrap().total_tokens, Some(15));
     }
 
-    #[test]
-    fn try_extract_usage_ignores_zero_tokens() {
+    #[tokio::test]
+    async fn try_extract_usage_ignores_zero_tokens() {
         let (state, _dir) = create_test_state_fast_logs();
         let s = make_stream(
             stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
@@ -400,8 +457,8 @@ mod tests {
         assert!(s.user_tokens.is_none());
     }
 
-    #[test]
-    fn force_split_oversized_under_cap_returns_none() {
+    #[tokio::test]
+    async fn force_split_oversized_under_cap_returns_none() {
         let (state, _dir) = create_test_state_fast_logs();
         let s = make_stream(
             stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
@@ -412,8 +469,8 @@ mod tests {
         assert_eq!(s.force_split_oversized().unwrap(), None);
     }
 
-    #[test]
-    fn force_split_oversized_with_newline_splits() {
+    #[tokio::test]
+    async fn force_split_oversized_with_newline_splits() {
         let (state, _dir) = create_test_state_fast_logs();
         let s = make_stream(
             stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
@@ -429,8 +486,8 @@ mod tests {
         assert!(result.unwrap() > MAX_SSE_BUFFER_BYTES);
     }
 
-    #[test]
-    fn force_split_oversized_no_newline_returns_error() {
+    #[tokio::test]
+    async fn force_split_oversized_no_newline_returns_error() {
         let (state, _dir) = create_test_state_fast_logs();
         let s = make_stream(
             stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
@@ -442,8 +499,8 @@ mod tests {
         assert!(s.force_split_oversized().is_err());
     }
 
-    #[test]
-    fn stream_processes_complete_event() {
+    #[tokio::test]
+    async fn stream_processes_complete_event() {
         let (state, _dir) = create_test_state_fast_logs();
         let chunks: Vec<Result<bytes::Bytes, std::io::Error>> = vec![
             Ok(bytes::Bytes::from_static(b"data: {\"choices\":[]}\n\n")),
@@ -457,8 +514,8 @@ mod tests {
         assert!(text.contains("data: "));
     }
 
-    #[test]
-    fn stream_finalizes_on_inner_end() {
+    #[tokio::test]
+    async fn stream_finalizes_on_inner_end() {
         let (state, _dir) = create_test_state_fast_logs();
         let chunks: Vec<Result<bytes::Bytes, std::io::Error>> =
             vec![Ok(bytes::Bytes::from_static(b"data: {\"choices\":[]}\n\n"))];
@@ -469,8 +526,8 @@ mod tests {
         assert!(s.done);
     }
 
-    #[test]
-    fn stream_propagates_inner_error() {
+    #[tokio::test]
+    async fn stream_propagates_inner_error() {
         let (state, _dir) = create_test_state_fast_logs();
         let chunks: Vec<Result<bytes::Bytes, std::io::Error>> = vec![Err(std::io::Error::new(
             std::io::ErrorKind::ConnectionReset,
@@ -483,8 +540,8 @@ mod tests {
         assert!(s.done);
     }
 
-    #[test]
-    fn drop_without_done_writes_499_log() {
+    #[tokio::test]
+    async fn drop_without_done_writes_499_log() {
         let (state, _dir) = create_test_state_fast_logs();
         let chunks: Vec<Result<bytes::Bytes, std::io::Error>> = vec![];
         let s = make_stream(stream::iter(chunks), state.log_manager);
@@ -492,8 +549,8 @@ mod tests {
         drop(s);
     }
 
-    #[test]
-    fn stream_fail_on_oversized_buffer_without_newline() {
+    #[tokio::test]
+    async fn stream_fail_on_oversized_buffer_without_newline() {
         let (state, _dir) = create_test_state_fast_logs();
         // Feed a single chunk larger than MAX_SSE_BUFFER_BYTES with no newline,
         // so force_split_oversized returns Err and poll_next calls fail_stream.
@@ -507,8 +564,8 @@ mod tests {
         assert!(s.event.error_message.is_some());
     }
 
-    #[test]
-    fn finalize_stream_flushes_remaining_buffer() {
+    #[tokio::test]
+    async fn finalize_stream_flushes_remaining_buffer() {
         let (state, _dir) = create_test_state_fast_logs();
         // Feed an event followed by an incomplete chunk (no trailing newline).
         // The first poll yields the complete event; the second poll hits
@@ -529,5 +586,88 @@ mod tests {
         let text = std::str::from_utf8(&chunk).unwrap();
         assert!(text.contains("data: "));
         assert!(s.done);
+    }
+
+    #[tokio::test]
+    async fn stream_idle_timer_ends_silent_upstream() {
+        let (state, _dir) = create_test_state_fast_logs();
+        // A silent upstream leaves the task parked after Pending; only the idle
+        // timer can wake it again.
+        let mut s = make_stream_with(
+            stream::pending::<Result<bytes::Bytes, std::io::Error>>(),
+            state.log_manager,
+            Duration::from_millis(50),
+            Duration::MAX,
+            usize::MAX,
+        );
+        assert!(poll_stream(&mut s).is_none());
+        assert!(!s.done, "stream must still be open before the deadline");
+
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        assert!(poll_stream(&mut s).is_none());
+        assert!(s.done);
+        assert_eq!(s.event.status, "504");
+    }
+
+    #[tokio::test]
+    async fn stream_exceeding_max_duration_is_cut_off() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let chunks: Vec<Result<bytes::Bytes, std::io::Error>> =
+            vec![Ok(bytes::Bytes::from_static(b"data: {\"choices\":[]}\n\n"))];
+        let mut s = make_stream_with(
+            stream::iter(chunks),
+            state.log_manager,
+            Duration::from_secs(60),
+            Duration::ZERO,
+            usize::MAX,
+        );
+        assert!(poll_stream(&mut s).is_none());
+        assert!(s.done);
+        assert_eq!(s.event.status, "504");
+        assert!(
+            s.event
+                .error_message
+                .as_deref()
+                .is_some_and(|m| m.contains("max duration"))
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_exceeding_max_bytes_is_cut_off() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let chunks: Vec<Result<bytes::Bytes, std::io::Error>> =
+            vec![Ok(bytes::Bytes::from_static(b"data: {\"choices\":[]}\n\n"))];
+        let mut s = make_stream_with(
+            stream::iter(chunks),
+            state.log_manager,
+            Duration::from_secs(60),
+            Duration::MAX,
+            1,
+        );
+        assert!(poll_stream(&mut s).is_none());
+        assert!(s.done);
+        assert_eq!(s.event.status, "502");
+    }
+
+    #[tokio::test]
+    async fn stream_data_resets_idle_timer() {
+        let (state, _dir) = create_test_state_fast_logs();
+        // Two chunks separated by a wait shorter than the idle timeout: the
+        // stream must survive because each chunk re-arms the deadline.
+        let mut s = make_stream_with(
+            stream::iter(vec![
+                Ok(bytes::Bytes::from_static(b"data: {\"choices\":[]}\n\n")),
+                Ok(bytes::Bytes::from_static(b"data: [DONE]\n\n")),
+            ]),
+            state.log_manager,
+            Duration::from_millis(200),
+            Duration::MAX,
+            usize::MAX,
+        );
+        assert!(poll_stream(&mut s).is_some());
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        assert!(poll_stream(&mut s).is_some());
+        assert!(!s.done);
     }
 }

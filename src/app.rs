@@ -33,6 +33,9 @@ pub struct AppState {
     pub model_cache: Arc<DashMap<String, ModelCacheEntry>>,
     pub provider_cache: Arc<DashMap<String, ProviderCacheEntry>>,
     pub ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
+    /// Per `host:port` clients whose DNS is pinned to SSRF-verified IPs
+    /// (see `ssrf::pinned_client`). Bounded by the configured provider hosts.
+    pub pinned_clients: Arc<DashMap<String, (reqwest::Client, Instant)>>,
     pub dlp: DlpScanner,
 }
 
@@ -73,12 +76,15 @@ impl AppState {
         let model_cache: Arc<DashMap<String, ModelCacheEntry>> = Arc::new(DashMap::new());
         let provider_cache: Arc<DashMap<String, ProviderCacheEntry>> = Arc::new(DashMap::new());
         let ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
+        let pinned_clients: Arc<DashMap<String, (reqwest::Client, Instant)>> =
+            Arc::new(DashMap::new());
         let dlp = DlpScanner::new(&config.security.dlp);
         spawn_caches_cleanup(
             api_key_cache.clone(),
             model_cache.clone(),
             provider_cache.clone(),
             ssrf_dns_cache.clone(),
+            pinned_clients.clone(),
             shutdown_token.clone(),
             config.server.cache_cleanup_interval_secs,
             config.server.cache_max_entries as usize,
@@ -95,6 +101,7 @@ impl AppState {
             model_cache,
             provider_cache,
             ssrf_dns_cache,
+            pinned_clients,
             dlp,
         })
     }
@@ -111,6 +118,7 @@ fn spawn_caches_cleanup(
     model_cache: Arc<DashMap<String, ModelCacheEntry>>,
     provider_cache: Arc<DashMap<String, ProviderCacheEntry>>,
     ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
+    pinned_clients: Arc<DashMap<String, (reqwest::Client, Instant)>>,
     shutdown: CancellationToken,
     interval_secs: u64,
     max_entries: usize,
@@ -132,6 +140,9 @@ fn spawn_caches_cleanup(
                     }).await {
                         tracing::warn!("Cache cleanup error: {e}");
                     }
+                    // Drop pinned SSRF clients past TTL so deleted providers and
+                    // changed DNS eventually release their pooled connections.
+                    pinned_clients.retain(|_, v| v.1.elapsed() < CACHE_TTL);
                 }
             }
         }
@@ -532,6 +543,7 @@ mod tests {
         assert!(state.model_cache.is_empty());
         assert!(state.provider_cache.is_empty());
         assert!(state.ssrf_dns_cache.is_empty());
+        assert!(state.pinned_clients.is_empty());
         state.shutdown_token.cancel();
     }
 }

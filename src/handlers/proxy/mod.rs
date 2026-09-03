@@ -11,7 +11,7 @@ use axum::{
 use chrono::Utc;
 use tracing::{debug, trace};
 
-use crate::app::{AppState, ModelCacheEntry, NEGATIVE_CACHE_TTL};
+use crate::app::{AppState, NEGATIVE_CACHE_TTL};
 use crate::db::{ApiKeyContext, Model, Provider, ProxyEvent, RequestId};
 use crate::error::{AitError, internal_error, not_found};
 use crate::middleware::CACHE_TTL;
@@ -19,17 +19,15 @@ use crate::providers::create_provider;
 use crate::ssrf;
 use crate::utils::mask_sensitive_value;
 
-/// Insert into the model cache only while under the entry cap; beyond it the
-/// entry is not cached at all. `DashMap::len` is approximate under concurrency,
-/// so the map stays bounded within a small multiple of `cache_max_entries`.
-fn insert_model_cache(
-    map: &dashmap::DashMap<String, ModelCacheEntry>,
-    name: &str,
-    entry: ModelCacheEntry,
-    max_entries: usize,
-) {
+/// Insert into a cache only while under the entry cap; beyond it the entry is
+/// not cached at all. `DashMap::len` is approximate under concurrency, so a
+/// cache stays bounded within a small multiple of `cache_max_entries`.
+///
+/// Shared by the model cache (keys come from request bodies and are therefore
+/// attacker-controlled) and the provider cache, so both enforce the cap.
+fn insert_capped<V>(map: &dashmap::DashMap<String, V>, key: &str, entry: V, max_entries: usize) {
     if map.len() < max_entries {
-        map.insert(name.to_string(), entry);
+        map.insert(key.to_string(), entry);
     }
 }
 
@@ -261,10 +259,13 @@ pub async fn proxy_request(
             match crate::run_blocking(move || db.resolve_model(&name)).await {
                 Ok(Ok(Some((m, p)))) => {
                     let upstream = create_provider(&p, state.http_client.clone());
-                    state
-                        .provider_cache
-                        .insert(p.id.clone(), (upstream, Instant::now()));
-                    insert_model_cache(
+                    insert_capped(
+                        &state.provider_cache,
+                        &p.id,
+                        (upstream, Instant::now()),
+                        max_entries,
+                    );
+                    insert_capped(
                         &state.model_cache,
                         model_name,
                         (Some((m.clone(), p.clone())), Instant::now()),
@@ -273,7 +274,7 @@ pub async fn proxy_request(
                     Ok((m, p))
                 }
                 Ok(Ok(None)) => {
-                    insert_model_cache(
+                    insert_capped(
                         &state.model_cache,
                         model_name,
                         (None, Instant::now()),
@@ -333,6 +334,7 @@ pub async fn proxy_request(
         .into_response());
     }
 
+    let max_entries = state.config.server.cache_max_entries as usize;
     let cached_upstream = state
         .provider_cache
         .get_mut(&provider.id)
@@ -348,9 +350,12 @@ pub async fn proxy_request(
         Some(upstream) => upstream,
         None => {
             let upstream = create_provider(&provider, state.http_client.clone());
-            state
-                .provider_cache
-                .insert(provider.id.clone(), (upstream.clone(), Instant::now()));
+            insert_capped(
+                &state.provider_cache,
+                &provider.id,
+                (upstream.clone(), Instant::now()),
+                max_entries,
+            );
             upstream
         }
     };
@@ -377,13 +382,17 @@ pub async fn proxy_request(
         .await
         .map_err(|e| AitError::bad_request(e).into_response())?;
 
-    ssrf::check_ssrf(
+    let verified_ips = ssrf::check_ssrf(
         request.url(),
         &state.config.security.ssrf_allowed_cidrs,
         &state.ssrf_dns_cache,
         &provider_name,
     )
     .await?;
+    // Execute against a client whose DNS is pinned to the verified IPs, so
+    // the connection cannot be re-resolved to a different address between
+    // check and connect (DNS rebinding).
+    let pinned = ssrf::pinned_client(&state, request.url(), &verified_ips)?;
 
     debug!(
         "Proxying to provider '{}' for model '{}' -> upstream '{}', base_url: {}",
@@ -407,6 +416,7 @@ pub async fn proxy_request(
         );
         return proxy_streamed(
             state,
+            pinned,
             request,
             upstream,
             provider_name,
@@ -460,6 +470,7 @@ pub async fn proxy_request(
 
     let result = proxy_non_streamed(
         state.clone(),
+        pinned,
         request,
         upstream,
         &model_name,
@@ -514,7 +525,9 @@ fn count_prompt_tokens(body_len: usize) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::ModelCacheEntry;
     use crate::db::{ApiKeyContext, RequestId};
+    use crate::providers::UpstreamProvider;
     use crate::test_utils::{
         create_test_state, create_test_state_dlp, mock_upstream_redirect, mock_upstream_server,
         mock_upstream_sse_server, seed_provider_and_model, send_request, test_router,
@@ -522,24 +535,59 @@ mod tests {
     use axum::Extension;
     use axum::http::Method;
     use bytes::Bytes;
+    use std::sync::Arc;
 
     #[test]
-    fn insert_model_cache_respects_cap() {
-        let map = dashmap::DashMap::new();
+    fn insert_capped_respects_cap() {
+        let map: dashmap::DashMap<String, ModelCacheEntry> = dashmap::DashMap::new();
         let entry = (None, Instant::now());
         for i in 0..5 {
-            insert_model_cache(&map, &format!("m{i}"), entry.clone(), 5);
+            insert_capped(&map, &format!("m{i}"), entry.clone(), 5);
         }
         assert_eq!(map.len(), 5);
-        insert_model_cache(&map, "m6", entry.clone(), 5);
+        insert_capped(&map, "m6", entry.clone(), 5);
         assert_eq!(map.len(), 5);
     }
 
     #[test]
-    fn insert_model_cache_zero_cap_caches_nothing() {
-        let map = dashmap::DashMap::new();
-        insert_model_cache(&map, "m0", (None, Instant::now()), 0);
+    fn insert_capped_zero_cap_caches_nothing() {
+        let map: dashmap::DashMap<String, ModelCacheEntry> = dashmap::DashMap::new();
+        insert_capped(&map, "m0", (None, Instant::now()), 0);
         assert!(map.is_empty());
+    }
+
+    #[test]
+    fn insert_capped_bounds_provider_cache() {
+        struct NoopProvider;
+
+        #[async_trait::async_trait]
+        impl UpstreamProvider for NoopProvider {
+            async fn build_request(
+                &self,
+                _client: &reqwest::Client,
+                _body: serde_json::Value,
+                _stream: bool,
+                _upstream_model: &str,
+                _upstream_path: &str,
+            ) -> Result<reqwest::Request, String> {
+                Err("noop provider is not usable".to_string())
+            }
+        }
+
+        let map: dashmap::DashMap<String, (Arc<dyn UpstreamProvider>, Instant)> =
+            dashmap::DashMap::new();
+        let entry = || {
+            (
+                Arc::new(NoopProvider) as Arc<dyn UpstreamProvider>,
+                Instant::now(),
+            )
+        };
+        for i in 0..5 {
+            insert_capped(&map, &format!("p{i}"), entry(), 5);
+        }
+        assert_eq!(map.len(), 5);
+        insert_capped(&map, "p6", entry(), 5);
+        assert_eq!(map.len(), 5, "provider cache must honour the same cap");
     }
 
     fn api_key() -> ApiKeyContext {

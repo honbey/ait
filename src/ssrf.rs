@@ -1,12 +1,13 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use reqwest::Url;
 use tracing::warn;
 
+use crate::app::AppState;
 use crate::error::AitError;
 use crate::middleware::CACHE_TTL;
 
@@ -16,13 +17,15 @@ enum SsrfDeny {
     Blocked,
 }
 
-/// Shared lookup + IP check.  Logs the block on [`SsrfDeny::Blocked`].
+/// Shared lookup + IP check. Returns the verified IP set so callers can pin
+/// the outgoing connection to it (see [`pinned_client`]).
+/// Logs the block on [`SsrfDeny::Blocked`].
 async fn resolve_and_check(
     url: &Url,
     allowed_cidrs: &[String],
     dns_cache: &Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
     provider_name: &str,
-) -> Result<(), SsrfDeny> {
+) -> Result<Vec<IpAddr>, SsrfDeny> {
     let host = url.host_str().ok_or(SsrfDeny::NoHost)?;
 
     let ips = resolve_with_cache(host, dns_cache)
@@ -39,16 +42,17 @@ async fn resolve_and_check(
         }
     }
 
-    Ok(())
+    Ok(ips)
 }
 
-/// Pre-request SSRF check: opaque 502 on failure (proxy path).
+/// Pre-request SSRF check: opaque 502 on failure (proxy path). Returns the
+/// verified IP set for connection pinning via [`pinned_client`].
 pub(crate) async fn check_ssrf(
     url: &Url,
     allowed_cidrs: &[String],
     dns_cache: &Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
     provider_name: &str,
-) -> Result<(), (axum::http::StatusCode, axum::Json<AitError>)> {
+) -> Result<Vec<IpAddr>, (axum::http::StatusCode, axum::Json<AitError>)> {
     resolve_and_check(url, allowed_cidrs, dns_cache, provider_name)
         .await
         .map_err(|_| AitError::upstream_error(502, "upstream request failed").into_response())
@@ -62,7 +66,7 @@ pub(crate) async fn check_ssrf_config(
     provider_name: &str,
 ) -> Result<(), AitError> {
     match resolve_and_check(url, allowed_cidrs, dns_cache, provider_name).await {
-        Ok(()) => Ok(()),
+        Ok(_) => Ok(()),
         Err(SsrfDeny::NoHost) => Err(AitError::bad_request("base_url must include a host")),
         Err(SsrfDeny::DnsFailed(e)) => {
             warn!("[ssrf] config check DNS error: {}", e);
@@ -72,6 +76,62 @@ pub(crate) async fn check_ssrf_config(
             "base_url resolves to a blocked address",
         )),
     }
+}
+
+/// Return a client whose DNS for `url.host` is pinned to `verified_ips`.
+///
+/// [`check_ssrf`] validates the IPs the host resolves to, but reqwest would
+/// resolve DNS again when actually connecting — a window an attacker with DNS
+/// control can abuse (DNS rebinding). Pinning the client to the verified set
+/// closes that window. Clients are cached per `host:port` and rebuilt once the
+/// cache entry ages past `CACHE_TTL`, mirroring the DNS cache lifetime.
+pub(crate) fn pinned_client(
+    state: &AppState,
+    url: &Url,
+    verified_ips: &[IpAddr],
+) -> Result<reqwest::Client, (axum::http::StatusCode, axum::Json<AitError>)> {
+    let opaque_error = || AitError::upstream_error(502, "upstream request failed").into_response();
+
+    let host = url.host_str().ok_or_else(opaque_error)?;
+    let port = url.port_or_known_default().unwrap_or(80);
+    // Url::host_str renders IPv6 hosts with brackets; reqwest's resolve
+    // matches the bare address form.
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let cache_key = format!("{host}:{port}");
+
+    // Reuse while fresh; drop the guard before any later insert on the same
+    // map (parking_lot RwLock is not reentrant).
+    if let Some(entry) = state.pinned_clients.get(&cache_key) {
+        if entry.1.elapsed() < CACHE_TTL {
+            let client = entry.0.clone();
+            drop(entry);
+            return Ok(client);
+        }
+        drop(entry);
+    }
+
+    if verified_ips.is_empty() {
+        // A pinned client without verified addresses would silently fall back
+        // to real DNS at connect time, defeating the SSRF check.
+        return Err(opaque_error());
+    }
+
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(state.config.proxy.connect_timeout_secs))
+        .tcp_keepalive(Some(Duration::from_secs(60)));
+    for ip in verified_ips {
+        builder = builder.resolve(host, SocketAddr::new(*ip, port));
+    }
+    let client = builder.build().map_err(|e| {
+        warn!("[ssrf] pinned client build failed: {e}");
+        opaque_error()
+    })?;
+
+    state
+        .pinned_clients
+        .insert(cache_key, (client.clone(), Instant::now()));
+    Ok(client)
 }
 
 async fn resolve_with_cache(
@@ -437,5 +497,46 @@ mod tests {
         let result =
             check_ssrf_config(&url, &["127.0.0.1/8".to_string()], &dns_cache, "test").await;
         assert!(result.is_ok());
+    }
+
+    // ── pinned_client ──
+
+    #[test]
+    fn pinned_client_caches_per_host_and_port() {
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let ips = vec!["127.0.0.1".parse().unwrap()];
+
+        let url = reqwest::Url::parse("http://upstream.test/api").unwrap();
+        let _first = pinned_client(&state, &url, &ips).unwrap();
+        let _second = pinned_client(&state, &url, &ips).unwrap();
+        assert_eq!(state.pinned_clients.len(), 1, "same host:port is reused");
+
+        let url_8080 = reqwest::Url::parse("http://upstream.test:8080/api").unwrap();
+        let _third = pinned_client(&state, &url_8080, &ips).unwrap();
+        assert_eq!(
+            state.pinned_clients.len(),
+            2,
+            "different port gets its own entry"
+        );
+    }
+
+    #[test]
+    fn pinned_client_strips_ipv6_brackets() {
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let url = reqwest::Url::parse("http://[::1]/api").unwrap();
+        let ips = vec!["::1".parse().unwrap()];
+        let _ = pinned_client(&state, &url, &ips).unwrap();
+        // The cache key must use the bare address form; a bracketed key would
+        // miss on subsequent lookups and rebuild a client per request.
+        assert_eq!(state.pinned_clients.len(), 1);
+    }
+
+    #[test]
+    fn pinned_client_without_verified_ips_is_rejected() {
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let url = reqwest::Url::parse("http://upstream.test/api").unwrap();
+        let result = pinned_client(&state, &url, &[]);
+        assert!(result.is_err(), "must not fall back to real DNS");
+        assert!(state.pinned_clients.is_empty());
     }
 }
