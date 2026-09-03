@@ -76,7 +76,11 @@ impl ProxyLogGuard {
     }
 
     pub(crate) fn finalize(&mut self, usage: &UsageTokens, status: &str) {
-        self.event.prompt_tokens = usage.prompt_tokens;
+        // Callers seed prompt_tokens with a body-size estimate. Keep it when
+        // the upstream reported no usage: a successful response without usage
+        // carries nothing to replace the estimate with.
+        let seeded_prompt_tokens = self.event.prompt_tokens;
+        self.event.prompt_tokens = usage.prompt_tokens.or(seeded_prompt_tokens);
         self.event.completion_tokens = usage.completion_tokens;
         self.event.total_tokens = usage.total_tokens;
         self.event.cached_tokens = usage.cached_tokens;
@@ -202,6 +206,34 @@ mod tests {
         guard.finalize(&usage, "200");
         assert!(guard.finalized);
         assert_eq!(guard.event.status, "200");
+        assert_eq!(guard.event.prompt_tokens, Some(10));
+        assert_eq!(guard.event.total_tokens, Some(30));
+    }
+
+    #[test]
+    fn guard_finalize_keeps_seeded_prompt_estimate_without_usage() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let mut event = make_proxy_event("gpt-4", "pending", 0);
+        event.prompt_tokens = Some(42);
+        let mut guard = ProxyLogGuard::new(state.log_manager.clone(), event, Instant::now());
+        // Successful request, but the upstream reported no usage at all.
+        guard.finalize(&UsageTokens::default(), "200");
+        assert_eq!(guard.event.prompt_tokens, Some(42));
+    }
+
+    #[test]
+    fn guard_finalize_prefers_upstream_usage_over_estimate() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let mut event = make_proxy_event("gpt-4", "pending", 0);
+        event.prompt_tokens = Some(42);
+        let mut guard = ProxyLogGuard::new(state.log_manager.clone(), event, Instant::now());
+        let usage = UsageTokens {
+            prompt_tokens: Some(10),
+            completion_tokens: Some(20),
+            total_tokens: Some(30),
+            cached_tokens: Some(5),
+        };
+        guard.finalize(&usage, "200");
         assert_eq!(guard.event.prompt_tokens, Some(10));
         assert_eq!(guard.event.total_tokens, Some(30));
     }
