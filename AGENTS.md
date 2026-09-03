@@ -4,8 +4,6 @@
 
 Proxy service for aggregating LLM provider APIs (OpenAI-compatible). Backend in Rust (Axum), frontend WASM CSR in Leptos 0.8.
 
-**Language**: Reply in the user's language (e.g., zh-CN, en).
-
 ## Commands
 
 ```bash
@@ -27,21 +25,15 @@ trunk build --release --cargo-profile release-wasm  # Frontend prod
 
 ### Code Style
 
-- Keep code comments concise:
-  - Avoid repetitive or excessive inline explanations
-  - Except `//` for complex logic, exceptional cases or doc comments
-- Use ASCII punctuation (`-`, `->`, `...`) not Unicode (`--`, `'->'`, `'...'`)
-- For self-documenting code, aim for the code to be as readable as documentation. Do not use abbreviated forms unless they are widely accepted conventions.
-- When editing a piece of code, first look at the code's surrounding context (especially its imports) to understand the choice of frameworks and libraries. Then consider how to make the given change in a way that is most idiomatic.
+- Use ASCII punctuation (-, ->, ...) not Unicode (—, →, …)
+- Prefer self-documenting code; no abbreviations unless widely accepted.
+- Check surrounding context (especially imports) before editing; keep changes idiomatic to the framework in use.
 
 ### Git
 
 - **Commit msg standards**: see `.gitmessage`
-
-- When performing a squash merge (or using a PR to squash merge):
-  - Use a single comprehensive commit message that directly describes the final changes made
-  - There is no need to mention bugs that were introduced and subsequently fixed during the development process
-- Before committing, run `cargo check`, `cargo clippy`, `cargo fmt`, and `leptosfmt frontend/src/` to ensure code quality and formatting. Only commit when the user explicitly asks (e.g. "提交吧"); do not commit on your own initiative.
+- Squash merge: single comprehensive commit message describing final changes; omit intermediate bugfixes.
+- Before committing, run all checks from Commands above (including `leptosfmt frontend/src/`).
 
 ### Backend (`src/`)
 
