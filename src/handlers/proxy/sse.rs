@@ -171,26 +171,24 @@ impl<S> SseTransformStream<S> {
             return event.to_vec();
         };
 
-        let mut out = String::with_capacity(event.len() + 64);
+        // Byte buffer, not String: `transform_response` already yields bytes,
+        // so this avoids a utf8 round trip and a final whole-buffer copy.
+        let mut out = Vec::with_capacity(event.len() + 64);
         for line in text.lines() {
             if let Some(payload) = line.strip_prefix("data: ") {
                 self.try_extract_usage_from(payload.as_bytes());
                 let transformed = self
                     .upstream
                     .transform_response(payload.as_bytes(), &self.model_name);
-                out.push_str("data: ");
-                if let Ok(t) = std::str::from_utf8(&transformed) {
-                    out.push_str(t);
-                } else {
-                    out.push_str(payload);
-                }
-                out.push('\n');
-            } else if !line.is_empty() || !out.ends_with("\n\n") {
-                out.push_str(line);
-                out.push('\n');
+                out.extend_from_slice(b"data: ");
+                out.extend_from_slice(&transformed);
+                out.push(b'\n');
+            } else if !line.is_empty() || !out.ends_with(b"\n\n") {
+                out.extend_from_slice(line.as_bytes());
+                out.push(b'\n');
             }
         }
-        out.into_bytes()
+        out
     }
 }
 

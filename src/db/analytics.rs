@@ -302,100 +302,101 @@ fn ts_range(start_ts: i64, end_ts: i64) -> (chrono::NaiveDateTime, chrono::Naive
     (start, end)
 }
 
-fn total_requests_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> u64 {
+/// Totals for a range in one scan: request count, total tokens, and the three
+/// token-kind sums that `token_dist_from_sums` splits into categories.
+/// `overview_impl` previously issued three separate scans for these.
+fn totals_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> (u64, u64, i64, i64, i64) {
     let (start, end) = ts_range(start_ts, end_ts);
-    conn.query_row(
-        "SELECT COUNT(*) FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2",
-        params![start, end],
-        |row| row.get::<_, u64>(0),
-    )
-    .unwrap_or_else(|e| {
-        warn!("[analytics] total_requests failed: {e}");
-        0
-    })
+    let default = (0u64, 0u64, 0i64, 0i64, 0i64);
+    match conn.prepare_cached(
+        "SELECT COUNT(*), \
+                COALESCE(SUM(total_tokens), 0), \
+                COALESCE(SUM(prompt_tokens), 0), \
+                COALESCE(SUM(completion_tokens), 0), \
+                COALESCE(SUM(cached_tokens), 0) \
+         FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2",
+    ) {
+        Ok(mut stmt) => stmt
+            .query_row(params![start, end], |row| {
+                Ok((
+                    row.get::<_, u64>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })
+            .unwrap_or_else(|e| {
+                warn!("[analytics] totals query failed: {e}");
+                default
+            }),
+        Err(e) => {
+            warn!("[analytics] totals prepare failed: {e}");
+            default
+        }
+    }
 }
 
-fn total_tokens_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> u64 {
+/// Hourly request and token buckets in one scan; shared by the standalone
+/// endpoints and by `overview_impl`.
+fn hourly_buckets_impl(
+    conn: &Connection,
+    start_ts: i64,
+    end_ts: i64,
+) -> (Vec<BucketEntry>, Vec<BucketEntry>) {
     let (start, end) = ts_range(start_ts, end_ts);
-    conn.query_row(
-        "SELECT COALESCE(SUM(total_tokens), 0) FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2",
-        params![start, end],
-        |row| row.get::<_, u64>(0),
-    )
-    .unwrap_or_else(|e| {
-        warn!("[analytics] total_tokens failed: {e}");
-        0
-    })
+    let mut stmt = match conn.prepare_cached(
+        "SELECT epoch(DATE_TRUNC('hour', timestamp)) AS bucket_ts, \
+                COUNT(*), \
+                COALESCE(SUM(total_tokens), 0) \
+         FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2 \
+         GROUP BY bucket_ts ORDER BY bucket_ts",
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("[analytics] hourly buckets prepare failed: {e}");
+            return (Vec::new(), Vec::new());
+        }
+    };
+    let rows = match stmt.query_map(params![start, end], |row| {
+        Ok((
+            row.get::<_, f64>(0)? as i64,
+            row.get::<_, i64>(1)? as u64,
+            row.get::<_, i64>(2)? as u64,
+        ))
+    }) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("[analytics] hourly buckets query failed: {e}");
+            return (Vec::new(), Vec::new());
+        }
+    };
+    let mut requests = Vec::new();
+    let mut tokens = Vec::new();
+    for r in rows.flatten() {
+        requests.push(BucketEntry {
+            timestamp: r.0,
+            count: r.1,
+        });
+        tokens.push(BucketEntry {
+            timestamp: r.0,
+            count: r.2,
+        });
+    }
+    (requests, tokens)
 }
 
 fn requests_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
-    let (start, end) = ts_range(start_ts, end_ts);
-    let mut stmt = match conn.prepare(
-        "SELECT epoch(DATE_TRUNC('hour', timestamp)) AS bucket_ts, COUNT(*) AS count \
-         FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2 \
-         GROUP BY bucket_ts ORDER BY bucket_ts",
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("[analytics] requests prepare failed: {e}");
-            return Vec::new();
-        }
-    };
-    let rows = match stmt.query_map(params![start, end], |row| {
-        Ok(BucketEntry {
-            timestamp: row.get::<_, f64>(0)? as i64,
-            count: row.get::<_, i64>(1)? as u64,
-        })
-    }) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("[analytics] requests query failed: {e}");
-            return Vec::new();
-        }
-    };
-    let mut out = Vec::new();
-    for r in rows.flatten() {
-        out.push(r);
-    }
-    out
+    hourly_buckets_impl(conn, start_ts, end_ts).0
 }
 
 fn tokens_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
-    let (start, end) = ts_range(start_ts, end_ts);
-    let mut stmt = match conn.prepare(
-        "SELECT epoch(DATE_TRUNC('hour', timestamp)) AS bucket_ts, \
-                COALESCE(SUM(total_tokens), 0) AS count \
-         FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2 \
-         GROUP BY bucket_ts ORDER BY bucket_ts",
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("[analytics] tokens prepare failed: {e}");
-            return Vec::new();
-        }
-    };
-    let rows = match stmt.query_map(params![start, end], |row| {
-        Ok(BucketEntry {
-            timestamp: row.get::<_, f64>(0)? as i64,
-            count: row.get::<_, i64>(1)? as u64,
-        })
-    }) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("[analytics] tokens query failed: {e}");
-            return Vec::new();
-        }
-    };
-    let mut out = Vec::new();
-    for r in rows.flatten() {
-        out.push(r);
-    }
-    out
+    hourly_buckets_impl(conn, start_ts, end_ts).1
 }
 
 fn model_dist_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> Vec<ModelDistEntry> {
     let (start, end) = ts_range(start_ts, end_ts);
-    let mut stmt = match conn.prepare(
+    let mut stmt = match conn.prepare_cached(
         "SELECT model_name, COUNT(*) AS count \
          FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2 \
          GROUP BY model_name ORDER BY count DESC",
@@ -425,23 +426,9 @@ fn model_dist_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> Vec<ModelDi
     out
 }
 
-fn token_dist_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> Vec<TokenDistEntry> {
-    let (start, end) = ts_range(start_ts, end_ts);
-    let (prompt, completion, cached): (i64, i64, i64) = match conn.query_row(
-        "SELECT COALESCE(SUM(prompt_tokens), 0), \
-                COALESCE(SUM(completion_tokens), 0), \
-                COALESCE(SUM(cached_tokens), 0) \
-         FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2",
-        params![start, end],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("[analytics] token_dist query failed: {e}");
-            return Vec::new();
-        }
-    };
-
+/// Split token sums into the three reported categories. Pure so
+/// `overview_impl` can reuse the sums `totals_impl` already fetched.
+fn token_dist_from_sums(prompt: i64, completion: i64, cached: i64) -> Vec<TokenDistEntry> {
     let prompt = prompt.max(0) as u64;
     let completion = completion.max(0) as u64;
     let cached = cached.max(0) as u64;
@@ -463,14 +450,23 @@ fn token_dist_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> Vec<TokenDi
     ]
 }
 
+fn token_dist_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> Vec<TokenDistEntry> {
+    let (_, _, prompt, completion, cached) = totals_impl(conn, start_ts, end_ts);
+    token_dist_from_sums(prompt, completion, cached)
+}
+
 fn overview_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> OverviewMetrics {
+    // Three scans cover all six aggregates the dashboard needs.
+    let (total_requests, total_tokens, prompt, completion, cached) =
+        totals_impl(conn, start_ts, end_ts);
+    let (request_buckets, token_buckets) = hourly_buckets_impl(conn, start_ts, end_ts);
     OverviewMetrics {
-        total_requests: total_requests_impl(conn, start_ts, end_ts),
-        total_tokens: total_tokens_impl(conn, start_ts, end_ts),
-        request_buckets: requests_impl(conn, start_ts, end_ts),
-        token_buckets: tokens_impl(conn, start_ts, end_ts),
+        total_requests,
+        total_tokens,
+        request_buckets,
+        token_buckets,
         model_dist: model_dist_impl(conn, start_ts, end_ts),
-        token_dist: token_dist_impl(conn, start_ts, end_ts),
+        token_dist: token_dist_from_sums(prompt, completion, cached),
     }
 }
 

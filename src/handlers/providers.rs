@@ -313,6 +313,10 @@ pub async fn update_provider(
     state
         .model_cache
         .retain(|_, v| v.0.as_ref().is_none_or(|(_, p)| p.id != id));
+    // Pinned SSRF clients are pure derived state (rebuilt from the DNS cache
+    // on demand), so dropping them wholesale after a provider mutation is
+    // cheaper than tracking which host changed.
+    state.pinned_clients.clear();
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
@@ -344,6 +348,7 @@ pub async fn delete_provider(
     state
         .model_cache
         .retain(|_, v| v.0.as_ref().is_none_or(|(_, p)| p.id != id));
+    state.pinned_clients.clear();
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,

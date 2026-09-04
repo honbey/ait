@@ -23,6 +23,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::signal::unix::SignalKind;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
@@ -291,6 +292,9 @@ fn build_app(state: app::AppState) -> Router {
             state.clone(),
             access_log_middleware,
         ))
+        // Admin JSON responses only; /v1 is excluded so SSE streams and
+        // upstream-encoded bodies are never re-compressed.
+        .layer(CompressionLayer::new())
         .fallback(|| async { not_found("404 not found") });
 
     // Health check (no auth required)

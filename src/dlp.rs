@@ -36,34 +36,45 @@ impl DlpScanner {
         if !self.enabled {
             return None;
         }
-        let text = collect_strings(body);
-        self.values
-            .iter()
-            .find(|v| !v.is_empty() && text.contains(v.as_str()))
-            .map(|v| v.as_str())
+        // Index of the earliest configured rule matching any string leaf.
+        // Scanning leaf-by-leaf avoids concatenating the whole body into one
+        // buffer, and rule order still wins over match position.
+        let mut best: Option<usize> = None;
+        scan_value(body, &self.values, &mut best);
+        best.map(|idx| self.values[idx].as_str())
     }
 }
 
-fn collect_strings(value: &Value) -> String {
-    let mut out = String::new();
-    collect_strings_inner(value, &mut out);
-    out
-}
-
-fn collect_strings_inner(value: &Value, out: &mut String) {
+fn scan_value(value: &Value, values: &[String], best: &mut Option<usize>) {
+    if *best == Some(0) {
+        return; // cannot improve on the first configured rule
+    }
     match value {
         Value::String(s) => {
-            out.push_str(s);
-            out.push(' ');
+            if let Some(idx) = values
+                .iter()
+                .position(|v| !v.is_empty() && s.contains(v.as_str()))
+            {
+                *best = Some(match *best {
+                    Some(prev) => prev.min(idx),
+                    None => idx,
+                });
+            }
         }
         Value::Array(items) => {
             for item in items {
-                collect_strings_inner(item, out);
+                scan_value(item, values, best);
+                if *best == Some(0) {
+                    return;
+                }
             }
         }
         Value::Object(map) => {
             for v in map.values() {
-                collect_strings_inner(v, out);
+                scan_value(v, values, best);
+                if *best == Some(0) {
+                    return;
+                }
             }
         }
         _ => {}
