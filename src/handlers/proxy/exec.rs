@@ -21,6 +21,9 @@ use crate::providers::UpstreamProvider;
 use super::guard::{ProxyLogGuard, UsageTokens, parse_usage};
 use super::sse::SseTransformStream;
 
+/// Upper bound on the buffer pre-sized from `Content-Length`.
+const MAX_BODY_HINT_BYTES: usize = 1024 * 1024;
+
 /// Collect `x-*` and `retry-after` headers from an upstream response.
 fn collect_x_headers(headers: &HeaderMap) -> Vec<(HeaderName, HeaderValue)> {
     let mut filtered = Vec::new();
@@ -93,15 +96,27 @@ pub(crate) async fn proxy_non_streamed(
         start.elapsed().as_millis()
     );
     let timeout = Duration::from_secs(state.config.proxy.timeout_secs);
-    let max_body = state.config.proxy.max_response_body_bytes as usize;
-    let mut body = Vec::new();
+    // 0 means unlimited, matching the streaming path in sse.rs; without this
+    // a zero cap would reject every non-streamed response.
+    let max_body = match state.config.proxy.max_response_body_bytes {
+        0 => usize::MAX,
+        bytes => bytes as usize,
+    };
+    // Pre-size from Content-Length so a sizable body does not walk the buffer
+    // through repeated reallocations. The header is upstream-controlled, so it
+    // is trusted only up to MAX_BODY_HINT_BYTES.
+    let hint = response
+        .content_length()
+        .unwrap_or(0)
+        .min(max_body.min(MAX_BODY_HINT_BYTES) as u64) as usize;
+    let mut body = Vec::with_capacity(hint);
     tokio::time::timeout(timeout, async {
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| {
                 tracing::warn!("Upstream body read error: {}", e);
             })?;
-            if body.len() + chunk.len() > max_body {
+            if body.len().saturating_add(chunk.len()) > max_body {
                 return Err(());
             }
             body.extend_from_slice(&chunk);

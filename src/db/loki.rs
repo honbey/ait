@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -113,14 +113,34 @@ impl LokiSink {
     }
 
     pub fn shutdown(&self) {
-        let sender = self.sender.clone();
-        thread::spawn(move || {
-            let _ = sender.send(LogEvent::Shutdown);
-        });
-        if let Ok(mut guard) = self.worker_handle.lock()
+        let signaled = self.signal_shutdown();
+        // Only join when the worker actually received the signal; joining one
+        // that never did would hang.
+        if signaled
+            && let Ok(mut guard) = self.worker_handle.lock()
             && let Some(handle) = guard.take()
         {
             let _ = handle.join();
+        }
+    }
+
+    /// Hand the worker a shutdown event, retrying while the channel is full.
+    /// `send` would block indefinitely on a full channel, so the wait is
+    /// bounded; returns false when the signal could not be delivered.
+    fn signal_shutdown(&self) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match self.sender.try_send(LogEvent::Shutdown) {
+                Ok(()) => return true,
+                Err(mpsc::TrySendError::Disconnected(_)) => return false,
+                Err(mpsc::TrySendError::Full(_)) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(mpsc::TrySendError::Full(_)) => {
+                    warn!("[loki] shutdown signal not delivered; worker left running");
+                    return false;
+                }
+            }
         }
     }
 }

@@ -28,9 +28,12 @@ pub struct ProxyLogQuery {
 }
 
 const MAX_PER_PAGE: u64 = 100;
-/// Upper bound for `page`. Without it `page * per_page` overflows and panics
-/// the analytics worker thread, permanently disabling every analytics query.
-const MAX_PAGE: u64 = 1_000_000;
+/// Upper bound for `page`. It guards two things: `page * per_page` would
+/// overflow and panic the analytics worker, and offset pagination costs
+/// O(offset) rows to skip. Offsets are kept rather than keyset cursors
+/// because the logs UI needs page numbers and a total count, so this cap is
+/// what bounds the worst-case scan (`MAX_PAGE * MAX_PER_PAGE` rows).
+const MAX_PAGE: u64 = 10_000;
 
 pub async fn list_proxy_logs(
     State(state): State<AppState>,
@@ -219,6 +222,26 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn list_proxy_logs_clamps_page() {
+        let (router, now) = setup_with_events().await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            &format!(
+                "/api/data/proxy-log?start_ts={}&end_ts={}&page=999999999",
+                now - 3600,
+                now + 3600
+            ),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        // Bounded so a huge page cannot push the OFFSET scan out of reach.
+        assert_eq!(resp.json["page"], MAX_PAGE);
     }
 
     #[tokio::test]

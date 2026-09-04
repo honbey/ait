@@ -143,6 +143,11 @@ pub struct SecurityConfig {
     pub dlp: DlpConfig,
 }
 
+/// Upper bound for `log.retention_days`: 100 years. The value is cast to i64
+/// in two places (the analytics range bound and the cleanup cutoff), and
+/// anything larger would wrap or panic inside `Duration::days`.
+const MAX_RETENTION_DAYS: u64 = 36_500;
+
 impl ConfigApp {
     /// Load configuration. `config_path` specifies the config file path (without extension),
     /// defaults to `config/ait` when `None`.
@@ -200,6 +205,19 @@ impl ConfigApp {
         if !(1..=5).contains(&app.proxy.prompt_token_divisor) {
             return Err(ConfigError::Message(
                 "proxy.prompt_token_divisor must be between 1 and 5".to_string(),
+            ));
+        }
+
+        if app.log.retention_days > MAX_RETENTION_DAYS {
+            return Err(ConfigError::Message(format!(
+                "log.retention_days must be <= {MAX_RETENTION_DAYS}"
+            )));
+        }
+
+        // A zero timeout makes every analytics query fail on arrival.
+        if app.log.analytics_timeout_secs == 0 {
+            return Err(ConfigError::Message(
+                "log.analytics_timeout_secs must be >= 1".to_string(),
             ));
         }
 
@@ -352,6 +370,36 @@ retention_every = 0
         );
         let err = ConfigApp::new(Some(&path)).unwrap_err();
         assert!(err.to_string().contains("retention_every"));
+    }
+
+    #[test]
+    fn retention_days_beyond_bound_rejected() {
+        let (_dir, path) = write_toml(
+            r#"
+[log]
+retention_days = 99999999999999999
+"#,
+        );
+        let err = ConfigApp::new(Some(&path)).unwrap_err();
+        assert!(
+            err.to_string().contains("retention_days"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn analytics_timeout_zero_rejected() {
+        let (_dir, path) = write_toml(
+            r#"
+[log]
+analytics_timeout_secs = 0
+"#,
+        );
+        let err = ConfigApp::new(Some(&path)).unwrap_err();
+        assert!(
+            err.to_string().contains("analytics_timeout_secs"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

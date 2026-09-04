@@ -240,16 +240,28 @@ fn is_blocked_v6(ip: &Ipv6Addr) -> bool {
 /// A bare IP without a prefix length is treated as a /32 (IPv4) or /128 (IPv6).
 pub(crate) fn ip_in_cidr(ip: &IpAddr, cidr_str: &str) -> bool {
     let (addr_str, prefix_len) = match cidr_str.split_once('/') {
-        Some((a, p)) => (a, p.parse::<u8>().unwrap_or(32)),
-        None => match ip {
-            IpAddr::V4(_) => (cidr_str, 32),
-            IpAddr::V6(_) => (cidr_str, 128),
-        },
+        Some((a, p)) => (a, Some(p)),
+        None => (cidr_str, None),
     };
 
     let cidr_addr = match IpAddr::from_str(addr_str) {
         Ok(a) => a,
         Err(_) => return false,
+    };
+
+    // The default (and cap) follow the CIDR's own address family. Falling back
+    // to a bare 32 would turn an IPv6 entry with an unparseable prefix into a
+    // /32, matching far more than intended; such an entry fails closed.
+    let family_max = match cidr_addr {
+        IpAddr::V4(_) => 32u8,
+        IpAddr::V6(_) => 128u8,
+    };
+    let prefix_len = match prefix_len {
+        Some(p) => match p.parse::<u8>() {
+            Ok(len) if len <= family_max => len,
+            _ => return false,
+        },
+        None => family_max,
     };
 
     match (ip, cidr_addr) {
@@ -421,6 +433,21 @@ mod tests {
 
     #[test]
     fn ipv6_bare_ip_treated_as_128() {
+        assert!(ip_in_cidr(&"2001:db8::1".parse().unwrap(), "2001:db8::1"));
+        assert!(!ip_in_cidr(&"2001:db8::2".parse().unwrap(), "2001:db8::1"));
+    }
+
+    #[test]
+    fn ip_in_cidr_prefix_follows_cidr_family() {
+        // An unparseable or out-of-range prefix fails closed instead of
+        // degrading to an IPv4 /32, which would widen an IPv6 entry a lot.
+        assert!(!ip_in_cidr(
+            &"2001:db8::1".parse().unwrap(),
+            "2001:db8::/abc"
+        ));
+        assert!(!ip_in_cidr(&"10.0.0.1".parse().unwrap(), "10.0.0.0/abc"));
+        assert!(!ip_in_cidr(&"10.0.0.1".parse().unwrap(), "10.0.0.0/33"));
+        // A bare IPv6 address defaults to /128, not /32.
         assert!(ip_in_cidr(&"2001:db8::1".parse().unwrap(), "2001:db8::1"));
         assert!(!ip_in_cidr(&"2001:db8::2".parse().unwrap(), "2001:db8::1"));
     }

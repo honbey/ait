@@ -2,7 +2,7 @@ use chrono::Utc;
 use duckdb::{Connection, Result, params};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use super::analytics::{Analytics, AnalyticsError};
@@ -190,13 +190,33 @@ impl LogManager {
         self.analytics.query_proxy_logs(params).await
     }
 
-    pub fn shutdown(&self) {
-        let sender = self.sender.clone();
-        std::thread::spawn(move || {
-            let _ = sender.send(LogEvent::Shutdown);
-        });
+    /// Hand the worker a shutdown event, retrying while the channel is full.
+    /// `send` would block indefinitely on a full channel, so the wait is
+    /// bounded; returns false when the signal could not be delivered.
+    fn signal_shutdown(&self) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match self.sender.try_send(LogEvent::Shutdown) {
+                Ok(()) => return true,
+                Err(mpsc::TrySendError::Disconnected(_)) => return false,
+                Err(mpsc::TrySendError::Full(_)) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(mpsc::TrySendError::Full(_)) => {
+                    warn!("[logs] shutdown signal not delivered; worker left running");
+                    return false;
+                }
+            }
+        }
+    }
 
-        if let Ok(mut guard) = self.worker_handle.lock()
+    pub fn shutdown(&self) {
+        let signaled = self.signal_shutdown();
+
+        // Joining a worker that never received the signal would hang, so only
+        // wait when the shutdown was actually delivered.
+        if signaled
+            && let Ok(mut guard) = self.worker_handle.lock()
             && let Some(handle) = guard.take()
         {
             let _ = handle.join();
