@@ -105,6 +105,9 @@ hex = "0.4"
 
 # Concurrent hashmap
 dashmap = "6.2"
+
+# Multi-pattern substring matching (DLP sensitive-value scan)
+aho-corasick = "1"
 duckdb = { version = "1.10504.0", features = ["bundled", "chrono"] }
 
 # Enum utilities

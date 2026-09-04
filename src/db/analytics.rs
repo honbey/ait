@@ -47,10 +47,20 @@ impl AnalyticsError {
     }
 }
 
+/// Analytics workers, each with its own DuckDB connection, pulling from a
+/// shared queue. Extra readers never conflict with the log worker's writes,
+/// so a heavy `query_proxy_logs` no longer blocks a concurrent `/api/stats`.
+const ANALYTICS_WORKERS: usize = 2;
+
+/// LRU bound for cached prepared statements. The static aggregate queries
+/// occupy three slots; the rest absorbs the `query_proxy_logs` variants,
+/// whose SQL text varies with the active filters.
+const STATEMENT_CACHE_CAPACITY: usize = 32;
+
 #[derive(Clone)]
 pub struct Analytics {
     tx: mpsc::Sender<AnalyticsRequest>,
-    handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     timeout: Duration,
 }
 
@@ -137,85 +147,126 @@ fn run_guarded<T>(label: &str, query: impl FnOnce() -> T) -> Option<T> {
 impl Analytics {
     pub fn new(conn: Connection, timeout_secs: u64) -> Self {
         let (tx, rx) = mpsc::channel::<AnalyticsRequest>();
-        let handle = std::thread::spawn(move || {
-            for req in rx {
-                match req {
-                    AnalyticsRequest::Requests {
-                        start_ts,
-                        end_ts,
-                        resp,
-                    } => {
-                        if let Some(value) =
-                            run_guarded("requests", || requests_impl(&conn, start_ts, end_ts))
-                        {
-                            let _ = resp.send(value);
-                        }
-                    }
-                    AnalyticsRequest::Tokens {
-                        start_ts,
-                        end_ts,
-                        resp,
-                    } => {
-                        if let Some(value) =
-                            run_guarded("tokens", || tokens_impl(&conn, start_ts, end_ts))
-                        {
-                            let _ = resp.send(value);
-                        }
-                    }
-                    AnalyticsRequest::ModelDist {
-                        start_ts,
-                        end_ts,
-                        resp,
-                    } => {
-                        if let Some(value) =
-                            run_guarded("model_dist", || model_dist_impl(&conn, start_ts, end_ts))
-                        {
-                            let _ = resp.send(value);
-                        }
-                    }
-                    AnalyticsRequest::TokenDist {
-                        start_ts,
-                        end_ts,
-                        resp,
-                    } => {
-                        if let Some(value) =
-                            run_guarded("token_dist", || token_dist_impl(&conn, start_ts, end_ts))
-                        {
-                            let _ = resp.send(value);
-                        }
-                    }
-                    AnalyticsRequest::QueryProxyLogs { params, resp } => {
-                        if let Some(value) = run_guarded("query_proxy_logs", || {
-                            query_proxy_logs_impl(&conn, *params)
-                        }) {
-                            let _ = resp.send(value);
-                        }
-                    }
-                    AnalyticsRequest::Overview {
-                        start_ts,
-                        end_ts,
-                        resp,
-                    } => {
-                        if let Some(value) =
-                            run_guarded("overview", || overview_impl(&conn, start_ts, end_ts))
-                        {
-                            let _ = resp.send(value);
-                        }
-                    }
-                    AnalyticsRequest::Shutdown => {
-                        let _ = conn.execute_batch("CHECKPOINT");
-                        break;
-                    }
+        let rx = Arc::new(Mutex::new(rx));
+
+        // One DuckDB connection per worker. Cloning can only fail on resource
+        // exhaustion; degrade to fewer workers rather than refusing to start.
+        let mut connections = Vec::with_capacity(ANALYTICS_WORKERS);
+        for _ in 1..ANALYTICS_WORKERS {
+            match conn.try_clone() {
+                Ok(clone) => connections.push(clone),
+                Err(e) => {
+                    warn!(
+                        "[analytics] connection clone failed, degrading to {} worker(s): {e}",
+                        connections.len() + 1
+                    );
+                    break;
                 }
             }
-        });
+        }
+        connections.push(conn);
+
+        let mut handles = Vec::with_capacity(connections.len());
+        for worker_conn in connections {
+            worker_conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
+            let rx = Arc::clone(&rx);
+            handles.push(std::thread::spawn(move || {
+                worker_loop(worker_conn, rx);
+            }));
+        }
+
         Self {
             tx,
-            handle: Arc::new(Mutex::new(Some(handle))),
+            handles: Arc::new(Mutex::new(handles)),
             timeout: Duration::from_secs(timeout_secs),
         }
     }
+}
 
+/// Pull requests from the shared queue until a Shutdown arrives or the
+/// channel closes. The queue guard is released before the query runs, so
+/// other workers can receive while this one scans.
+fn worker_loop(conn: Connection, rx: Arc<Mutex<mpsc::Receiver<AnalyticsRequest>>>) {
+    loop {
+        let req = {
+            let guard = rx.lock().unwrap_or_else(|e| e.into_inner());
+            guard.recv()
+        };
+        let req = match req {
+            Ok(req) => req,
+            Err(_) => break,
+        };
+        match req {
+            AnalyticsRequest::Requests {
+                start_ts,
+                end_ts,
+                resp,
+            } => {
+                if let Some(value) =
+                    run_guarded("requests", || requests_impl(&conn, start_ts, end_ts))
+                {
+                    let _ = resp.send(value);
+                }
+            }
+            AnalyticsRequest::Tokens {
+                start_ts,
+                end_ts,
+                resp,
+            } => {
+                if let Some(value) = run_guarded("tokens", || tokens_impl(&conn, start_ts, end_ts))
+                {
+                    let _ = resp.send(value);
+                }
+            }
+            AnalyticsRequest::ModelDist {
+                start_ts,
+                end_ts,
+                resp,
+            } => {
+                if let Some(value) =
+                    run_guarded("model_dist", || model_dist_impl(&conn, start_ts, end_ts))
+                {
+                    let _ = resp.send(value);
+                }
+            }
+            AnalyticsRequest::TokenDist {
+                start_ts,
+                end_ts,
+                resp,
+            } => {
+                if let Some(value) =
+                    run_guarded("token_dist", || token_dist_impl(&conn, start_ts, end_ts))
+                {
+                    let _ = resp.send(value);
+                }
+            }
+            AnalyticsRequest::QueryProxyLogs { params, resp } => {
+                if let Some(value) =
+                    run_guarded("query_proxy_logs", || query_proxy_logs_impl(&conn, *params))
+                {
+                    let _ = resp.send(value);
+                }
+            }
+            AnalyticsRequest::Overview {
+                start_ts,
+                end_ts,
+                resp,
+            } => {
+                if let Some(value) =
+                    run_guarded("overview", || overview_impl(&conn, start_ts, end_ts))
+                {
+                    let _ = resp.send(value);
+                }
+            }
+            AnalyticsRequest::Shutdown => {
+                let _ = conn.execute_batch("CHECKPOINT");
+                break;
+            }
+        }
+    }
+}
+
+impl Analytics {
     analytics_method!(requests, Requests, Vec<BucketEntry>);
     analytics_method!(tokens, Tokens, Vec<BucketEntry>);
     analytics_method!(model_dist, ModelDist, Vec<ModelDistEntry>);
@@ -283,11 +334,16 @@ impl Analytics {
     }
 
     pub fn shutdown(&self) {
-        let _ = self.tx.send(AnalyticsRequest::Shutdown);
-        if let Ok(mut guard) = self.handle.lock()
-            && let Some(handle) = guard.take()
-        {
-            let _ = handle.join();
+        // One Shutdown per worker: each worker drains queued requests until it
+        // consumes one, so every thread exits exactly once.
+        let worker_count = self.handles.lock().map(|h| h.len()).unwrap_or(0);
+        for _ in 0..worker_count {
+            let _ = self.tx.send(AnalyticsRequest::Shutdown);
+        }
+        if let Ok(mut guard) = self.handles.lock() {
+            for handle in guard.drain(..) {
+                let _ = handle.join();
+            }
         }
     }
 }
@@ -554,8 +610,10 @@ fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> Prox
 
     // Count query
     let count_sql = format!("SELECT COUNT(*) FROM proxy_log{where_clause}");
-    let total: u64 = match conn.query_row(&count_sql, params_from_iter(values_ref.clone()), |row| {
-        row.get::<_, u64>(0)
+    let total: u64 = match conn.prepare_cached(&count_sql).and_then(|mut stmt| {
+        stmt.query_row(params_from_iter(values_ref.clone()), |row| {
+            row.get::<_, u64>(0)
+        })
     }) {
         Ok(n) => n,
         Err(e) => {
@@ -584,45 +642,46 @@ fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> Prox
     data_params.push(&limit_val);
     data_params.push(&offset_val);
 
-    let items: Vec<ProxyLogEntryResponse> = match conn.prepare(&data_sql).and_then(|mut stmt| {
-        let rows = stmt.query_map(params_from_iter(data_params), |row| {
-            Ok(ProxyLogEntryResponse {
-                timestamp: row
-                    .get::<_, chrono::NaiveDateTime>(0)?
-                    .and_utc()
-                    .timestamp(),
-                api_key_name: row.get(1)?,
-                model_name: row.get(2)?,
-                provider_name: row.get(3)?,
-                prompt_tokens: row.get(4)?,
-                completion_tokens: row.get(5)?,
-                total_tokens: row.get(6)?,
-                cached_tokens: row.get(7)?,
-                latency_ms: row.get(8)?,
-                status: row.get(9)?,
-                endpoint: row.get(10)?,
-                is_streaming: row.get(11)?,
-                time_to_first_token_ms: row.get(12)?,
-                upstream_model: row.get(13)?,
-                provider_type: row.get(14)?,
-                response_body_size: row.get(15)?,
-                error_message: row.get(16)?,
-                client_ip: row.get(17)?,
-                request_id: row.get(18)?,
-            })
-        })?;
-        let mut out = Vec::new();
-        for item in rows.flatten() {
-            out.push(item);
-        }
-        Ok(out)
-    }) {
-        Ok(items) => items,
-        Err(e) => {
-            warn!("[analytics] query_proxy_logs data query failed: {e}");
-            Vec::new()
-        }
-    };
+    let items: Vec<ProxyLogEntryResponse> =
+        match conn.prepare_cached(&data_sql).and_then(|mut stmt| {
+            let rows = stmt.query_map(params_from_iter(data_params), |row| {
+                Ok(ProxyLogEntryResponse {
+                    timestamp: row
+                        .get::<_, chrono::NaiveDateTime>(0)?
+                        .and_utc()
+                        .timestamp(),
+                    api_key_name: row.get(1)?,
+                    model_name: row.get(2)?,
+                    provider_name: row.get(3)?,
+                    prompt_tokens: row.get(4)?,
+                    completion_tokens: row.get(5)?,
+                    total_tokens: row.get(6)?,
+                    cached_tokens: row.get(7)?,
+                    latency_ms: row.get(8)?,
+                    status: row.get(9)?,
+                    endpoint: row.get(10)?,
+                    is_streaming: row.get(11)?,
+                    time_to_first_token_ms: row.get(12)?,
+                    upstream_model: row.get(13)?,
+                    provider_type: row.get(14)?,
+                    response_body_size: row.get(15)?,
+                    error_message: row.get(16)?,
+                    client_ip: row.get(17)?,
+                    request_id: row.get(18)?,
+                })
+            })?;
+            let mut out = Vec::new();
+            for item in rows.flatten() {
+                out.push(item);
+            }
+            Ok(out)
+        }) {
+            Ok(items) => items,
+            Err(e) => {
+                warn!("[analytics] query_proxy_logs data query failed: {e}");
+                Vec::new()
+            }
+        };
 
     ProxyLogQueryResult { items, total }
 }

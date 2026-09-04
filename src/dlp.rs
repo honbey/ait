@@ -3,8 +3,12 @@
 //! Scans JSON request bodies for configured literal sensitive values and
 //! blocks requests that contain them. Matching is substring-based and
 //! case-sensitive, operating only on JSON string values (not keys).
+//!
+//! All rules feed a single Aho-Corasick automaton, so each string leaf is
+//! scanned in one pass regardless of how many rules are configured.
 
 use crate::config::DlpConfig;
+use aho_corasick::AhoCorasick;
 use serde_json::Value;
 
 /// Scanner over the configured literal values.
@@ -14,14 +18,38 @@ use serde_json::Value;
 #[derive(Clone)]
 pub struct DlpScanner {
     enabled: bool,
-    values: Vec<String>,
+    /// Non-empty configured rules, in config order (index = priority).
+    rules: Vec<String>,
+    /// Multi-pattern matcher over `rules`; `None` if the automaton failed to
+    /// build, in which case detection is disabled.
+    matcher: Option<AhoCorasick>,
 }
 
 impl DlpScanner {
     pub fn new(config: &DlpConfig) -> Self {
+        // Empty rules would match everywhere; drop them up front.
+        let rules: Vec<String> = config
+            .sensitive_values
+            .iter()
+            .filter(|v| !v.is_empty())
+            .cloned()
+            .collect();
+        let enabled = config.enabled && !rules.is_empty();
+        let matcher = if enabled {
+            match AhoCorasick::new(rules.iter().map(String::as_str)) {
+                Ok(matcher) => Some(matcher),
+                Err(e) => {
+                    tracing::warn!("[dlp] automaton build failed, detection disabled: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         Self {
-            enabled: config.enabled && !config.sensitive_values.is_empty(),
-            values: config.sensitive_values.clone(),
+            enabled: enabled && matcher.is_some(),
+            rules,
+            matcher,
         }
     }
 
@@ -36,34 +64,38 @@ impl DlpScanner {
         if !self.enabled {
             return None;
         }
+        let Some(matcher) = &self.matcher else {
+            return None;
+        };
         // Index of the earliest configured rule matching any string leaf.
-        // Scanning leaf-by-leaf avoids concatenating the whole body into one
-        // buffer, and rule order still wins over match position.
+        // Scanning leaf-by-leaf keeps cross-leaf matches impossible (the
+        // previous concatenated buffer separated leaves with a space).
         let mut best: Option<usize> = None;
-        scan_value(body, &self.values, &mut best);
-        best.map(|idx| self.values[idx].as_str())
+        scan_value(body, matcher, &mut best);
+        best.map(|idx| self.rules[idx].as_str())
     }
 }
 
-fn scan_value(value: &Value, values: &[String], best: &mut Option<usize>) {
+fn scan_value(value: &Value, matcher: &AhoCorasick, best: &mut Option<usize>) {
     if *best == Some(0) {
         return; // cannot improve on the first configured rule
     }
     match value {
         Value::String(s) => {
-            if let Some(idx) = values
-                .iter()
-                .position(|v| !v.is_empty() && s.contains(v.as_str()))
-            {
+            for mat in matcher.find_iter(s) {
+                let idx = mat.pattern().as_usize();
                 *best = Some(match *best {
                     Some(prev) => prev.min(idx),
                     None => idx,
                 });
+                if *best == Some(0) {
+                    return;
+                }
             }
         }
         Value::Array(items) => {
             for item in items {
-                scan_value(item, values, best);
+                scan_value(item, matcher, best);
                 if *best == Some(0) {
                     return;
                 }
@@ -71,7 +103,7 @@ fn scan_value(value: &Value, values: &[String], best: &mut Option<usize>) {
         }
         Value::Object(map) => {
             for v in map.values() {
-                scan_value(v, values, best);
+                scan_value(v, matcher, best);
                 if *best == Some(0) {
                     return;
                 }

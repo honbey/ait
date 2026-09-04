@@ -35,6 +35,7 @@ dependencies = [
 name = "ait"
 version = "0.2.0"
 dependencies = [
+ "aho-corasick",
  "async-trait",
  "axum",
  "bytes",
