@@ -120,6 +120,10 @@ pub struct ProxyConfig {
     pub connect_timeout_secs: u64,
     pub max_response_body_bytes: u64,
     pub max_request_body_bytes: u64,
+    /// Divisor for the rough prompt-token estimate used until the upstream
+    /// reports usage: tokens ~= request body bytes / divisor. Larger values
+    /// estimate fewer tokens. Must be 1-5; 0 would panic on division.
+    pub prompt_token_divisor: u64,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -173,6 +177,7 @@ impl ConfigApp {
             .set_default("proxy.connect_timeout_secs", 30u64)?
             .set_default("proxy.max_response_body_bytes", 8u64 * 1024 * 1024)?
             .set_default("proxy.max_request_body_bytes", 8u64 * 1024 * 1024)?
+            .set_default("proxy.prompt_token_divisor", 3u64)?
             .set_default("security.ssrf_allowed_cidrs", Vec::<String>::new())?
             .set_default("security.cors_allowed_origins", Vec::<String>::new())?
             .set_default("security.cors_allow_credentials", false)?
@@ -187,6 +192,14 @@ impl ConfigApp {
         if app.log.retention_every == 0 {
             return Err(ConfigError::Message(
                 "log.retention_every must be >= 1 (0 crashes the log worker)".to_string(),
+            ));
+        }
+
+        // Division by zero in the prompt-token estimate would panic in the
+        // proxy hot path; outside 1..=5 the estimate is meaningless anyway.
+        if !(1..=5).contains(&app.proxy.prompt_token_divisor) {
+            return Err(ConfigError::Message(
+                "proxy.prompt_token_divisor must be between 1 and 5".to_string(),
             ));
         }
 
@@ -238,6 +251,7 @@ mod tests {
         assert_eq!(config.log.axum, "info");
         assert_eq!(config.log.tower_http_trace, "info");
         assert_eq!(config.log.analytics_timeout_secs, 10);
+        assert_eq!(config.proxy.prompt_token_divisor, 3);
     }
 
     #[test]
@@ -338,6 +352,23 @@ retention_every = 0
         );
         let err = ConfigApp::new(Some(&path)).unwrap_err();
         assert!(err.to_string().contains("retention_every"));
+    }
+
+    #[test]
+    fn prompt_token_divisor_out_of_range_rejected() {
+        for bad in [0, 6] {
+            let (_dir, path) = write_toml(&format!(
+                r#"
+[proxy]
+prompt_token_divisor = {bad}
+"#
+            ));
+            let err = ConfigApp::new(Some(&path)).unwrap_err();
+            assert!(
+                err.to_string().contains("prompt_token_divisor"),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

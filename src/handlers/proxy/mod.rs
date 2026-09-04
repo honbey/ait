@@ -372,7 +372,7 @@ pub async fn proxy_request(
         .unwrap_or(false)
         && state.config.proxy.stream;
 
-    let prompt_tokens = count_prompt_tokens(body_len);
+    let prompt_tokens = count_prompt_tokens(body_len, state.config.proxy.prompt_token_divisor);
 
     let request = upstream
         .build_request(
@@ -517,11 +517,14 @@ pub async fn proxy_request(
 
 /// Normal paths will be overwritten by the upstream usage precise value;
 /// this fallback value is only used if the connection is interrupted.
-fn count_prompt_tokens(body_len: usize) -> Option<i64> {
+/// `body_len` covers the whole JSON request (field names, base64 images and
+/// all), so the divisor is configurable (`proxy.prompt_token_divisor`, 1-5)
+/// to trim the estimate toward observed usage.
+fn count_prompt_tokens(body_len: usize, divisor: u64) -> Option<i64> {
     if body_len == 0 {
         None
     } else {
-        Some(body_len as i64 / 3)
+        Some(body_len as i64 / divisor as i64)
     }
 }
 
@@ -946,8 +949,14 @@ mod tests {
 
     #[test]
     fn count_prompt_tokens_estimates_from_body_len() {
-        assert_eq!(count_prompt_tokens(0), None);
-        assert_eq!(count_prompt_tokens(99), Some(33));
-        assert_eq!(count_prompt_tokens(100), Some(33));
+        assert_eq!(count_prompt_tokens(0, 3), None);
+        assert_eq!(count_prompt_tokens(99, 3), Some(33));
+        assert_eq!(count_prompt_tokens(100, 3), Some(33));
+    }
+
+    #[test]
+    fn count_prompt_tokens_divisor_scales_estimate() {
+        assert_eq!(count_prompt_tokens(100, 1), Some(100));
+        assert_eq!(count_prompt_tokens(100, 5), Some(20));
     }
 }

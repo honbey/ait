@@ -111,6 +111,7 @@ pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
             connect_timeout_secs: 30,
             max_response_body_bytes: 8 * 1024 * 1024,
             max_request_body_bytes: 8 * 1024 * 1024,
+            prompt_token_divisor: 3,
         },
         security: SecurityConfig {
             ssrf_allowed_cidrs: vec!["127.0.0.1/8".to_string()],
