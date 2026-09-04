@@ -76,7 +76,10 @@ pub fn App() -> impl IntoView {
     });
 
     view! {
-        <div class=move || if dark.get() { "dark" } else { "" }>
+        // The `.dark` class lives on <html> (set by the effect below) and the
+        // Tailwind dark variant matches its descendants, so this wrapper needs
+        // no class of its own.
+        <div>
             <Router>
                 <Topbar dark=dark theme=theme />
                 <main class="min-h-[calc(100vh-3.5rem)]">

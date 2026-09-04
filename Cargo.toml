@@ -30,6 +30,11 @@ strip = false
 [profile.release-wasm]
 inherits = "release"
 opt-level = "z"
+# Trunk's wasm-opt pass keeps the name section otherwise.
+strip = true
+# NOTE: panic = "abort" is deliberately NOT set here. The profile is
+# workspace-wide, and the backend's run_guarded (analytics) relies on
+# unwinding to contain panics.
 
 [profile.dev]
 debug = "line-tables-only"

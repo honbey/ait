@@ -43,21 +43,36 @@ pub fn date_str_to_ts(s: &str) -> Option<i64> {
     let d = parts[2].parse::<i32>().ok()?;
     let month = m - 1;
 
-    let date = if let Some(t) = time_part {
-        let h = t
-            .split(':')
-            .next()
-            .and_then(|v| v.parse::<i32>().ok())
-            .unwrap_or(0);
-        let min = t
-            .split(':')
-            .nth(1)
-            .and_then(|v| v.parse::<i32>().ok())
-            .unwrap_or(0);
+    let (h, min) = match time_part {
+        Some(t) => (
+            t.split(':')
+                .next()
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(0),
+            t.split(':')
+                .nth(1)
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(0),
+        ),
+        None => (0, 0),
+    };
+
+    let date = if time_part.is_some() {
         js_sys::Date::new_with_year_month_day_hr_min_sec(y as u32, month, d, h, min, 0)
     } else {
-        js_sys::Date::new_with_year_month_day(y as u32, m - 1, d)
+        js_sys::Date::new_with_year_month_day(y as u32, month, d)
     };
+
+    // JS Date silently rolls out-of-range components (`2026-02-30` becomes
+    // March 2), so verify the round trip instead of trusting `get_time()`.
+    if date.get_full_year() as i32 != y
+        || date.get_month() as i32 != month
+        || date.get_date() as i32 != d
+        || (time_part.is_some()
+            && (date.get_hours() as i32 != h || date.get_minutes() as i32 != min))
+    {
+        return None;
+    }
 
     let ts = date.get_time() / 1000.0;
     if ts.is_nan() { None } else { Some(ts as i64) }

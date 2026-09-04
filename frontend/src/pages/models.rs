@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use leptos::prelude::*;
 use reactive_graph::traits::{Get, Read, ReadUntracked, Set, Write};
 use reactive_stores::{Field, Patch, Store};
@@ -46,6 +48,16 @@ pub fn ModelsPage() -> impl IntoView {
             .into_iter()
             .map(|p| (p.id, p.name))
             .collect::<Vec<_>>()
+    });
+
+    // One id->name map instead of cloning and linearly scanning the provider
+    // list in every row.
+    let provider_names = Memo::new(move |_| {
+        providers_resource
+            .get()
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<HashMap<String, String>>()
     });
 
     let models_rsc =
@@ -169,12 +181,10 @@ pub fn ModelsPage() -> impl IntoView {
                                                             </td>
                                                             <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
                                                                 {move || {
-                                                                    providers_resource
+                                                                    provider_names
                                                                         .get()
-                                                                        .map(|ref pairs| {
-                                                                            provider_display_name(&m.provider_id().get(), pairs)
-                                                                                .to_string()
-                                                                        })
+                                                                        .get(&m.provider_id().get())
+                                                                        .cloned()
                                                                         .unwrap_or_else(|| { m.provider_id().get() })
                                                                 }}
                                                             </td>

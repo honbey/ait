@@ -107,6 +107,9 @@ async fn api_post<T: DeserializeOwned>(
         .send()
         .await?;
     if resp.ok() {
+        // A successful mutation invalidates the read cache so the next read
+        // observes it.
+        FETCH_CACHE.with(|c| c.borrow_mut().clear());
         resp.json().await
     } else {
         let status = resp.status();
@@ -126,6 +129,7 @@ async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> R
         .send()
         .await?;
     if resp.ok() {
+        FETCH_CACHE.with(|c| c.borrow_mut().clear());
         resp.json().await
     } else {
         let status = resp.status();
@@ -142,6 +146,7 @@ async fn api_delete(path: &str) -> Result<(), NetError> {
         .send()
         .await?;
     if resp.ok() {
+        FETCH_CACHE.with(|c| c.borrow_mut().clear());
         Ok(())
     } else {
         let status = resp.status();

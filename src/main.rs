@@ -185,6 +185,11 @@ fn init_logging(cfg: &config::LogConfig) {
         .init();
 }
 
+/// Let browser clients read the correlation id from a failed response.
+fn expose_headers() -> [header::HeaderName; 1] {
+    [header::HeaderName::from_static("x-request-id")]
+}
+
 fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer {
     let methods = [Method::GET, Method::POST, Method::PUT, Method::DELETE];
     let headers = [
@@ -199,7 +204,8 @@ fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer 
         return CorsLayer::new()
             .allow_origin(AllowOrigin::list(Vec::<HeaderValue>::new()))
             .allow_methods(methods)
-            .allow_headers(headers);
+            .allow_headers(headers)
+            .expose_headers(expose_headers());
     }
 
     if allowed_origins.iter().any(|o| o == "*") {
@@ -209,7 +215,8 @@ fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer 
         // authenticated responses, hence the hard failure at startup.
         return CorsLayer::permissive()
             .allow_methods(methods)
-            .allow_headers(headers);
+            .allow_headers(headers)
+            .expose_headers(expose_headers());
     }
 
     let origins: Vec<_> = allowed_origins
@@ -223,6 +230,7 @@ fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer 
         .allow_origin(origins)
         .allow_methods(methods)
         .allow_headers(headers)
+        .expose_headers(expose_headers())
         .allow_credentials(allow_credentials)
 }
 
@@ -480,6 +488,22 @@ mod tests {
                 .await
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn stale_static_asset_returns_404() {
+        // A hash-named asset from an old deployment must 404 cleanly, not fall
+        // back to index.html: a 200 + text/html response would surface in the
+        // browser as a MIME error instead of a missing file.
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let router = build_app(state);
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/static/no-such-hash.js")
+            .body(Body::empty())
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
