@@ -60,8 +60,7 @@ pub fn ModelsPage() -> impl IntoView {
             .collect::<HashMap<String, String>>()
     });
 
-    let models_rsc =
-        LocalResource::new(|| async move { api::fetch_models().await.map_err(|e| e.to_string()) });
+    let models_rsc = LocalResource::new(|| async move { api::fetch_models().await });
 
     let _sync_store = Effect::new(move |_| match models_rsc.get() {
         Some(Ok(items)) => {
@@ -231,7 +230,13 @@ pub fn ModelsPage() -> impl IntoView {
                             .into_any()
                     }
                     Some(Err(ref e)) => {
-                        view! { <ErrorCard message=e.clone() on_retry=Box::new(do_refetch) /> }
+                        view! {
+                            <ErrorCard
+                                message=e.message.clone()
+                                request_id=e.request_id.clone()
+                                on_retry=Box::new(do_refetch)
+                            />
+                        }
                             .into_any()
                     }
                     None => ().into_any(),

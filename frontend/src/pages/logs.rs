@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 
-use crate::api::{self, PaginatedResponse, ProxyLogEntryResponse};
+use crate::api::{self, ApiError, PaginatedResponse, ProxyLogEntryResponse};
 use crate::components::error_display::ErrorCard;
 use crate::components::modal::ModalShell;
 use crate::components::skeleton::logs_table_skeleton;
@@ -222,7 +222,7 @@ pub fn LogsPage() -> impl IntoView {
 
     let detail_item = RwSignal::new(None::<ProxyLogEntryResponse>);
 
-    let logs_resource: LocalResource<Result<PaginatedResponse<ProxyLogEntryResponse>, String>> =
+    let logs_resource: LocalResource<Result<PaginatedResponse<ProxyLogEntryResponse>, ApiError>> =
         LocalResource::new(move || {
             let p = page.get();
             let pp = per_page.get();
@@ -253,7 +253,6 @@ pub fn LogsPage() -> impl IntoView {
                     ist,
                 )
                 .await
-                .map_err(|e| e.to_string())
             }
         });
 
@@ -621,7 +620,8 @@ pub fn LogsPage() -> impl IntoView {
                         Some(Err(ref e)) => {
                             view! {
                                 <ErrorCard
-                                    message=e.clone()
+                                    message=e.message.clone()
+                                    request_id=e.request_id.clone()
                                     on_retry=Box::new(move || logs_resource.refetch())
                                 />
                             }

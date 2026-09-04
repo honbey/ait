@@ -28,19 +28,29 @@ pub struct ProxyLogQuery {
 }
 
 const MAX_PER_PAGE: u64 = 100;
-/// Upper bound for `page`. It guards two things: `page * per_page` would
-/// overflow and panic the analytics worker, and offset pagination costs
-/// O(offset) rows to skip. Offsets are kept rather than keyset cursors
-/// because the logs UI needs page numbers and a total count, so this cap is
-/// what bounds the worst-case scan (`MAX_PAGE * MAX_PER_PAGE` rows).
-const MAX_PAGE: u64 = 10_000;
+/// Upper bound on the rows an OFFSET scan may skip. `LIMIT ? OFFSET ?` still
+/// materializes every skipped row — measured at ~0.9s per 1M rows with DuckDB
+/// itself unoptimized, so an unbounded page request is an unauthenticated way
+/// to pin both analytics workers and delay a concurrent `/api/stats` past its
+/// timeout. Offsets are kept rather than keyset cursors because the logs UI
+/// needs page numbers and a total count, so this cap is what bounds the scan;
+/// older rows stay reachable through the date filters.
+const MAX_OFFSET_ROWS: u64 = 100_000;
 
 pub async fn list_proxy_logs(
     State(state): State<AppState>,
     Query(q): Query<ProxyLogQuery>,
 ) -> Result<Json<PaginatedResponse<ProxyLogEntryResponse>>, (StatusCode, Json<AitError>)> {
-    let page = q.page.unwrap_or(1).clamp(1, MAX_PAGE);
     let per_page = q.per_page.unwrap_or(20).clamp(1, MAX_PER_PAGE);
+    // Saturating arithmetic absorbs a `page` near u64::MAX; the skip is then
+    // capped, and `page` is re-derived from it so the response names the page
+    // that was actually served (the UI shows it next to the total).
+    let requested_page = q.page.unwrap_or(1).max(1);
+    let offset = requested_page
+        .saturating_sub(1)
+        .saturating_mul(per_page)
+        .min(MAX_OFFSET_ROWS);
+    let page = offset / per_page + 1;
 
     if let Some(ts) = q.start_ts
         && chrono::DateTime::from_timestamp(ts, 0).is_none()
@@ -225,13 +235,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_proxy_logs_clamps_page() {
+    async fn list_proxy_logs_caps_the_offset_scan() {
         let (router, now) = setup_with_events().await;
         let resp = send_request(
             &router,
             Method::GET,
             &format!(
-                "/api/data/proxy-log?start_ts={}&end_ts={}&page=999999999",
+                "/api/data/proxy-log?start_ts={}&end_ts={}&page=999999999&per_page=100",
                 now - 3600,
                 now + 3600
             ),
@@ -240,8 +250,33 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status, StatusCode::OK);
-        // Bounded so a huge page cannot push the OFFSET scan out of reach.
-        assert_eq!(resp.json["page"], MAX_PAGE);
+        // The skip is capped at MAX_OFFSET_ROWS; the echoed page is the one
+        // that was actually served, so the UI's indicator cannot claim a page
+        // the backend refused to scan to.
+        assert_eq!(resp.json["page"], MAX_OFFSET_ROWS / 100 + 1);
+        assert_eq!(resp.json["per_page"], 100);
+    }
+
+    #[tokio::test]
+    async fn list_proxy_logs_page_past_the_end_returns_no_rows() {
+        let (router, now) = setup_with_events().await;
+        let resp = send_request(
+            &router,
+            Method::GET,
+            &format!(
+                "/api/data/proxy-log?start_ts={}&end_ts={}&page=100&per_page=20",
+                now - 3600,
+                now + 3600
+            ),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        // 3 rows total, so page 100 is past the end: the count is still
+        // reported, the OFFSET scan is skipped entirely.
+        assert_eq!(resp.json["total"], 3);
+        assert!(resp.json["items"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

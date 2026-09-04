@@ -54,9 +54,7 @@ pub fn ApiKeysPage() -> impl IntoView {
     let state = Store::new(ApiKeysStore::default());
     let created_raw_key = RwSignal::new(Option::<(String, String)>::None);
 
-    let api_keys_rsc = LocalResource::new(move || async move {
-        api::fetch_api_keys().await.map_err(|e| e.to_string())
-    });
+    let api_keys_rsc = LocalResource::new(move || async move { api::fetch_api_keys().await });
 
     let _sync_store = Effect::new(move |_| match api_keys_rsc.get() {
         Some(Ok(items)) => {
@@ -174,7 +172,13 @@ pub fn ApiKeysPage() -> impl IntoView {
                             .into_any()
                     }
                     Some(Err(ref e)) => {
-                        view! { <ErrorCard message=e.clone() on_retry=Box::new(do_refetch) /> }
+                        view! {
+                            <ErrorCard
+                                message=e.message.clone()
+                                request_id=e.request_id.clone()
+                                on_retry=Box::new(do_refetch)
+                            />
+                        }
                             .into_any()
                     }
                     None => ().into_any(),

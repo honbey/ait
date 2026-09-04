@@ -628,6 +628,17 @@ fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> Prox
         .page
         .saturating_sub(1)
         .saturating_mul(params.per_page);
+
+    // A page past the end has no rows to return, but OFFSET still walks every
+    // row before it. Skipping the scan keeps a deep out-of-range page — the
+    // cheapest way to occupy a worker — from costing anything at all.
+    if offset >= total {
+        return ProxyLogQueryResult {
+            items: Vec::new(),
+            total,
+        };
+    }
+
     let data_sql = format!(
         "SELECT timestamp, api_key_name, model_name, provider_name, \
          prompt_tokens, completion_tokens, total_tokens, cached_tokens, latency_ms, status, \

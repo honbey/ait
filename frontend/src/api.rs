@@ -92,7 +92,34 @@ pub fn get_base_url() -> String {
     })
 }
 
-async fn response_to_error(resp: gloo_net::http::Response) -> NetError {
+/// Error returned by every admin API call.
+///
+/// `request_id` mirrors the id the backend injects into error bodies (and the
+/// `x-request-id` header), so a failed request can be matched against the
+/// server log. `Display` renders the message alone — the id is surfaced
+/// separately by the UI so it stays copyable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApiError {
+    pub message: String,
+    pub request_id: Option<String>,
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl From<NetError> for ApiError {
+    fn from(e: NetError) -> Self {
+        Self {
+            message: e.to_string(),
+            request_id: None,
+        }
+    }
+}
+
+async fn response_to_error(resp: gloo_net::http::Response) -> ApiError {
     let status = resp.status();
     let parsed = resp
         .text()
@@ -105,23 +132,21 @@ async fn response_to_error(resp: gloo_net::http::Response) -> NetError {
         .and_then(|m| m.as_str())
         .map(String::from)
         .unwrap_or_else(|| format!("HTTP {status}"));
-    // The backend injects `request_id` into every error body so a failure can
-    // be matched against the server log; surface it instead of dropping it.
     let request_id = parsed
         .as_ref()
         .and_then(|v| v.get("request_id"))
-        .and_then(|id| id.as_str());
-    let msg = match request_id {
-        Some(id) => format!("{message} (request_id: {id})"),
-        None => message,
-    };
-    NetError::GlooError(msg)
+        .and_then(|id| id.as_str())
+        .map(String::from);
+    ApiError {
+        message,
+        request_id,
+    }
 }
 
 async fn api_post<T: DeserializeOwned>(
     path: &str,
     body: &serde_json::Value,
-) -> Result<T, NetError> {
+) -> Result<T, ApiError> {
     let url = format!("{}/{}", get_base_url(), path);
     let signal = timeout_signal();
     let resp = Request::post(&url)
@@ -135,7 +160,7 @@ async fn api_post<T: DeserializeOwned>(
         // A successful mutation invalidates the read cache so the next read
         // observes it.
         FETCH_CACHE.with(|c| c.borrow_mut().clear());
-        resp.json().await
+        resp.json().await.map_err(ApiError::from)
     } else {
         let status = resp.status();
         let err = response_to_error(resp).await;
@@ -144,7 +169,7 @@ async fn api_post<T: DeserializeOwned>(
     }
 }
 
-async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> Result<T, NetError> {
+async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> Result<T, ApiError> {
     let url = format!("{}/{}", get_base_url(), path);
     let signal = timeout_signal();
     let resp = Request::put(&url)
@@ -156,7 +181,7 @@ async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> R
         .await?;
     if resp.ok() {
         FETCH_CACHE.with(|c| c.borrow_mut().clear());
-        resp.json().await
+        resp.json().await.map_err(ApiError::from)
     } else {
         let status = resp.status();
         let err = response_to_error(resp).await;
@@ -165,7 +190,7 @@ async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> R
     }
 }
 
-async fn api_delete(path: &str) -> Result<(), NetError> {
+async fn api_delete(path: &str) -> Result<(), ApiError> {
     let url = format!("{}/{}", get_base_url(), path);
     let signal = timeout_signal();
     let resp = Request::delete(&url)
@@ -183,7 +208,7 @@ async fn api_delete(path: &str) -> Result<(), NetError> {
     }
 }
 
-async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
+async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
     let url = format!("{}/{}", get_base_url(), path);
     let signal = timeout_signal();
     let resp = Request::get(&url)
@@ -191,7 +216,7 @@ async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
         .send()
         .await?;
     if resp.ok() {
-        resp.json().await
+        resp.json().await.map_err(ApiError::from)
     } else {
         let status = resp.status();
         let err = response_to_error(resp).await;
@@ -200,7 +225,7 @@ async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
     }
 }
 
-async fn api_get_cached<T: DeserializeOwned>(path: &str, force: bool) -> Result<T, NetError> {
+async fn api_get_cached<T: DeserializeOwned>(path: &str, force: bool) -> Result<T, ApiError> {
     let key = path.to_string();
 
     if !force
@@ -215,7 +240,8 @@ async fn api_get_cached<T: DeserializeOwned>(path: &str, force: bool) -> Result<
             })
         })
     {
-        return serde_json::from_str(&cached).map_err(|e| NetError::GlooError(e.to_string()));
+        return serde_json::from_str(&cached)
+            .map_err(|e| ApiError::from(NetError::GlooError(e.to_string())));
     }
 
     let url = format!("{}/{}", get_base_url(), path);
@@ -231,7 +257,8 @@ async fn api_get_cached<T: DeserializeOwned>(path: &str, force: bool) -> Result<
         return Err(err);
     }
     let text = resp.text().await?;
-    let result: T = serde_json::from_str(&text).map_err(|e| NetError::GlooError(e.to_string()))?;
+    let result: T = serde_json::from_str(&text)
+        .map_err(|e| ApiError::from(NetError::GlooError(e.to_string())))?;
 
     FETCH_CACHE.with(|c| {
         let mut map = c.borrow_mut();
@@ -255,11 +282,11 @@ async fn api_get_cached<T: DeserializeOwned>(path: &str, force: bool) -> Result<
     Ok(result)
 }
 
-pub async fn fetch_providers() -> Result<Vec<Provider>, NetError> {
+pub async fn fetch_providers() -> Result<Vec<Provider>, ApiError> {
     api_get("api/providers").await
 }
 
-pub async fn fetch_provider_types() -> Result<Vec<ProviderTypeInfo>, NetError> {
+pub async fn fetch_provider_types() -> Result<Vec<ProviderTypeInfo>, ApiError> {
     api_get("api/provider-types").await
 }
 
@@ -269,7 +296,7 @@ pub async fn create_provider(
     base_url: &str,
     api_key: Option<&str>,
     enabled: bool,
-) -> Result<Provider, NetError> {
+) -> Result<Provider, ApiError> {
     api_post(
         "api/providers",
         &serde_json::json!({
@@ -290,7 +317,7 @@ pub async fn update_provider(
     base_url: &str,
     api_key: Option<&str>,
     enabled: bool,
-) -> Result<Provider, NetError> {
+) -> Result<Provider, ApiError> {
     api_put(
         &format!("api/providers/{}", id),
         &serde_json::json!({
@@ -304,7 +331,7 @@ pub async fn update_provider(
     .await
 }
 
-pub async fn delete_provider(id: &str) -> Result<(), NetError> {
+pub async fn delete_provider(id: &str) -> Result<(), ApiError> {
     api_delete(&format!("api/providers/{}", id)).await
 }
 
@@ -357,7 +384,7 @@ pub struct Model {
     pub updated_at: i64,
 }
 
-pub async fn fetch_models() -> Result<Vec<Model>, NetError> {
+pub async fn fetch_models() -> Result<Vec<Model>, ApiError> {
     api_get("api/models").await
 }
 
@@ -366,7 +393,7 @@ pub async fn create_model(
     provider_id: &str,
     upstream_model: &str,
     enabled: bool,
-) -> Result<Model, NetError> {
+) -> Result<Model, ApiError> {
     api_post(
         "api/models",
         &serde_json::json!({
@@ -384,7 +411,7 @@ pub async fn update_model(
     provider_id: &str,
     upstream_model: &str,
     enabled: bool,
-) -> Result<Model, NetError> {
+) -> Result<Model, ApiError> {
     api_put(
         &format!("api/models/{}", name),
         &serde_json::json!({
@@ -396,7 +423,7 @@ pub async fn update_model(
     .await
 }
 
-pub async fn delete_model(name: &str) -> Result<(), NetError> {
+pub async fn delete_model(name: &str) -> Result<(), ApiError> {
     api_delete(&format!("api/models/{}", name)).await
 }
 
@@ -423,11 +450,11 @@ pub struct ApiKey {
     pub expires_at: Option<i64>,
 }
 
-pub async fn fetch_api_keys() -> Result<Vec<ApiKey>, NetError> {
+pub async fn fetch_api_keys() -> Result<Vec<ApiKey>, ApiError> {
     api_get("api/api-keys").await
 }
 
-pub async fn create_api_key(name: &str, expires_at: Option<i64>) -> Result<ApiKey, NetError> {
+pub async fn create_api_key(name: &str, expires_at: Option<i64>) -> Result<ApiKey, ApiError> {
     api_post(
         "api/api-keys",
         &serde_json::json!({ "name": name, "expires_at": expires_at }),
@@ -440,7 +467,7 @@ pub async fn update_api_key(
     name: Option<&str>,
     expires_at: Option<i64>,
     enabled: Option<bool>,
-) -> Result<ApiKey, NetError> {
+) -> Result<ApiKey, ApiError> {
     let mut body = serde_json::json!({});
     if let Some(n) = name {
         body["name"] = serde_json::json!(n);
@@ -454,7 +481,7 @@ pub async fn update_api_key(
     api_put(&format!("api/api-keys/{}", key_id), &body).await
 }
 
-pub async fn delete_api_key(key_id: &str) -> Result<(), NetError> {
+pub async fn delete_api_key(key_id: &str) -> Result<(), ApiError> {
     api_delete(&format!("api/api-keys/{}", key_id)).await
 }
 
@@ -462,7 +489,7 @@ pub async fn fetch_overview_stats(
     start_ts: i64,
     end_ts: i64,
     force: bool,
-) -> Result<OverviewStats, NetError> {
+) -> Result<OverviewStats, ApiError> {
     api_get_cached(
         &format!("api/stats?start_ts={}&end_ts={}", start_ts, end_ts),
         force,
@@ -525,7 +552,7 @@ pub async fn fetch_proxy_logs(
     status: Option<String>,
     endpoint: Option<String>,
     is_streaming: Option<bool>,
-) -> Result<PaginatedResponse<ProxyLogEntryResponse>, NetError> {
+) -> Result<PaginatedResponse<ProxyLogEntryResponse>, ApiError> {
     let mut parts = vec![format!("page={}", page), format!("per_page={}", per_page)];
     push_qs(&mut parts, "start_ts", start_ts);
     push_qs(&mut parts, "end_ts", end_ts);

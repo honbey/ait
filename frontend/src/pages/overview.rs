@@ -159,15 +159,13 @@ pub fn Overview() -> impl IntoView {
     let (left_tab, set_left_tab) = signal(0usize);
     let (right_tab, set_right_tab) = signal(0usize);
 
-    let overview_resource: LocalResource<Result<api::OverviewStats, String>> =
+    let overview_resource: LocalResource<Result<api::OverviewStats, api::ApiError>> =
         LocalResource::new(move || {
             let s = start_ts.get_untracked();
             let e = end_ts.get_untracked();
             let force = force_refresh.get_untracked();
             async move {
-                let result = api::fetch_overview_stats(s, e, force)
-                    .await
-                    .map_err(|e| e.to_string());
+                let result = api::fetch_overview_stats(s, e, force).await;
                 // One-shot flag: later refetches go through the response cache
                 // again unless the user asks for a fresh pull.
                 set_force_refresh.set(false);
@@ -340,7 +338,15 @@ pub fn Overview() -> impl IntoView {
     let content = move || {
         match overview_resource.get() {
             None => overview_skeleton().into_any(),
-            Some(Err(e)) => view! { <ErrorCard message=e.clone() on_retry=Box::new(move || overview_resource.refetch()) /> }
+            Some(Err(e)) => {
+                view! {
+                    <ErrorCard
+                        message=e.message.clone()
+                        request_id=e.request_id.clone()
+                        on_retry=Box::new(move || overview_resource.refetch())
+                    />
+                }
+            }
             .into_any(),
         Some(Ok(data)) => view! {
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
