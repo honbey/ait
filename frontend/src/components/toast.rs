@@ -47,14 +47,12 @@ struct ToastData {
 #[derive(Clone, Copy)]
 pub struct ToastManager {
     toasts: RwSignal<Vec<ToastData>>,
-    active: RwSignal<bool>,
 }
 
 impl ToastManager {
     pub fn new() -> Self {
         Self {
             toasts: RwSignal::new(Vec::new()),
-            active: RwSignal::new(false),
         }
     }
 
@@ -62,15 +60,10 @@ impl ToastManager {
         let id = NEXT_TOAST_ID.fetch_add(1, Ordering::Relaxed);
         self.toasts
             .update(|t| t.push(ToastData { id, level, message }));
-        // Always start the removal timer; a toast queued while the container
-        // is inactive must not linger forever once it becomes visible.
         let toasts = self.toasts;
-        let active = self.active;
         spawn_local(async move {
             TimeoutFuture::new(5000).await;
-            if active.get_untracked() {
-                toasts.update(|t| t.retain(|toast| toast.id != id));
-            }
+            toasts.update(|t| t.retain(|toast| toast.id != id));
         });
     }
 
@@ -99,8 +92,6 @@ pub fn use_toast() -> ToastManager {
 #[component]
 pub fn ToastContainer() -> impl IntoView {
     let toast = use_toast();
-    toast.active.set(true);
-    on_cleanup(move || toast.active.set(false));
 
     view! {
         <div class="fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none">

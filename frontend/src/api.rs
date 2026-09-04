@@ -19,8 +19,18 @@ thread_local! {
 /// 30s cap for admin API requests. Streaming /v1 calls bypass this.
 const REQUEST_TIMEOUT_MS: u32 = 30_000;
 
-fn timeout_signal() -> web_sys::AbortSignal {
-    web_sys::AbortSignal::timeout_with_u32(REQUEST_TIMEOUT_MS)
+/// `AbortSignal.timeout` is unavailable on Safari < 16 and Firefox < 100, where
+/// calling it throws and would fail every request. Detect it once and degrade
+/// to no client-side timeout instead of breaking the whole console.
+fn timeout_signal() -> Option<web_sys::AbortSignal> {
+    let ctor = js_sys::Reflect::get(&js_sys::global(), &"AbortSignal".into()).ok()?;
+    let supported = js_sys::Reflect::get(&ctor, &"timeout".into())
+        .map(|value| !value.is_undefined())
+        .unwrap_or(false);
+    if !supported {
+        return None;
+    }
+    Some(web_sys::AbortSignal::timeout_with_u32(REQUEST_TIMEOUT_MS))
 }
 
 struct CachedResponse {
@@ -84,13 +94,27 @@ pub fn get_base_url() -> String {
 
 async fn response_to_error(resp: gloo_net::http::Response) -> NetError {
     let status = resp.status();
-    let msg = resp
+    let parsed = resp
         .text()
         .await
         .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let message = parsed
+        .as_ref()
+        .and_then(|v| v.get("message"))
+        .and_then(|m| m.as_str())
+        .map(String::from)
         .unwrap_or_else(|| format!("HTTP {status}"));
+    // The backend injects `request_id` into every error body so a failure can
+    // be matched against the server log; surface it instead of dropping it.
+    let request_id = parsed
+        .as_ref()
+        .and_then(|v| v.get("request_id"))
+        .and_then(|id| id.as_str());
+    let msg = match request_id {
+        Some(id) => format!("{message} (request_id: {id})"),
+        None => message,
+    };
     NetError::GlooError(msg)
 }
 
@@ -99,9 +123,10 @@ async fn api_post<T: DeserializeOwned>(
     body: &serde_json::Value,
 ) -> Result<T, NetError> {
     let url = format!("{}/{}", get_base_url(), path);
+    let signal = timeout_signal();
     let resp = Request::post(&url)
         .header("Content-Type", "application/json")
-        .abort_signal(Some(&timeout_signal()))
+        .abort_signal(signal.as_ref())
         .body(body.to_string())
         .map_err(|e| NetError::GlooError(e.to_string()))?
         .send()
@@ -121,9 +146,10 @@ async fn api_post<T: DeserializeOwned>(
 
 async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> Result<T, NetError> {
     let url = format!("{}/{}", get_base_url(), path);
+    let signal = timeout_signal();
     let resp = Request::put(&url)
         .header("Content-Type", "application/json")
-        .abort_signal(Some(&timeout_signal()))
+        .abort_signal(signal.as_ref())
         .body(body.to_string())
         .map_err(|e| NetError::GlooError(e.to_string()))?
         .send()
@@ -141,8 +167,9 @@ async fn api_put<T: DeserializeOwned>(path: &str, body: &serde_json::Value) -> R
 
 async fn api_delete(path: &str) -> Result<(), NetError> {
     let url = format!("{}/{}", get_base_url(), path);
+    let signal = timeout_signal();
     let resp = Request::delete(&url)
-        .abort_signal(Some(&timeout_signal()))
+        .abort_signal(signal.as_ref())
         .send()
         .await?;
     if resp.ok() {
@@ -158,8 +185,9 @@ async fn api_delete(path: &str) -> Result<(), NetError> {
 
 async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, NetError> {
     let url = format!("{}/{}", get_base_url(), path);
+    let signal = timeout_signal();
     let resp = Request::get(&url)
-        .abort_signal(Some(&timeout_signal()))
+        .abort_signal(signal.as_ref())
         .send()
         .await?;
     if resp.ok() {
@@ -191,8 +219,9 @@ async fn api_get_cached<T: DeserializeOwned>(path: &str, force: bool) -> Result<
     }
 
     let url = format!("{}/{}", get_base_url(), path);
+    let signal = timeout_signal();
     let resp = Request::get(&url)
-        .abort_signal(Some(&timeout_signal()))
+        .abort_signal(signal.as_ref())
         .send()
         .await?;
     if !resp.ok() {

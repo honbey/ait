@@ -42,6 +42,12 @@ async fn resolve_and_check(
         }
     }
 
+    // Cached only once the addresses passed the check: caching the rejected
+    // set would keep denying this host for the whole TTL after DNS was
+    // corrected to a public address. A rejected host is re-resolved on the
+    // next request instead, which fails closed again while it points inward.
+    dns_cache.insert(host.to_string(), (ips.clone(), Instant::now()));
+
     Ok(ips)
 }
 
@@ -134,6 +140,8 @@ pub(crate) fn pinned_client(
     Ok(client)
 }
 
+/// Resolve `host`, serving the DNS cache while it is fresh. Callers decide
+/// whether the result is worth caching — see [`resolve_and_check`].
 async fn resolve_with_cache(
     host: &str,
     cache: &Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
@@ -150,7 +158,6 @@ async fn resolve_with_cache(
         .map(|addr| addr.ip())
         .collect();
 
-    cache.insert(host.to_string(), (ips.clone(), Instant::now()));
     Ok(ips)
 }
 
@@ -164,14 +171,19 @@ fn is_allowed(ip: &IpAddr, allowed_cidrs: &[String]) -> bool {
     !is_blocked_ip(&ip)
 }
 
-/// Canonicalize IPv6 forms that embed an IPv4 address (RFC 4291 IPv4-mapped
-/// `::ffff:a.b.c.d` and RFC 6052 NAT64 `64:ff9b::/96`) into plain IPv4, so
+/// Canonicalize IPv6 forms that embed an IPv4 address into plain IPv4, so
 /// blocked/CIDR checks see the address the connection actually reaches.
+///
+/// RFC 4291 IPv4-mapped `::ffff:a.b.c.d` and the deprecated IPv4-compatible
+/// `::a.b.c.d` are both covered by [`Ipv6Addr::to_ipv4`]; the latter matters
+/// because `::` maps to `0.0.0.0` and connecting to the unspecified address
+/// reaches loopback on Linux. RFC 6052 NAT64 `64:ff9b::/96` is decoded by
+/// hand below.
 fn normalize_ip(ip: &IpAddr) -> IpAddr {
     match ip {
         IpAddr::V4(_) => *ip,
         IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
+            if let Some(v4) = v6.to_ipv4() {
                 return IpAddr::V4(v4);
             }
             let s = v6.segments();
@@ -212,18 +224,9 @@ fn is_blocked_v4(ip: &Ipv4Addr) -> bool {
 
 fn is_blocked_v6(ip: &Ipv6Addr) -> bool {
     let s = ip.segments();
-    // ::1 (loopback)
-    if s[0] == 0
-        && s[1] == 0
-        && s[2] == 0
-        && s[3] == 0
-        && s[4] == 0
-        && s[5] == 0
-        && s[6] == 0
-        && s[7] == 1
-    {
-        return true;
-    }
+    // Loopback (::1) and the unspecified address (::) never reach this point:
+    // both lie in ::/96 and `normalize_ip` has already mapped them to IPv4
+    // (0.0.0.1 / 0.0.0.0), which `is_blocked_v4` rejects.
     // fc00::/7 (unique local)
     if s[0] & 0xfe00 == 0xfc00 {
         return true;
@@ -307,6 +310,24 @@ mod tests {
     #[test]
     fn v6_loopback_blocked() {
         assert!(!allowed("::1"));
+    }
+
+    #[test]
+    fn v6_unspecified_blocked() {
+        // Connecting to `::` reaches loopback on Linux, so it must not be
+        // treated as a public address.
+        assert!(!allowed("::"));
+    }
+
+    #[test]
+    fn ipv4_compatible_loopback_blocked() {
+        // IPv4-compatible `::a.b.c.d` embeds 127.0.0.1.
+        assert!(!allowed("::7f00:1"));
+    }
+
+    #[test]
+    fn ipv4_compatible_metadata_blocked() {
+        assert!(!allowed("::a9fe:a9fe"));
     }
 
     #[test]
@@ -524,6 +545,31 @@ mod tests {
         let result =
             check_ssrf_config(&url, &["127.0.0.1/8".to_string()], &dns_cache, "test").await;
         assert!(result.is_ok());
+    }
+
+    // ── DNS cache contents ──
+
+    #[tokio::test]
+    async fn blocked_resolution_is_not_cached() {
+        // A literal IP needs no DNS, so the check runs offline. Caching the
+        // rejected set would keep denying the host for a full TTL after DNS
+        // was repointed at a public address.
+        let dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
+        let url = reqwest::Url::parse("http://127.0.0.1/api").unwrap();
+        let result = check_ssrf(&url, &[], &dns_cache, "test").await;
+        assert!(result.is_err());
+        assert!(dns_cache.is_empty(), "blocked host must not be cached");
+    }
+
+    #[tokio::test]
+    async fn allowed_resolution_is_cached() {
+        // 192.0.2.0/24 is reserved for documentation: a literal, DNS-free
+        // address that the blocked ranges do not cover.
+        let dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
+        let url = reqwest::Url::parse("http://192.0.2.1/api").unwrap();
+        let ips = check_ssrf(&url, &[], &dns_cache, "test").await.unwrap();
+        assert_eq!(ips, vec!["192.0.2.1".parse::<IpAddr>().unwrap()]);
+        assert!(dns_cache.contains_key("192.0.2.1"));
     }
 
     // ── pinned_client ──

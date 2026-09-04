@@ -14,11 +14,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
-pub(crate) type ModelCacheEntry = (Option<(Model, Provider)>, Instant);
+pub(crate) type ModelCacheEntry = ((Model, Provider), Instant);
 type ProviderCacheEntry = (Arc<dyn UpstreamProvider>, Instant);
 
-/// Negative-cache entries (unknown models) expire fast and never slide,
-/// so spraying bogus model names cannot grow the model_cache unbounded.
+/// Negative-cache entries (unknown models and invalid API keys) expire fast
+/// and never slide, so spraying bogus names or tokens cannot grow the caches
+/// that hold useful entries.
 pub(crate) const NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(30);
 
 /// Cap on concurrent uncached API-key lookups. Each one occupies a
@@ -45,6 +46,12 @@ pub struct AppState {
     /// Bounds concurrent uncached key lookups; see [`MAX_CONCURRENT_AUTH_LOOKUPS`].
     pub auth_lookup_permits: Arc<tokio::sync::Semaphore>,
     pub model_cache: Arc<DashMap<String, ModelCacheEntry>>,
+    /// Model names known to be unresolvable. Attacker-controlled and kept
+    /// separate for the same reason as `negative_key_cache`: sharing
+    /// `model_cache` let a flood of bogus model names fill the entry cap, after
+    /// which valid models were no longer cached either and every proxy request
+    /// fell through to a `spawn_blocking` DB lookup.
+    pub negative_model_cache: Arc<DashMap<String, Instant>>,
     pub provider_cache: Arc<DashMap<String, ProviderCacheEntry>>,
     pub ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
     /// Per `host:port` clients whose DNS is pinned to SSRF-verified IPs
@@ -89,6 +96,7 @@ impl AppState {
         let api_key_cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>> = Arc::new(DashMap::new());
         let negative_key_cache: Arc<DashMap<String, Instant>> = Arc::new(DashMap::new());
         let model_cache: Arc<DashMap<String, ModelCacheEntry>> = Arc::new(DashMap::new());
+        let negative_model_cache: Arc<DashMap<String, Instant>> = Arc::new(DashMap::new());
         let provider_cache: Arc<DashMap<String, ProviderCacheEntry>> = Arc::new(DashMap::new());
         let ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
         let pinned_clients: Arc<DashMap<String, (reqwest::Client, Instant)>> =
@@ -98,6 +106,7 @@ impl AppState {
             api_key_cache.clone(),
             negative_key_cache.clone(),
             model_cache.clone(),
+            negative_model_cache.clone(),
             provider_cache.clone(),
             ssrf_dns_cache.clone(),
             pinned_clients.clone(),
@@ -117,6 +126,7 @@ impl AppState {
             negative_key_cache,
             auth_lookup_permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_AUTH_LOOKUPS)),
             model_cache,
+            negative_model_cache,
             provider_cache,
             ssrf_dns_cache,
             pinned_clients,
@@ -135,6 +145,7 @@ fn spawn_caches_cleanup(
     api_key_cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>>,
     negative_key_cache: Arc<DashMap<String, Instant>>,
     model_cache: Arc<DashMap<String, ModelCacheEntry>>,
+    negative_model_cache: Arc<DashMap<String, Instant>>,
     provider_cache: Arc<DashMap<String, ProviderCacheEntry>>,
     ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
     pinned_clients: Arc<DashMap<String, (reqwest::Client, Instant)>>,
@@ -163,6 +174,9 @@ fn spawn_caches_cleanup(
                     // short TTL is what keeps a token flood from pinning hashes
                     // long after the token stops being offered.
                     negative_key_cache.retain(|_, v| v.elapsed() < NEGATIVE_CACHE_TTL);
+                    // Same for unknown model names: the short TTL bounds how
+                    // long a spray of bogus names occupies a slot.
+                    negative_model_cache.retain(|_, v| v.elapsed() < NEGATIVE_CACHE_TTL);
                     // Drop pinned SSRF clients past TTL so deleted providers and
                     // changed DNS eventually release their pooled connections.
                     pinned_clients.retain(|_, v| v.1.elapsed() < CACHE_TTL);
@@ -200,14 +214,7 @@ pub(crate) fn cleanup_caches(
     // compute before retain: calling len() inside the retain
     // closure would take a read lock while holding the write
     // lock and deadlock (parking_lot is not reentrant)
-    model_cache.retain(|_, v| {
-        let entry_ttl = if v.0.is_none() {
-            NEGATIVE_CACHE_TTL
-        } else {
-            ttl
-        };
-        v.1.elapsed() < entry_ttl
-    });
+    model_cache.retain(|_, v| v.1.elapsed() < ttl);
     let ttl = aggressive(provider_cache.len());
     provider_cache.retain(|_, v| v.1.elapsed() < ttl);
     let ttl = aggressive(ssrf_dns_cache.len());
@@ -278,6 +285,17 @@ mod tests {
         Instant::now()
     }
 
+    fn test_entry() -> (Model, Provider) {
+        (
+            create_test_model("m", "p"),
+            create_test_provider(
+                "p",
+                crate::db::ProviderType::OpenAICompat,
+                "http://127.0.0.1:8080",
+            ),
+        )
+    }
+
     #[test]
     fn handler_cache_patterns_insert_remove_retain() {
         // Mirrors handlers/providers.rs update/delete: provider_cache.remove
@@ -291,7 +309,7 @@ mod tests {
             "http://127.0.0.1:8080",
         );
         let model = create_test_model("m1", "p1");
-        model_cache.insert("m1".to_string(), (Some((model, provider)), fresh()));
+        model_cache.insert("m1".to_string(), ((model, provider), fresh()));
         provider_cache.insert("p1".to_string(), (Arc::new(MockProvider), fresh()));
         ssrf_cache.insert(
             "host1".to_string(),
@@ -304,7 +322,7 @@ mod tests {
             let ssrf_cache = ssrf_cache.clone();
             move || {
                 provider_cache.remove("p1");
-                model_cache.retain(|_, v| v.0.as_ref().is_none_or(|(_, p)| p.id != "p1"));
+                model_cache.retain(|_, v| v.0.1.id != "p1");
                 ssrf_cache.retain(|_, v| v.1.elapsed() < Duration::from_secs(300));
             }
         });
@@ -323,33 +341,31 @@ mod tests {
 
         api_key_cache.insert("k-old".to_string(), (test_api_key_info(), stale()));
         api_key_cache.insert("k-new".to_string(), (test_api_key_info(), fresh()));
-        // Negative model cache entry (unknown model) and a positive one.
-        model_cache.insert("neg".to_string(), (None, stale()));
         model_cache.insert(
             "pos-old".to_string(),
             (
-                Some((
+                (
                     create_test_model("m", "p"),
                     create_test_provider(
                         "p",
                         crate::db::ProviderType::OpenAICompat,
                         "http://127.0.0.1:8080",
                     ),
-                )),
+                ),
                 stale(),
             ),
         );
         model_cache.insert(
             "pos-new".to_string(),
             (
-                Some((
+                (
                     create_test_model("m2", "p"),
                     create_test_provider(
                         "p",
                         crate::db::ProviderType::OpenAICompat,
                         "http://127.0.0.1:8080",
                     ),
-                )),
+                ),
                 fresh(),
             ),
         );
@@ -382,7 +398,6 @@ mod tests {
 
         assert_eq!(api_key_cache.len(), 1);
         assert!(api_key_cache.contains_key("k-new"));
-        // Negative entries use NEGATIVE_CACHE_TTL; both old entries gone.
         assert_eq!(model_cache.len(), 1);
         assert!(model_cache.contains_key("pos-new"));
         assert_eq!(provider_cache.len(), 1);
@@ -408,7 +423,20 @@ mod tests {
             api_key_cache.insert(format!("k{i}"), (test_api_key_info(), mid_old));
         }
         // Other caches have only 1 entry each -- normal 300s TTL applies.
-        model_cache.insert("m0".to_string(), (None, mid_old));
+        model_cache.insert(
+            "m0".to_string(),
+            (
+                (
+                    create_test_model("m", "p"),
+                    create_test_provider(
+                        "p",
+                        crate::db::ProviderType::OpenAICompat,
+                        "http://127.0.0.1:8080",
+                    ),
+                ),
+                mid_old,
+            ),
+        );
         provider_cache.insert("p0".to_string(), (Arc::new(MockProvider), mid_old));
         ssrf_cache.insert(
             "d0".to_string(),
@@ -434,8 +462,8 @@ mod tests {
         // api_key_cache: len was 10 > threshold 9 -> aggressive TTL 150s ->
         // all 200s-old entries evicted.
         assert!(api_key_cache.is_empty());
-        // model_cache: negative entry, NEGATIVE_CACHE_TTL=30s -> evicted.
-        assert!(model_cache.is_empty());
+        // model_cache: len=1, normal 300s TTL, 200s < 300s -> survives.
+        assert_eq!(model_cache.len(), 1);
         // provider_cache: len=1, normal 300s TTL, 200s < 300s -> survives.
         assert_eq!(provider_cache.len(), 1);
         // ssrf_cache: len=1, normal 300s TTL, 200s < 300s -> survives.
@@ -482,7 +510,7 @@ mod tests {
                     for i in 0..200 {
                         let key = format!("w{i}");
                         api_key_cache.insert(key.clone(), (test_api_key_info(), fresh()));
-                        model_cache.insert(key.clone(), (None, fresh()));
+                        model_cache.insert(key.clone(), (test_entry(), fresh()));
                         provider_cache.insert(key.clone(), (Arc::new(MockProvider), fresh()));
                         ssrf_cache.insert(key.clone(), (vec!["1.2.3.4".parse().unwrap()], fresh()));
                         api_key_cache.remove(&key);
@@ -567,6 +595,7 @@ mod tests {
         assert!(state.api_key_cache.is_empty());
         assert!(state.negative_key_cache.is_empty());
         assert!(state.model_cache.is_empty());
+        assert!(state.negative_model_cache.is_empty());
         assert!(state.provider_cache.is_empty());
         assert!(state.ssrf_dns_cache.is_empty());
         assert!(state.pinned_clients.is_empty());

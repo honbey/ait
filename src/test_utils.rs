@@ -153,6 +153,7 @@ fn build_state(config: ConfigApp, dir: TempDir) -> (AppState, TempDir) {
         negative_key_cache: Arc::new(DashMap::new()),
         auth_lookup_permits: Arc::new(tokio::sync::Semaphore::new(64)),
         model_cache: Arc::new(DashMap::new()),
+        negative_model_cache: Arc::new(DashMap::new()),
         provider_cache: Arc::new(DashMap::new()),
         ssrf_dns_cache: Arc::new(DashMap::new()),
         pinned_clients: Arc::new(DashMap::new()),

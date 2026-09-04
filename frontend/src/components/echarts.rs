@@ -24,10 +24,11 @@ impl Chart {
     pub fn init(dom: &web_sys::HtmlElement) -> Option<Self> {
         let echarts = js_sys::Reflect::get(&js_sys::global(), &"echarts".into()).ok()?;
 
-        let get_instance: js_sys::Function = js_sys::Reflect::get(&echarts, &"getInstanceByDom".into())
-            .ok()?
-            .dyn_into()
-            .ok()?;
+        let get_instance: js_sys::Function =
+            js_sys::Reflect::get(&echarts, &"getInstanceByDom".into())
+                .ok()?
+                .dyn_into()
+                .ok()?;
         if let Some(existing) = get_instance
             .call1(&JsValue::UNDEFINED, dom)
             .ok()
@@ -43,25 +44,30 @@ impl Chart {
         Some(Chart(init.call1(&JsValue::UNDEFINED, dom).ok()?))
     }
 
+    /// Best effort, matching `init`: a chart object that lacks the method (a
+    /// mismatched ECharts build) skips the call instead of panicking inside an
+    /// `Effect`, which would leave the component tree half-rendered.
+    fn call_method(&self, name: &str, args: &[JsValue]) {
+        let Ok(method) = js_sys::Reflect::get(&self.0, &name.into()) else {
+            return;
+        };
+        let Ok(method) = method.dyn_into::<js_sys::Function>() else {
+            return;
+        };
+        let args = js_sys::Array::from_iter(args.iter().cloned());
+        let _ = method.apply(&self.0, &args);
+    }
+
     pub fn set_option(&self, option: &JsValue) {
-        let set_option: js_sys::Function = js_sys::Reflect::get(&self.0, &"setOption".into())
-            .expect("chart.setOption not found")
-            .unchecked_into();
-        let _ = set_option.call1(&self.0, option);
+        self.call_method("setOption", std::slice::from_ref(option));
     }
 
     pub fn dispose(&self) {
-        let dispose: js_sys::Function = js_sys::Reflect::get(&self.0, &"dispose".into())
-            .expect("chart.dispose not found")
-            .unchecked_into();
-        let _ = dispose.call0(&self.0);
+        self.call_method("dispose", &[]);
     }
 
     pub fn resize(&self) {
-        let resize: js_sys::Function = js_sys::Reflect::get(&self.0, &"resize".into())
-            .expect("chart.resize not found")
-            .unchecked_into();
-        let _ = resize.call0(&self.0);
+        self.call_method("resize", &[]);
     }
 }
 
@@ -110,7 +116,11 @@ async fn ensure_echarts_loaded() -> bool {
 
     let ok = JsFuture::from(promise).await.is_ok();
     if !ok {
-        ECHARTS_READY.with(|cell| *cell.borrow_mut() = None);
+        // Keep the settled promise cached instead of resetting the cell: the
+        // ResizeObserver retries on every resize event, and a reset would
+        // inject another <script> (leaking two Closures) per attempt. A failed
+        // load is final for this page — re-awaiting just reports it again.
+        leptos::logging::warn!("echarts failed to load; charts stay unrendered");
     }
     ok
 }

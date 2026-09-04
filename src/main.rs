@@ -316,8 +316,14 @@ fn build_app(state: app::AppState) -> Router {
         .route("/responses", post(responses))
         .route("/models", get(list_models_proxy))
         // Innermost-first: the body limit rejects oversized bodies before the
-        // handler parses them, and access_log wraps auth so that rejected
-        // requests still appear in the audit trail.
+        // handler parses them, access_log wraps auth so that rejected
+        // requests still appear in the audit trail, and the limit sits inside
+        // access_log so a 413 is audited (same as the admin API).
+        .layer(if state.config.proxy.max_request_body_bytes == 0 {
+            DefaultBodyLimit::disable()
+        } else {
+            DefaultBodyLimit::max(state.config.proxy.max_request_body_bytes as usize)
+        })
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -326,11 +332,6 @@ fn build_app(state: app::AppState) -> Router {
             state.clone(),
             access_log_middleware,
         ))
-        .layer(if state.config.proxy.max_request_body_bytes == 0 {
-            DefaultBodyLimit::disable()
-        } else {
-            DefaultBodyLimit::max(state.config.proxy.max_request_body_bytes as usize)
-        })
         .fallback(|| async { not_found("404 not found") });
 
     // Serve frontend static files

@@ -101,6 +101,9 @@ pub async fn create_model(
         .map_err(internal_error)?
         .map_err(|e| AitError::from_db_error(e).into_response())?;
 
+    // The name may have been cached as unknown while it did not exist yet;
+    // without this the new model would keep 404ing until the entry expired.
+    state.negative_model_cache.remove(&inserted.name);
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
@@ -195,6 +198,9 @@ pub async fn update_model(
         .map_err(|e| AitError::from_db_error(e).into_response())?;
 
     state.model_cache.remove(&model_name);
+    // Re-enabling a disabled model has to clear the "unknown" verdict too,
+    // otherwise the model stays invisible for the rest of the negative TTL.
+    state.negative_model_cache.remove(&model_name);
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,

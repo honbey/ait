@@ -23,8 +23,9 @@ use crate::utils::mask_sensitive_value;
 /// not cached at all. `DashMap::len` is approximate under concurrency, so a
 /// cache stays bounded within a small multiple of `cache_max_entries`.
 ///
-/// Shared by the model cache (keys come from request bodies and are therefore
-/// attacker-controlled) and the provider cache, so both enforce the cap.
+/// Shared by the model cache and the negative model cache (keys come from
+/// request bodies and are therefore attacker-controlled) and the provider
+/// cache, so all three enforce the cap.
 fn insert_capped<V>(map: &dashmap::DashMap<String, V>, key: &str, entry: V, max_entries: usize) {
     if map.len() < max_entries {
         map.insert(key.to_string(), entry);
@@ -271,16 +272,19 @@ pub async fn proxy_request(
                     insert_capped(
                         &state.model_cache,
                         model_name,
-                        (Some((m.clone(), p.clone())), Instant::now()),
+                        ((m.clone(), p.clone()), Instant::now()),
                         max_entries,
                     );
                     Ok((m, p))
                 }
                 Ok(Ok(None)) => {
+                    // Unknown models go to their own bounded cache: sharing
+                    // `model_cache` let a flood of bogus names fill the entry
+                    // cap, after which valid models stopped being cached too.
                     insert_capped(
-                        &state.model_cache,
+                        &state.negative_model_cache,
                         model_name,
-                        (None, Instant::now()),
+                        Instant::now(),
                         max_entries,
                     );
                     Err(not_found(format!(
@@ -293,30 +297,30 @@ pub async fn proxy_request(
             }
         }
 
+        // Known-unknown first: it costs one lookup and keeps the negative
+        // verdict out of `model_cache` entirely.
+        let negative = state
+            .negative_model_cache
+            .get(model_name)
+            .is_some_and(|seen| seen.elapsed() < NEGATIVE_CACHE_TTL);
+        if negative {
+            return Err(not_found(format!(
+                "Model '{}' not found or disabled",
+                model_name
+            )));
+        }
+
         let cached = state.model_cache.get_mut(model_name).and_then(|mut entry| {
-            let ttl = if entry.0.is_none() {
-                NEGATIVE_CACHE_TTL
-            } else {
-                CACHE_TTL
-            };
-            if entry.1.elapsed() < ttl {
-                // slide only positive entries; negative ones expire for real
-                if entry.0.is_some() {
-                    entry.1 = Instant::now();
-                }
+            if entry.1.elapsed() < CACHE_TTL {
+                // slide positive entries so hot models stay cached
+                entry.1 = Instant::now();
                 Some(entry.0.clone())
             } else {
                 None
             }
         });
         match cached {
-            Some(Some((m, p))) => (m, p),
-            Some(None) => {
-                return Err(not_found(format!(
-                    "Model '{}' not found or disabled",
-                    model_name
-                )));
-            }
+            Some((m, p)) => (m, p),
             None => resolve(&state, model_name).await?,
         }
     };
@@ -531,12 +535,12 @@ fn count_prompt_tokens(body_len: usize, divisor: u64) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::ModelCacheEntry;
     use crate::db::{ApiKeyContext, RequestId};
     use crate::providers::UpstreamProvider;
     use crate::test_utils::{
-        create_test_state, create_test_state_dlp, mock_upstream_redirect, mock_upstream_server,
-        mock_upstream_sse_server, seed_provider_and_model, send_request, test_router,
+        create_test_provider, create_test_state, create_test_state_dlp, mock_upstream_redirect,
+        mock_upstream_server, mock_upstream_sse_server, seed_provider_and_model, send_request,
+        test_router,
     };
     use axum::Extension;
     use axum::http::Method;
@@ -545,20 +549,20 @@ mod tests {
 
     #[test]
     fn insert_capped_respects_cap() {
-        let map: dashmap::DashMap<String, ModelCacheEntry> = dashmap::DashMap::new();
-        let entry = (None, Instant::now());
+        let map: dashmap::DashMap<String, Instant> = dashmap::DashMap::new();
+        let entry = Instant::now();
         for i in 0..5 {
-            insert_capped(&map, &format!("m{i}"), entry.clone(), 5);
+            insert_capped(&map, &format!("m{i}"), entry, 5);
         }
         assert_eq!(map.len(), 5);
-        insert_capped(&map, "m6", entry.clone(), 5);
+        insert_capped(&map, "m6", entry, 5);
         assert_eq!(map.len(), 5);
     }
 
     #[test]
     fn insert_capped_zero_cap_caches_nothing() {
-        let map: dashmap::DashMap<String, ModelCacheEntry> = dashmap::DashMap::new();
-        insert_capped(&map, "m0", (None, Instant::now()), 0);
+        let map: dashmap::DashMap<String, Instant> = dashmap::DashMap::new();
+        insert_capped(&map, "m0", Instant::now(), 0);
         assert!(map.is_empty());
     }
 
@@ -717,6 +721,131 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status, axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn bogus_model_names_do_not_evict_resolved_models() {
+        // Unknown names must land in `negative_model_cache` only: when they
+        // shared `model_cache`, filling the cap with bogus names stopped
+        // valid models from being cached at all.
+        let (mut state, _dir) = create_test_state();
+        let (base_url, _captured) = mock_upstream_server(
+            serde_json::json!({
+                "id": "chatcmpl-1",
+                "choices": [{"message": {"role": "assistant", "content": "hello"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+            }),
+            axum::http::StatusCode::OK,
+        );
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            &base_url,
+            "test-model",
+        );
+        state.config.server.cache_max_entries = 4;
+        let router = test_router(state.clone());
+
+        for i in 0..4 {
+            let resp = send_request(
+                &router,
+                Method::POST,
+                "/v1/chat/completions",
+                Some(&raw_key),
+                Some(serde_json::json!({
+                    "model": format!("bogus-{i}"),
+                    "messages": [{"role": "user", "content": "hi"}],
+                })),
+            )
+            .await;
+            assert_eq!(resp.status, axum::http::StatusCode::NOT_FOUND);
+        }
+
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::OK);
+
+        assert!(
+            state.model_cache.contains_key("test-model"),
+            "the resolved model must still be cached"
+        );
+        assert_eq!(state.model_cache.len(), 1);
+        assert_eq!(state.negative_model_cache.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn creating_a_model_clears_its_negative_cache_entry() {
+        // A name requested before it existed must not stay 404 after it is
+        // created; the negative entry would outlive it by up to its TTL.
+        let (state, _dir) = create_test_state();
+        let (base_url, _captured) = mock_upstream_server(
+            serde_json::json!({
+                "id": "chatcmpl-1",
+                "choices": [{"message": {"role": "assistant", "content": "hello"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+            }),
+            axum::http::StatusCode::OK,
+        );
+        // A UUID id: the create-model endpoint rejects anything else.
+        let provider = create_test_provider(
+            "550e8400-e29b-41d4-a716-446655440000",
+            crate::db::ProviderType::OpenAICompat,
+            &base_url,
+        );
+        state.db.insert_provider(provider).unwrap();
+        let (_stored, raw_key) = state.db.insert_api_key("test-key", None).unwrap();
+        let router = test_router(state.clone());
+
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "late-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::NOT_FOUND);
+        assert!(state.negative_model_cache.contains_key("late-model"));
+
+        let created = send_request(
+            &router,
+            Method::POST,
+            "/api/models",
+            None,
+            Some(serde_json::json!({
+                "name": "late-model",
+                "provider_id": "550e8400-e29b-41d4-a716-446655440000",
+                "upstream_model": "upstream-model",
+                "enabled": true,
+            })),
+        )
+        .await;
+        assert_eq!(created.status, axum::http::StatusCode::CREATED);
+
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "late-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::OK);
     }
 
     #[tokio::test]
