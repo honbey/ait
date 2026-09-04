@@ -3,11 +3,17 @@ use rusqlite::{Connection, Row, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tracing::warn;
 use uuid::Uuid;
 
 use super::models::*;
+
+/// Number of read-only connections opened alongside the writer. WAL allows
+/// concurrent readers, so each additional reader removes one queue point from
+/// the read path without touching write serialization.
+const READER_POOL_SIZE: usize = 4;
 
 pub(crate) fn hash_key(key: &str) -> String {
     let mut hasher = Sha256::new();
@@ -15,8 +21,13 @@ pub(crate) fn hash_key(key: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// SQLite access: one writer plus a small pool of readers. WAL mode lets the
+/// readers run concurrently with the writer and with each other, so admin
+/// reads no longer queue behind proxy-path writes on a single mutex.
 pub struct Database {
-    conn: Arc<Mutex<Connection>>,
+    writer: Arc<Mutex<Connection>>,
+    readers: Vec<Arc<Mutex<Connection>>>,
+    next_reader: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -149,13 +160,21 @@ fn create_tables(conn: &Connection) -> Result<(), DbError> {
 // ---------------------------------------------------------------------------
 
 impl Database {
-    /// Acquire the connection lock, recovering from a poisoned mutex.
+    /// Acquire the writer, recovering from a poisoned mutex.
     ///
     /// Every DB operation runs inside `run_blocking`, so a panic there is
     /// contained; without this recovery the poisoned mutex would make every
     /// later request fail for the lifetime of the process.
-    fn lock_conn(&self) -> MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap_or_else(|e| e.into_inner())
+    fn lock_writer(&self) -> MutexGuard<'_, Connection> {
+        self.writer.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Acquire a reader, round-robining across the pool.
+    fn lock_reader(&self) -> MutexGuard<'_, Connection> {
+        let index = self.next_reader.fetch_add(1, Ordering::Relaxed) % self.readers.len();
+        self.readers[index]
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -163,12 +182,33 @@ impl Database {
             fs::create_dir_all(parent)?;
         }
 
-        let conn = Connection::open(path)?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
-        create_tables(&conn)?;
+        // The writer is opened first: it switches the file into WAL mode, and
+        // readers opened afterwards pick that mode up from the database header.
+        let writer = Connection::open(path)?;
+        writer.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
+        )?;
+        create_tables(&writer)?;
+
+        let readers: Vec<Connection> = (0..READER_POOL_SIZE)
+            .map(
+                |_| -> Result<Connection, Box<dyn std::error::Error + Send + Sync>> {
+                    let conn = Connection::open(path)?;
+                    // foreign_keys is per-connection; busy_timeout keeps a WAL
+                    // checkpoint from surfacing as SQLITE_BUSY on a reader.
+                    conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
+                    Ok(conn)
+                },
+            )
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            writer: Arc::new(Mutex::new(writer)),
+            readers: readers
+                .into_iter()
+                .map(|c| Arc::new(Mutex::new(c)))
+                .collect(),
+            next_reader: AtomicUsize::new(0),
         })
     }
 
@@ -182,7 +222,7 @@ impl Database {
         provider.created_at = now;
         provider.updated_at = now;
 
-        let conn = self.lock_conn();
+        let conn = self.lock_writer();
         conn.execute(
             "INSERT INTO providers (id, name, type, base_url, api_key, enabled, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -203,11 +243,16 @@ impl Database {
     }
 
     pub fn update_provider(&self, updates: &ProviderUpdate) -> Result<Provider, DbError> {
-        let conn = self.lock_conn();
+        let mut conn = self.lock_writer();
         let now = Utc::now();
+        // Read-modify-write must be atomic: two concurrent PATCHes would
+        // otherwise last-write-win over each other's fields.
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(to_storage)?;
 
         let mut provider = {
-            let result = conn.query_row(
+            let result = tx.query_row(
                 "SELECT id, name, type, base_url, api_key, enabled, created_at, updated_at
                  FROM providers WHERE id = ?1",
                 params![updates.id],
@@ -244,7 +289,7 @@ impl Database {
         }
         provider.updated_at = now;
 
-        conn.execute(
+        tx.execute(
             "UPDATE providers SET name=?1, type=?2, base_url=?3, api_key=?4, enabled=?5, updated_at=?6
              WHERE id=?7",
             params![
@@ -258,12 +303,13 @@ impl Database {
             ],
         )
         .map_err(to_storage)?;
+        tx.commit().map_err(to_storage)?;
 
         Ok(provider)
     }
 
     pub fn delete_provider(&self, id: &str) -> Result<bool, DbError> {
-        let conn = self.lock_conn();
+        let conn = self.lock_writer();
         let rows = conn
             .execute("DELETE FROM providers WHERE id = ?1", params![id])
             .map_err(to_storage)?;
@@ -271,7 +317,7 @@ impl Database {
     }
 
     pub fn get_provider(&self, id: &str) -> Result<Option<Provider>, DbError> {
-        let conn = self.lock_conn();
+        let conn = self.lock_reader();
         let result = conn.query_row(
             "SELECT id, name, type, base_url, api_key, enabled, created_at, updated_at
              FROM providers WHERE id = ?1",
@@ -286,7 +332,7 @@ impl Database {
     }
 
     pub fn count_providers(&self) -> Result<usize, DbError> {
-        let conn = self.lock_conn();
+        let conn = self.lock_reader();
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))
             .map_err(to_storage)?;
@@ -294,7 +340,7 @@ impl Database {
     }
 
     pub fn list_providers(&self) -> Result<Vec<Provider>, DbError> {
-        let conn = self.lock_conn();
+        let conn = self.lock_reader();
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, type, base_url, api_key, enabled, created_at, updated_at
@@ -323,7 +369,7 @@ impl Database {
         model.created_at = now;
         model.updated_at = now;
 
-        let mut conn = self.lock_conn();
+        let mut conn = self.lock_writer();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(to_storage)?;
@@ -369,11 +415,14 @@ impl Database {
     }
 
     pub fn update_model(&self, updates: &ModelUpdate) -> Result<Model, DbError> {
-        let conn = self.lock_conn();
+        let mut conn = self.lock_writer();
         let now = Utc::now();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(to_storage)?;
 
         let mut model = {
-            let result = conn.query_row(
+            let result = tx.query_row(
                 "SELECT id, name, provider_id, upstream_model, enabled, created_at, updated_at
                  FROM models WHERE name = ?1",
                 params![updates.name],
@@ -402,7 +451,7 @@ impl Database {
         }
         model.updated_at = now;
 
-        conn.execute(
+        tx.execute(
             "UPDATE models SET provider_id=?1, upstream_model=?2, enabled=?3, updated_at=?4
              WHERE name=?5",
             params![
@@ -414,12 +463,13 @@ impl Database {
             ],
         )
         .map_err(to_storage)?;
+        tx.commit().map_err(to_storage)?;
 
         Ok(model)
     }
 
     pub fn delete_model(&self, name: &str) -> Result<bool, DbError> {
-        let conn = self.lock_conn();
+        let conn = self.lock_writer();
         let rows = conn
             .execute("DELETE FROM models WHERE name = ?1", params![name])
             .map_err(to_storage)?;
@@ -427,7 +477,7 @@ impl Database {
     }
 
     pub fn get_model(&self, name: &str) -> Result<Option<Model>, DbError> {
-        let conn = self.lock_conn();
+        let conn = self.lock_reader();
         let result = conn.query_row(
             "SELECT id, name, provider_id, upstream_model, enabled, created_at, updated_at
              FROM models WHERE name = ?1",
@@ -442,7 +492,7 @@ impl Database {
     }
 
     pub fn count_models(&self) -> Result<usize, DbError> {
-        let conn = self.lock_conn();
+        let conn = self.lock_reader();
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM models", [], |row| row.get(0))
             .map_err(to_storage)?;
@@ -450,7 +500,7 @@ impl Database {
     }
 
     pub fn list_models(&self) -> Result<Vec<Model>, DbError> {
-        let conn = self.lock_conn();
+        let conn = self.lock_reader();
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, provider_id, upstream_model, enabled, created_at, updated_at
@@ -471,7 +521,7 @@ impl Database {
     // --- resolve_model: hot path ---
 
     pub fn resolve_model(&self, model_name: &str) -> Result<Option<(Model, Provider)>, DbError> {
-        let conn = self.lock_conn();
+        let conn = self.lock_reader();
         let result = conn.query_row(
             "SELECT m.id, m.name, m.provider_id, m.upstream_model, m.enabled, m.created_at, m.updated_at,
                     p.id, p.name, p.type, p.base_url, p.api_key, p.enabled, p.created_at, p.updated_at
@@ -536,7 +586,7 @@ impl Database {
         let now_ts = now.timestamp();
         let expires_ts = expires_at.map(|dt| dt.timestamp());
 
-        let mut conn = self.lock_conn();
+        let mut conn = self.lock_writer();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(to_storage)?;
@@ -574,7 +624,7 @@ impl Database {
     }
 
     pub fn list_api_keys(&self) -> Result<Vec<ApiKey>, DbError> {
-        let conn = self.lock_conn();
+        let conn = self.lock_reader();
         let mut stmt = conn
             .prepare(
                 "SELECT id, key_hash, display, name, created_at, updated_at, enabled, expires_at
@@ -594,7 +644,7 @@ impl Database {
 
     pub fn get_api_key_by_raw(&self, api_key: &str) -> Result<Option<ApiKeyInfo>, DbError> {
         let api_hash = hash_key(api_key);
-        let conn = self.lock_conn();
+        let conn = self.lock_reader();
         let result = conn.query_row(
             "SELECT id, name, enabled, expires_at, created_at
              FROM api_keys WHERE key_hash = ?1",
@@ -609,7 +659,7 @@ impl Database {
     }
 
     pub fn delete_api_key(&self, key_id: &str) -> Result<String, DbError> {
-        let conn = self.lock_conn();
+        let conn = self.lock_writer();
 
         let hash: String = conn
             .query_row(
@@ -631,11 +681,14 @@ impl Database {
     }
 
     pub fn update_api_key(&self, updates: &ApiKeyUpdate) -> Result<(ApiKey, String), DbError> {
-        let conn = self.lock_conn();
+        let mut conn = self.lock_writer();
         let now = Utc::now();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(to_storage)?;
 
         let mut api_key = {
-            let result = conn.query_row(
+            let result = tx.query_row(
                 "SELECT id, key_hash, display, name, created_at, updated_at, enabled, expires_at
                  FROM api_keys WHERE id = ?1",
                 params![updates.id],
@@ -663,7 +716,7 @@ impl Database {
         };
         api_key.updated_at = now;
 
-        conn.execute(
+        tx.execute(
             "UPDATE api_keys SET name = ?1, enabled = ?2, expires_at = ?3, updated_at = ?4 WHERE id = ?5",
             params![
                 api_key.name,
@@ -674,6 +727,7 @@ impl Database {
             ],
         )
         .map_err(to_storage)?;
+        tx.commit().map_err(to_storage)?;
 
         let hash = api_key.key.clone();
         Ok((api_key, hash))

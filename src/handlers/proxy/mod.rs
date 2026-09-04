@@ -201,7 +201,10 @@ pub async fn proxy_request(
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     let start = Instant::now();
 
-    if body_len as u64 > state.config.proxy.max_request_body_bytes {
+    // Matches the transport layer: `0` disables the cap entirely rather than
+    // rejecting every non-empty body.
+    let max_request_body = state.config.proxy.max_request_body_bytes;
+    if max_request_body > 0 && body_len as u64 > max_request_body {
         return Err(AitError::bad_request("request body exceeds max allowed size").into_response());
     }
 

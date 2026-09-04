@@ -225,6 +225,11 @@ fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer 
         .allow_credentials(allow_credentials)
 }
 
+/// Admin API payloads are small (provider / model / api-key metadata). Cap the
+/// body so an oversized POST is rejected instead of being buffered in full;
+/// the limit is checked inside the access-log layer so a 413 is still audited.
+const ADMIN_MAX_BODY_BYTES: usize = 64 * 1024;
+
 /// Relative path of the built frontend bundle inside a deployment root.
 const FRONTEND_DIST: &str = "frontend/dist";
 
@@ -281,6 +286,7 @@ fn build_app(state: app::AppState) -> Router {
         .route("/data/token-dist", get(token_dist))
         // Proxy logs
         .route("/data/proxy-log", get(list_proxy_logs))
+        .layer(DefaultBodyLimit::max(ADMIN_MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             access_log_middleware,

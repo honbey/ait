@@ -113,37 +113,34 @@ pub async fn overview_stats(
 mod tests {
     use super::*;
     use crate::test_utils::{
-        create_test_state_fast_logs, make_proxy_event, send_request, test_router,
+        create_test_state_fast_logs, make_proxy_event, send_request, send_request_from_peer,
+        test_router,
     };
     use axum::Router;
-    use axum::body::Body;
-    use axum::extract::ConnectInfo;
-    use axum::http::Method;
-    use axum::http::Request;
+    use axum::http::{HeaderName, Method};
     use chrono::Utc;
     use std::net::SocketAddr;
-    use tower::ServiceExt;
+    use tempfile::TempDir;
 
-    async fn setup() -> Router {
-        let (state, _dir) = create_test_state_fast_logs();
-        test_router(state)
+    async fn setup() -> (Router, TempDir) {
+        let (state, dir) = create_test_state_fast_logs();
+        (test_router(state), dir)
     }
 
     async fn stats_with_remote_user(header_value: Option<&str>) -> serde_json::Value {
-        let router = setup().await;
-        let mut builder = Request::builder().method(Method::GET).uri("/api/stats");
-        if let Some(v) = header_value {
-            builder = builder.header(REMOTE_USER_HEADER, v);
-        }
-        let mut request = builder.body(Body::empty()).unwrap();
-        request
-            .extensions_mut()
-            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-        let response = router.clone().oneshot(request).await.unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        let (router, _dir) = setup().await;
+        let headers = header_value
+            .map(|v| vec![(HeaderName::from_static(REMOTE_USER_HEADER), v)])
+            .unwrap_or_default();
+        send_request_from_peer(
+            &router,
+            Method::GET,
+            "/api/stats",
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            &headers,
+        )
+        .await
+        .json
     }
 
     #[tokio::test]
@@ -160,26 +157,22 @@ mod tests {
 
     #[tokio::test]
     async fn overview_stats_ignores_remote_user_from_untrusted_peer() {
-        let router = setup().await;
-        let mut builder = Request::builder().method(Method::GET).uri("/api/stats");
-        builder = builder.header(REMOTE_USER_HEADER, "attacker");
-        let mut request = builder.body(Body::empty()).unwrap();
+        let (router, _dir) = setup().await;
         // 10.0.0.1 is NOT in trusted_proxies (test_config uses 127.0.0.1, ::1)
-        request
-            .extensions_mut()
-            .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 0))));
-        let response = router.oneshot(request).await.unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value =
-            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-        assert_eq!(json["username"], serde_json::Value::Null);
+        let resp = send_request_from_peer(
+            &router,
+            Method::GET,
+            "/api/stats",
+            SocketAddr::from(([10, 0, 0, 1], 0)),
+            &[(HeaderName::from_static(REMOTE_USER_HEADER), "attacker")],
+        )
+        .await;
+        assert_eq!(resp.json["username"], serde_json::Value::Null);
     }
 
     #[tokio::test]
     async fn overview_stats_zero_without_data() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(
             &router,
             Method::GET,
@@ -223,13 +216,6 @@ mod tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        let range = crate::handlers::analytics::validate_ts_range(
-            None,
-            None,
-            state.config.log.retention_days,
-        )
-        .unwrap();
-        let _ = range;
         let router = test_router(state);
 
         // Explicit range with headroom: the default end (now, second precision)
@@ -272,7 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn overview_stats_rejects_invalid_timestamps() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(
             &router,
             Method::GET,

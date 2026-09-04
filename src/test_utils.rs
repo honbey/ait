@@ -149,6 +149,8 @@ fn build_state(config: ConfigApp, dir: TempDir) -> (AppState, TempDir) {
         start_time: Utc::now(),
         shutdown_token: CancellationToken::new(),
         api_key_cache: Arc::new(DashMap::new()),
+        negative_key_cache: Arc::new(DashMap::new()),
+        auth_lookup_permits: Arc::new(tokio::sync::Semaphore::new(64)),
         model_cache: Arc::new(DashMap::new()),
         provider_cache: Arc::new(DashMap::new()),
         ssrf_dns_cache: Arc::new(DashMap::new()),
@@ -254,15 +256,17 @@ pub struct TestResponse {
     pub headers: HeaderMap,
 }
 
-/// Send a request through the router. `bearer` is a raw API key sent as a
-/// Bearer token. A fake client IP is always injected because the client IP
-/// extraction requires `ConnectInfo`.
-pub async fn send_request(
+/// Shared request plumbing: builds a request with the given peer address and
+/// extra headers, sends it through the router, and parses the response.
+#[allow(clippy::too_many_arguments)]
+async fn send(
     router: &Router,
     method: Method,
     uri: &str,
     bearer: Option<&str>,
     body: Option<Value>,
+    peer: SocketAddr,
+    extra_headers: &[(HeaderName, &str)],
 ) -> TestResponse {
     let mut builder = Request::builder().method(method).uri(uri);
     if let Some(bearer) = bearer {
@@ -271,11 +275,12 @@ pub async fn send_request(
     if body.is_some() {
         builder = builder.header(header::CONTENT_TYPE, "application/json");
     }
+    for (name, value) in extra_headers {
+        builder = builder.header(name, *value);
+    }
     let body = body.map(|b| b.to_string()).unwrap_or_default();
     let mut request = builder.body(Body::from(body)).unwrap();
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+    request.extensions_mut().insert(ConnectInfo(peer));
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let headers = response.headers().clone();
@@ -294,6 +299,28 @@ pub async fn send_request(
     }
 }
 
+/// Send a request through the router. `bearer` is a raw API key sent as a
+/// Bearer token. A fake client IP is always injected because the client IP
+/// extraction requires `ConnectInfo`.
+pub async fn send_request(
+    router: &Router,
+    method: Method,
+    uri: &str,
+    bearer: Option<&str>,
+    body: Option<Value>,
+) -> TestResponse {
+    send(
+        router,
+        method,
+        uri,
+        bearer,
+        body,
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        &[],
+    )
+    .await
+}
+
 /// Like `send_request` but with extra custom headers (e.g. `x-forwarded-for`).
 pub async fn send_request_with_headers(
     router: &Router,
@@ -303,37 +330,28 @@ pub async fn send_request_with_headers(
     body: Option<Value>,
     extra_headers: &[(HeaderName, &str)],
 ) -> TestResponse {
-    let mut builder = Request::builder().method(method).uri(uri);
-    if let Some(bearer) = bearer {
-        builder = builder.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
-    }
-    if body.is_some() {
-        builder = builder.header(header::CONTENT_TYPE, "application/json");
-    }
-    for (name, value) in extra_headers {
-        builder = builder.header(name, *value);
-    }
-    let body = body.map(|b| b.to_string()).unwrap_or_default();
-    let mut request = builder.body(Body::from(body)).unwrap();
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-    let response = router.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let headers = response.headers().clone();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json = if bytes.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
-    };
-    TestResponse {
-        status,
-        json,
-        headers,
-    }
+    send(
+        router,
+        method,
+        uri,
+        bearer,
+        body,
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        extra_headers,
+    )
+    .await
+}
+
+/// Like `send_request_with_headers` but with a caller-specified peer address,
+/// for tests exercising trusted-proxy vs. direct-peer client IP extraction.
+pub async fn send_request_from_peer(
+    router: &Router,
+    method: Method,
+    uri: &str,
+    peer: SocketAddr,
+    extra_headers: &[(HeaderName, &str)],
+) -> TestResponse {
+    send(router, method, uri, None, None, peer, extra_headers).await
 }
 
 /// Run a blocking closure on a separate thread and fail the test if it does

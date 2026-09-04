@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use reactive_graph::traits::{Get, Read, ReadUntracked, Set, Write};
+use reactive_graph::traits::{Get, IsDisposed, Read, ReadUntracked, Set, Write};
 use reactive_stores::{Field, Patch, Store};
 
 use crate::api;
@@ -407,8 +407,16 @@ fn ApiKeyFormModal(
         match save_action.value().get() {
             Some(Ok(api_key)) => {
                 consumed.set(true);
-                if let Some(field) = edit_model {
-                    field.patch(api_key);
+                if edit_model.is_some() {
+                    // A concurrent refetch re-patches the keyed store and can
+                    // dispose the Field the modal captured. Without the check
+                    // the patch is dropped silently while the toast below still
+                    // reports success, so fall back to a reload.
+                    if let Some(field) = edit_model.filter(|f| !f.is_disposed()) {
+                        field.patch(api_key);
+                    } else {
+                        on_refetch();
+                    }
                 } else {
                     created_raw_key.set(Some((api_key.display.clone(), api_key.name.clone())));
                     // Decision: refetch the list after create instead of masking

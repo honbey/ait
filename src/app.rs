@@ -21,6 +21,12 @@ type ProviderCacheEntry = (Arc<dyn UpstreamProvider>, Instant);
 /// so spraying bogus model names cannot grow the model_cache unbounded.
 pub(crate) const NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(30);
 
+/// Cap on concurrent uncached API-key lookups. Each one occupies a
+/// `spawn_blocking` thread and a SQLite connection, so an unbounded flood of
+/// distinct invalid tokens would starve every other DB operation. Cached hits
+/// (valid or already-rejected tokens) never reach this gate.
+const MAX_CONCURRENT_AUTH_LOOKUPS: usize = 64;
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: ConfigApp,
@@ -29,7 +35,15 @@ pub struct AppState {
     pub log_manager: LogManager,
     pub start_time: DateTime<Utc>,
     pub shutdown_token: CancellationToken,
-    pub api_key_cache: Arc<DashMap<String, (Option<ApiKeyInfo>, Instant)>>,
+    pub api_key_cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>>,
+    /// Hashes of tokens known to be invalid. Attacker-controlled, so it gets
+    /// its own bounded map: sharing `api_key_cache` let a flood of distinct
+    /// bogus tokens fill the entry cap, after which neither negatives nor
+    /// legitimate keys were cached and every request fell through to the
+    /// single SQLite connection.
+    pub negative_key_cache: Arc<DashMap<String, Instant>>,
+    /// Bounds concurrent uncached key lookups; see [`MAX_CONCURRENT_AUTH_LOOKUPS`].
+    pub auth_lookup_permits: Arc<tokio::sync::Semaphore>,
     pub model_cache: Arc<DashMap<String, ModelCacheEntry>>,
     pub provider_cache: Arc<DashMap<String, ProviderCacheEntry>>,
     pub ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
@@ -72,8 +86,8 @@ impl AppState {
         // will exit immediately without orphaned background tasks.
         let log_manager = LogManager::new(&config.log).map_err(AppInitError::LogManager)?;
 
-        let api_key_cache: Arc<DashMap<String, (Option<ApiKeyInfo>, Instant)>> =
-            Arc::new(DashMap::new());
+        let api_key_cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>> = Arc::new(DashMap::new());
+        let negative_key_cache: Arc<DashMap<String, Instant>> = Arc::new(DashMap::new());
         let model_cache: Arc<DashMap<String, ModelCacheEntry>> = Arc::new(DashMap::new());
         let provider_cache: Arc<DashMap<String, ProviderCacheEntry>> = Arc::new(DashMap::new());
         let ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
@@ -82,6 +96,7 @@ impl AppState {
         let dlp = DlpScanner::new(&config.security.dlp);
         spawn_caches_cleanup(
             api_key_cache.clone(),
+            negative_key_cache.clone(),
             model_cache.clone(),
             provider_cache.clone(),
             ssrf_dns_cache.clone(),
@@ -99,6 +114,8 @@ impl AppState {
             start_time: Utc::now(),
             shutdown_token,
             api_key_cache,
+            negative_key_cache,
+            auth_lookup_permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_AUTH_LOOKUPS)),
             model_cache,
             provider_cache,
             ssrf_dns_cache,
@@ -115,7 +132,8 @@ impl AppState {
 /// enforces it as a hard cap at insertion time (see insert_model_cache).
 #[allow(clippy::too_many_arguments)]
 fn spawn_caches_cleanup(
-    api_key_cache: Arc<DashMap<String, (Option<ApiKeyInfo>, Instant)>>,
+    api_key_cache: Arc<DashMap<String, (ApiKeyInfo, Instant)>>,
+    negative_key_cache: Arc<DashMap<String, Instant>>,
     model_cache: Arc<DashMap<String, ModelCacheEntry>>,
     provider_cache: Arc<DashMap<String, ProviderCacheEntry>>,
     ssrf_dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
@@ -141,6 +159,10 @@ fn spawn_caches_cleanup(
                     }).await {
                         tracing::warn!("Cache cleanup error: {e}");
                     }
+                    // Negative key entries are bounded and short-lived; the
+                    // short TTL is what keeps a token flood from pinning hashes
+                    // long after the token stops being offered.
+                    negative_key_cache.retain(|_, v| v.elapsed() < NEGATIVE_CACHE_TTL);
                     // Drop pinned SSRF clients past TTL so deleted providers and
                     // changed DNS eventually release their pooled connections.
                     pinned_clients.retain(|_, v| v.1.elapsed() < CACHE_TTL);
@@ -156,7 +178,7 @@ fn spawn_caches_cleanup(
 /// enforces it as a hard cap at insertion time (see insert_model_cache).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cleanup_caches(
-    api_key_cache: &DashMap<String, (Option<ApiKeyInfo>, Instant)>,
+    api_key_cache: &DashMap<String, (ApiKeyInfo, Instant)>,
     model_cache: &DashMap<String, ModelCacheEntry>,
     provider_cache: &DashMap<String, ProviderCacheEntry>,
     ssrf_dns_cache: &DashMap<String, (Vec<IpAddr>, Instant)>,
@@ -171,16 +193,9 @@ pub(crate) fn cleanup_caches(
         }
     };
     let ttl = aggressive(api_key_cache.len());
-    // Negative entries (known-invalid tokens) use the short negative TTL so a
-    // miss flood is evicted quickly instead of crowding out positive entries.
-    api_key_cache.retain(|_, v| {
-        let entry_ttl = if v.0.is_none() {
-            NEGATIVE_CACHE_TTL
-        } else {
-            ttl
-        };
-        v.1.elapsed() < entry_ttl
-    });
+    // Only valid keys live here now; invalid ones are tracked by
+    // `negative_key_cache` and reaped above on the short negative TTL.
+    api_key_cache.retain(|_, v| v.1.elapsed() < ttl);
     let ttl = aggressive(model_cache.len());
     // compute before retain: calling len() inside the retain
     // closure would take a read lock while holding the write
@@ -239,7 +254,7 @@ mod tests {
         }
     }
 
-    fn new_api_key_cache() -> Arc<DashMap<String, (Option<ApiKeyInfo>, Instant)>> {
+    fn new_api_key_cache() -> Arc<DashMap<String, (ApiKeyInfo, Instant)>> {
         Arc::new(DashMap::new())
     }
 
@@ -306,8 +321,8 @@ mod tests {
         let provider_cache = new_provider_cache();
         let ssrf_cache = new_ssrf_cache();
 
-        api_key_cache.insert("k-old".to_string(), (Some(test_api_key_info()), stale()));
-        api_key_cache.insert("k-new".to_string(), (Some(test_api_key_info()), fresh()));
+        api_key_cache.insert("k-old".to_string(), (test_api_key_info(), stale()));
+        api_key_cache.insert("k-new".to_string(), (test_api_key_info(), fresh()));
         // Negative model cache entry (unknown model) and a positive one.
         model_cache.insert("neg".to_string(), (None, stale()));
         model_cache.insert(
@@ -390,11 +405,8 @@ mod tests {
         // Insert 10 entries in api_key_cache so len() > threshold (9),
         // triggering aggressive TTL = CACHE_TTL/2 = 150s for that cache.
         for i in 0..10 {
-            api_key_cache.insert(format!("k{i}"), (Some(test_api_key_info()), mid_old));
+            api_key_cache.insert(format!("k{i}"), (test_api_key_info(), mid_old));
         }
-        // Negative entries take the short NEGATIVE_CACHE_TTL regardless of the
-        // aggressive TTL, so this 200s-old one is evicted either way.
-        api_key_cache.insert("k-neg".to_string(), (None, mid_old));
         // Other caches have only 1 entry each -- normal 300s TTL applies.
         model_cache.insert("m0".to_string(), (None, mid_old));
         provider_cache.insert("p0".to_string(), (Arc::new(MockProvider), mid_old));
@@ -438,7 +450,7 @@ mod tests {
         let ssrf_cache = new_ssrf_cache();
         // Seed entries so the cleanup task has something to walk.
         for i in 0..50 {
-            api_key_cache.insert(format!("k{i}"), (Some(test_api_key_info()), fresh()));
+            api_key_cache.insert(format!("k{i}"), (test_api_key_info(), fresh()));
         }
 
         let cleanup_api = api_key_cache.clone();
@@ -469,7 +481,7 @@ mod tests {
                 handles.push(std::thread::spawn(move || {
                     for i in 0..200 {
                         let key = format!("w{i}");
-                        api_key_cache.insert(key.clone(), (Some(test_api_key_info()), fresh()));
+                        api_key_cache.insert(key.clone(), (test_api_key_info(), fresh()));
                         model_cache.insert(key.clone(), (None, fresh()));
                         provider_cache.insert(key.clone(), (Arc::new(MockProvider), fresh()));
                         ssrf_cache.insert(key.clone(), (vec!["1.2.3.4".parse().unwrap()], fresh()));
@@ -553,6 +565,7 @@ mod tests {
         let state = AppState::new(config).unwrap();
         assert!(state.config.auth.enabled);
         assert!(state.api_key_cache.is_empty());
+        assert!(state.negative_key_cache.is_empty());
         assert!(state.model_cache.is_empty());
         assert!(state.provider_cache.is_empty());
         assert!(state.ssrf_dns_cache.is_empty());

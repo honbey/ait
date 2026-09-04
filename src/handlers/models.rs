@@ -213,10 +213,11 @@ mod tests {
     use crate::test_utils::{create_test_state, send_request, test_router};
     use axum::Router;
     use axum::http::Method;
+    use tempfile::TempDir;
 
-    async fn setup() -> Router {
-        let (state, _dir) = create_test_state();
-        test_router(state)
+    async fn setup() -> (Router, TempDir) {
+        let (state, dir) = create_test_state();
+        (test_router(state), dir)
     }
 
     /// Create a provider and return its id, so models have a valid provider.
@@ -262,7 +263,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_model_returns_created() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let provider_id = create_provider(&router).await;
         let json = create_model(&router, &provider_id, "gpt-test").await;
         assert_eq!(json["name"], "gpt-test");
@@ -273,7 +274,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_model_invalid_name_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let provider_id = create_provider(&router).await;
         let resp = send_request(
             &router,
@@ -294,7 +295,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_model_unknown_provider_not_found() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(
             &router,
             Method::POST,
@@ -313,7 +314,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_and_get_model() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let provider_id = create_provider(&router).await;
         create_model(&router, &provider_id, "gpt-test").await;
 
@@ -330,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_model_changes_upstream() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let provider_id = create_provider(&router).await;
         create_model(&router, &provider_id, "gpt-test").await;
         let resp = send_request(
@@ -351,7 +352,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_model_removes_and_get_returns_404() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let provider_id = create_provider(&router).await;
         create_model(&router, &provider_id, "gpt-test").await;
         let resp = send_request(&router, Method::DELETE, "/api/models/gpt-test", None, None).await;

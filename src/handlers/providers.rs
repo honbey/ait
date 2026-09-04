@@ -372,12 +372,13 @@ mod tests {
     use crate::test_utils::{create_test_state, send_request, test_router};
     use axum::Router;
     use axum::http::Method;
+    use tempfile::TempDir;
 
     const BASE_URL: &str = "http://127.0.0.1:8080/";
 
-    async fn setup() -> Router {
-        let (state, _dir) = create_test_state();
-        test_router(state)
+    async fn setup() -> (Router, TempDir) {
+        let (state, dir) = create_test_state();
+        (test_router(state), dir)
     }
 
     fn create_body(name: &str) -> serde_json::Value {
@@ -404,7 +405,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_returns_created() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let json = create_provider(&router, "test-provider").await;
         assert_eq!(json["name"], "test-provider");
         assert_eq!(json["type"], "openai_compat");
@@ -415,7 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_empty_name_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(
             &router,
             Method::POST,
@@ -430,7 +431,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_invalid_base_url_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let mut body = create_body("test-provider");
         body["base_url"] = serde_json::json!("not-a-url");
         let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
@@ -439,7 +440,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_providers_includes_created() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         create_provider(&router, "test-provider").await;
         let resp = send_request(&router, Method::GET, "/api/providers", None, None).await;
         assert_eq!(resp.status, StatusCode::OK);
@@ -451,7 +452,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_provider_changes_fields() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let json = create_provider(&router, "test-provider").await;
         let id = json["id"].as_str().unwrap();
         let resp = send_request(
@@ -472,7 +473,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_provider_removes_and_get_returns_404() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let json = create_provider(&router, "test-provider").await;
         let id = json["id"].as_str().unwrap();
         let resp = send_request(
@@ -497,7 +498,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_provider_types_non_empty() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(&router, Method::GET, "/api/provider-types", None, None).await;
         assert_eq!(resp.status, StatusCode::OK);
         let types = resp.json.as_array().expect("types should be an array");
@@ -507,7 +508,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_provider_returns_provider_by_id() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let json = create_provider(&router, "test-provider").await;
         let id = json["id"].as_str().unwrap();
         let resp = send_request(
@@ -525,7 +526,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_provider_api_key_is_masked_without_reveal() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(
             &router,
             Method::POST,
@@ -559,7 +560,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_provider_api_key_returns_stored_key() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(
             &router,
             Method::POST,
@@ -591,7 +592,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_provider_api_key_not_found() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(
             &router,
             Method::GET,
@@ -605,7 +606,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_provider_not_found_returns_404() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(
             &router,
             Method::DELETE,
@@ -619,7 +620,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_ftp_scheme_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let mut body = create_body("ftp-provider");
         body["base_url"] = serde_json::json!("ftp://example.com");
         let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
@@ -628,7 +629,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_no_host_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let mut body = create_body("no-host-provider");
         body["base_url"] = serde_json::json!("http:///");
         let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
@@ -637,7 +638,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_numeric_host_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let mut body = create_body("numeric-host");
         body["base_url"] = serde_json::json!("http://1234567890");
         let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
@@ -646,7 +647,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_api_key_too_long_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let mut body = create_body("long-key-provider");
         body["api_key"] = serde_json::json!("x".repeat(513));
         let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
@@ -655,7 +656,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_provider_api_key_too_long_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let json = create_provider(&router, "test-provider").await;
         let id = json["id"].as_str().unwrap();
         let resp = send_request(
@@ -671,7 +672,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_provider_with_api_key_succeeds() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let json = create_provider(&router, "test-provider").await;
         let id = json["id"].as_str().unwrap();
         let resp = send_request(

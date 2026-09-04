@@ -1,4 +1,4 @@
-use crate::app::AppState;
+use crate::app::{AppState, NEGATIVE_CACHE_TTL};
 use crate::db::{AccessEvent, ApiKeyContext, ApiKeyInfo, RequestId, hash_key};
 use crate::error::{AitError, db_error, internal_error, unauthorized};
 use axum::{
@@ -61,49 +61,66 @@ pub async fn auth_middleware(
 
     let hash = hash_key(token);
 
-    // Cache hit — positive entries slide their TTL; negative entries
-    // (known-invalid tokens) expire for real so a key registered after a
-    // miss flood becomes usable without waiting for cleanup.
+    // Known-invalid token: short-circuit without a DB round trip. This map is
+    // separate and bounded so a flood of distinct bogus tokens cannot evict
+    // valid entries from `api_key_cache`, nor escape caching once the cap is
+    // reached — either of which would send every flood request to the single
+    // SQLite connection.
+    if state
+        .negative_key_cache
+        .get(&hash)
+        .is_some_and(|seen| seen.elapsed() < NEGATIVE_CACHE_TTL)
+    {
+        return Err(unauthorized("Unauthorized: invalid or missing API key"));
+    }
+
+    // Cache hit — every entry here is a valid key, so the TTL always slides.
     if let Some(mut entry) = state.api_key_cache.get_mut(&hash) {
         if entry.1.elapsed() < CACHE_TTL {
-            if entry.0.is_some() {
-                entry.1 = Instant::now();
-            }
+            entry.1 = Instant::now();
             let cached = entry.0.clone();
             drop(entry);
-            // Negative entries short-circuit without a DB round trip, so
-            // invalid-key floods cannot queue on the single SQLite connection.
-            let key_info =
-                cached.ok_or_else(|| unauthorized("Unauthorized: invalid or missing API key"))?;
-            verify_key(&key_info, &mut req)?;
+            verify_key(&cached, &mut req)?;
             req.extensions_mut().insert(client_ip);
             return Ok(next.run(req).await);
         }
         drop(entry);
     }
 
-    // Cache miss or stale — load from DB; both outcomes are cached.
+    // Cache miss or stale — load from DB. Valid keys share one cache; invalid
+    // tokens go to the bounded negative map, which is capped so a flood of
+    // distinct tokens cannot grow it without bound between cleanup passes.
     let token = token.to_string();
     let db = state.db.clone();
+    // Hold a permit only for the DB call: a flood of distinct invalid tokens
+    // parks here instead of exhausting the blocking pool that every other DB
+    // operation depends on. Requests queue rather than fail closed.
+    let permit = state
+        .auth_lookup_permits
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(internal_error)?;
     let key_info = crate::run_blocking(move || db.get_api_key_by_raw(&token))
         .await
         .map_err(internal_error)?
         .map_err(|_| db_error())?;
+    drop(permit);
 
-    // Negative entries come from attacker-controlled tokens: only cache them
-    // while under the entry cap, or a miss flood grows the map between
-    // cleanup passes.
-    let cacheable = key_info.is_some()
-        || state.api_key_cache.len() < state.config.server.cache_max_entries as usize;
-    if cacheable {
-        state
-            .api_key_cache
-            .insert(hash, (key_info.clone(), Instant::now()));
+    match key_info {
+        Some(info) => {
+            state
+                .api_key_cache
+                .insert(hash, (info.clone(), Instant::now()));
+            verify_key(&info, &mut req)?;
+        }
+        None => {
+            if state.negative_key_cache.len() < state.config.server.cache_max_entries as usize {
+                state.negative_key_cache.insert(hash, Instant::now());
+            }
+            return Err(unauthorized("Unauthorized: invalid or missing API key"));
+        }
     }
-
-    let key_info =
-        key_info.ok_or_else(|| unauthorized("Unauthorized: invalid or missing API key"))?;
-    verify_key(&key_info, &mut req)?;
 
     req.extensions_mut().insert(client_ip);
     Ok(next.run(req).await)

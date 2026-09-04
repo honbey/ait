@@ -138,7 +138,11 @@ impl<S> SseTransformStream<S> {
 
     fn finalize_log(&mut self) {
         if let Some(usage) = self.user_tokens.take() {
-            self.event.prompt_tokens = usage.prompt_tokens;
+            // Same seeding rule as ProxyLogGuard::finalize: the request path
+            // seeds prompt_tokens with a body-size estimate, so an upstream
+            // that reports usage without a prompt count must not erase it.
+            let seeded = self.event.prompt_tokens;
+            self.event.prompt_tokens = usage.prompt_tokens.or(seeded);
             self.event.completion_tokens = usage.completion_tokens;
             self.event.total_tokens = usage.total_tokens;
             self.event.cached_tokens = usage.cached_tokens;
@@ -498,6 +502,23 @@ mod tests {
         let payload = br#"{"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}"#;
         s.try_extract_usage_from(payload);
         assert!(s.user_tokens.is_none());
+    }
+
+    #[tokio::test]
+    async fn finalize_log_keeps_seeded_prompt_estimate_without_upstream_prompt() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let mut s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, std::io::Error>>::new()),
+            state.log_manager,
+        );
+        // The request path seeds an estimate; the upstream reports usage with
+        // only a completion count.
+        s.event.prompt_tokens = Some(42);
+        s.try_extract_usage_from(br#"{"usage":{"completion_tokens":5,"total_tokens":5}}"#);
+        s.finalize_log();
+        s.done = true;
+        assert_eq!(s.event.prompt_tokens, Some(42));
+        assert_eq!(s.event.completion_tokens, Some(5));
     }
 
     #[tokio::test]
