@@ -12,6 +12,41 @@ use super::models::{
     ProxyLogQueryResult, TokenDistEntry,
 };
 
+/// Failure surfaced to callers instead of a silently empty (HTTP 200) result,
+/// so the frontend can distinguish "no data" from "query failed".
+#[derive(Debug, Clone, Copy)]
+pub enum AnalyticsError {
+    /// The query exceeded `analytics_timeout_secs`.
+    Timeout,
+    /// The worker is gone (channel closed) or the waiter was dropped.
+    Unavailable,
+}
+
+impl std::fmt::Display for AnalyticsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AnalyticsError::Timeout => write!(f, "analytics query timed out"),
+            AnalyticsError::Unavailable => write!(f, "analytics service unavailable"),
+        }
+    }
+}
+
+impl std::error::Error for AnalyticsError {}
+
+impl AnalyticsError {
+    pub fn into_response(self) -> (axum::http::StatusCode, axum::Json<crate::error::AitError>) {
+        (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(crate::error::AitError {
+                message: self.to_string(),
+                code: 503,
+                r#type: "service_unavailable".to_string(),
+                detail: None,
+            }),
+        )
+    }
+}
+
 #[derive(Clone)]
 pub struct Analytics {
     tx: mpsc::Sender<AnalyticsRequest>,
@@ -54,7 +89,7 @@ enum AnalyticsRequest {
 
 macro_rules! analytics_method {
     ($name:ident, $variant:ident, $ret:ty) => {
-        pub async fn $name(&self, start_ts: i64, end_ts: i64) -> $ret {
+        pub async fn $name(&self, start_ts: i64, end_ts: i64) -> Result<$ret, AnalyticsError> {
             let (resp, rx) = oneshot::channel();
             if self
                 .tx
@@ -66,16 +101,16 @@ macro_rules! analytics_method {
                 .is_err()
             {
                 error!("[analytics] {} channel send failed", stringify!($name));
-                return Default::default();
+                return Err(AnalyticsError::Unavailable);
             }
             match timeout(self.timeout, rx).await {
-                Ok(inner) => inner.unwrap_or_else(|_| {
+                Ok(inner) => inner.map_err(|_| {
                     warn!("[analytics] {} oneshot cancelled", stringify!($name));
-                    Default::default()
+                    AnalyticsError::Unavailable
                 }),
                 Err(_) => {
                     warn!("[analytics] {} timed out", stringify!($name));
-                    Default::default()
+                    Err(AnalyticsError::Timeout)
                 }
             }
         }
@@ -189,7 +224,11 @@ impl Analytics {
     /// All overview aggregates in one worker round trip. Individual queries
     /// still run sequentially inside the worker, but the caller pays one
     /// channel hop and one HTTP request instead of six.
-    pub async fn overview(&self, start_ts: i64, end_ts: i64) -> OverviewMetrics {
+    pub async fn overview(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<OverviewMetrics, AnalyticsError> {
         let (resp, rx) = oneshot::channel();
         if self
             .tx
@@ -201,21 +240,24 @@ impl Analytics {
             .is_err()
         {
             error!("[analytics] overview channel send failed");
-            return OverviewMetrics::default();
+            return Err(AnalyticsError::Unavailable);
         }
         match timeout(self.timeout, rx).await {
-            Ok(inner) => inner.unwrap_or_else(|_| {
+            Ok(inner) => inner.map_err(|_| {
                 warn!("[analytics] overview oneshot cancelled");
-                OverviewMetrics::default()
+                AnalyticsError::Unavailable
             }),
             Err(_) => {
                 warn!("[analytics] overview timed out");
-                OverviewMetrics::default()
+                Err(AnalyticsError::Timeout)
             }
         }
     }
 
-    pub async fn query_proxy_logs(&self, params: ProxyLogQueryParams) -> ProxyLogQueryResult {
+    pub async fn query_proxy_logs(
+        &self,
+        params: ProxyLogQueryParams,
+    ) -> Result<ProxyLogQueryResult, AnalyticsError> {
         let (resp, rx) = oneshot::channel();
         if self
             .tx
@@ -226,25 +268,16 @@ impl Analytics {
             .is_err()
         {
             error!("[analytics] query_proxy_logs channel send failed");
-            return ProxyLogQueryResult {
-                items: Vec::new(),
-                total: 0,
-            };
+            return Err(AnalyticsError::Unavailable);
         }
         match timeout(self.timeout, rx).await {
-            Ok(inner) => inner.unwrap_or_else(|_| {
+            Ok(inner) => inner.map_err(|_| {
                 warn!("[analytics] query_proxy_logs oneshot cancelled");
-                ProxyLogQueryResult {
-                    items: Vec::new(),
-                    total: 0,
-                }
+                AnalyticsError::Unavailable
             }),
             Err(_) => {
                 warn!("[analytics] query_proxy_logs timed out");
-                ProxyLogQueryResult {
-                    items: Vec::new(),
-                    total: 0,
-                }
+                Err(AnalyticsError::Timeout)
             }
         }
     }
@@ -545,7 +578,7 @@ fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> Prox
         "SELECT timestamp, api_key_name, model_name, provider_name, \
          prompt_tokens, completion_tokens, total_tokens, cached_tokens, latency_ms, status, \
          endpoint, is_streaming, time_to_first_token_ms, upstream_model, provider_type, \
-         response_body_size, error_message, client_ip \
+         response_body_size, error_message, client_ip, request_id \
          FROM proxy_log{where_clause} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
     );
 
@@ -579,6 +612,7 @@ fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> Prox
                 response_body_size: row.get(15)?,
                 error_message: row.get(16)?,
                 client_ip: row.get(17)?,
+                request_id: row.get(18)?,
             })
         })?;
         let mut out = Vec::new();
@@ -662,26 +696,28 @@ mod tests {
 
         let wide = analytics
             .overview(hour_floor() - 7200, hour_floor() + 7200)
-            .await;
+            .await
+            .unwrap();
         assert_eq!(wide.total_requests, 2);
         assert_eq!(wide.total_tokens, 100);
 
         // Narrow range excludes the second event.
         let narrow = analytics
             .overview(hour_floor() - 1800, hour_floor() + 1800)
-            .await;
+            .await
+            .unwrap();
         assert_eq!(narrow.total_requests, 1);
     }
 
     #[tokio::test]
     async fn empty_range_returns_zero() {
         let (_dir, _conn, analytics) = setup();
-        let m = analytics.overview(0, 1).await;
+        let m = analytics.overview(0, 1).await.unwrap();
         assert_eq!(m.total_requests, 0);
         assert_eq!(m.total_tokens, 0);
-        assert!(analytics.requests(0, 1).await.is_empty());
-        assert!(analytics.model_dist(0, 1).await.is_empty());
-        let dist = analytics.token_dist(0, 1).await;
+        assert!(analytics.requests(0, 1).await.unwrap().is_empty());
+        assert!(analytics.model_dist(0, 1).await.unwrap().is_empty());
+        let dist = analytics.token_dist(0, 1).await.unwrap();
         assert!(dist.iter().all(|e| e.count == 0));
     }
 
@@ -693,14 +729,14 @@ mod tests {
         insert_proxy(&conn, h + 1800, "llama", "success", 1, 1, 0);
         insert_proxy(&conn, h - 3600 + 900, "gpt-4", "success", 1, 1, 0);
 
-        let buckets = analytics.requests(h - 7200, h + 7200).await;
+        let buckets = analytics.requests(h - 7200, h + 7200).await.unwrap();
         assert_eq!(buckets.len(), 2);
         assert_eq!(buckets[0].timestamp, h - 3600);
         assert_eq!(buckets[0].count, 1);
         assert_eq!(buckets[1].timestamp, h);
         assert_eq!(buckets[1].count, 2);
 
-        let tokens = analytics.tokens(h - 7200, h + 7200).await;
+        let tokens = analytics.tokens(h - 7200, h + 7200).await.unwrap();
         assert_eq!(tokens[1].count, 4);
     }
 
@@ -712,7 +748,7 @@ mod tests {
         insert_proxy(&conn, h + 20, "gpt-4", "success", 1, 1, 0);
         insert_proxy(&conn, h + 30, "llama", "success", 1, 1, 0);
 
-        let dist = analytics.model_dist(h - 3600, h + 3600).await;
+        let dist = analytics.model_dist(h - 3600, h + 3600).await.unwrap();
         assert_eq!(dist.len(), 2);
         assert_eq!(dist[0].model, "gpt-4");
         assert_eq!(dist[0].count, 2);
@@ -726,7 +762,7 @@ mod tests {
         let h = hour_floor();
         insert_proxy(&conn, h + 10, "gpt-4", "success", 100, 30, 20);
 
-        let dist = analytics.token_dist(h - 3600, h + 3600).await;
+        let dist = analytics.token_dist(h - 3600, h + 3600).await.unwrap();
         let get = |cat: &str| {
             dist.iter()
                 .find(|e| e.category == cat)
@@ -740,7 +776,7 @@ mod tests {
         // cached > prompt is clamped to prompt. Aggregation sums columns
         // first, then splits: prompt=150, completion=35, cached=120.
         insert_proxy(&conn, h + 20, "llama", "success", 50, 5, 100);
-        let dist = analytics.token_dist(h - 3600, h + 3600).await;
+        let dist = analytics.token_dist(h - 3600, h + 3600).await.unwrap();
         let get = |cat: &str| {
             dist.iter()
                 .find(|e| e.category == cat)
@@ -759,7 +795,7 @@ mod tests {
         insert_proxy(&conn, h + 10, "gpt-4", "success", 100, 30, 20);
         insert_proxy(&conn, h + 20, "llama", "success", 10, 5, 0);
 
-        let m = analytics.overview(h - 3600, h + 3600).await;
+        let m = analytics.overview(h - 3600, h + 3600).await.unwrap();
         assert_eq!(m.total_requests, 2);
         assert_eq!(m.total_tokens, 145);
         assert_eq!(m.request_buckets.len(), 1);
@@ -800,7 +836,7 @@ mod tests {
             model_name: Some("gpt-4".to_string()),
             ..Default::default()
         };
-        let result = analytics.query_proxy_logs(params).await;
+        let result = analytics.query_proxy_logs(params).await.unwrap();
         assert_eq!(result.total, 3);
         assert_eq!(result.items.len(), 3);
         assert!(result.items.iter().all(|e| e.model_name == "gpt-4"));
@@ -813,7 +849,7 @@ mod tests {
             end_ts: Some(h + 3600),
             ..Default::default()
         };
-        let result = analytics.query_proxy_logs(params).await;
+        let result = analytics.query_proxy_logs(params).await.unwrap();
         assert_eq!(result.total, 5);
         assert_eq!(result.items.len(), 2);
         // Ordered by timestamp DESC: items are at h+240, h+180.
@@ -829,7 +865,7 @@ mod tests {
             status: Some("error".to_string()),
             ..Default::default()
         };
-        let result = analytics.query_proxy_logs(params).await;
+        let result = analytics.query_proxy_logs(params).await.unwrap();
         assert_eq!(result.total, 2);
     }
 }

@@ -366,7 +366,7 @@ pub async fn delete_model(name: &str) -> Result<(), NetError> {
     api_delete(&format!("api/models/{}", name)).await
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct BucketEntry {
     pub timestamp: i64,
     pub count: u64,
@@ -458,6 +458,7 @@ pub struct ProxyLogEntryResponse {
     pub response_body_size: Option<i64>,
     pub error_message: Option<String>,
     pub client_ip: Option<String>,
+    pub request_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

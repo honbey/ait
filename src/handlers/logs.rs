@@ -6,6 +6,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::app::AppState;
+use crate::db::analytics::AnalyticsError;
 use crate::db::models::{PaginatedResponse, ProxyLogEntryResponse, ProxyLogQueryParams};
 use crate::error::AitError;
 
@@ -65,7 +66,11 @@ pub async fn list_proxy_logs(
         client_ip: q.client_ip,
     };
 
-    let result = state.log_manager.query_proxy_logs(params).await;
+    let result = state
+        .log_manager
+        .query_proxy_logs(params)
+        .await
+        .map_err(AnalyticsError::into_response)?;
 
     Ok(Json(PaginatedResponse {
         items: result.items,
@@ -104,6 +109,7 @@ mod tests {
                 .log_manager
                 .overview(now - 3600, now + 3600)
                 .await
+                .unwrap()
                 .total_requests
                 >= 3
             {

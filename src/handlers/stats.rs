@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppState;
 use crate::db::models::{BucketEntry, ModelDistEntry, TokenDistEntry};
 
+use crate::db::analytics::AnalyticsError;
 use crate::error::{AitError, internal_error};
 use crate::handlers::analytics::validate_ts_range;
 
@@ -85,7 +86,11 @@ pub async fn overview_stats(
         .map_err(internal_error)?
         .map_err(|e| AitError::from_db_error(e).into_response())?;
 
-    let metrics = state.log_manager.overview(range.start, range.end).await;
+    let metrics = state
+        .log_manager
+        .overview(range.start, range.end)
+        .await
+        .map_err(AnalyticsError::into_response)?;
     let api_request_count = metrics.total_requests;
     let token_consumption = metrics.total_tokens;
 
@@ -206,6 +211,7 @@ mod tests {
                 .log_manager
                 .overview(now - 3600, now + 3600)
                 .await
+                .unwrap()
                 .total_requests;
             if count >= 2 {
                 break;

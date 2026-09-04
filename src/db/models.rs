@@ -256,6 +256,9 @@ pub struct ProxyLogEntryResponse {
     pub response_body_size: Option<i64>,
     pub error_message: Option<String>,
     pub client_ip: Option<String>,
+    /// Correlation id (from `x-request-id`); unique per request, usable as a
+    /// stable row key on the client.
+    pub request_id: String,
 }
 
 #[derive(Serialize)]

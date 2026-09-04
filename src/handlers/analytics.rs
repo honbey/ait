@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use crate::app::AppState;
 
+use crate::db::analytics::AnalyticsError;
 use crate::db::models::{BucketEntry, ModelDistEntry, TokenDistEntry};
 use crate::error::AitError;
 
@@ -66,7 +67,11 @@ pub async fn requests(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<Vec<BucketEntry>>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
-    let result = state.log_manager.requests(range.start, range.end).await;
+    let result = state
+        .log_manager
+        .requests(range.start, range.end)
+        .await
+        .map_err(AnalyticsError::into_response)?;
     Ok(Json(result))
 }
 
@@ -75,7 +80,11 @@ pub async fn tokens(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<Vec<BucketEntry>>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
-    let result = state.log_manager.tokens(range.start, range.end).await;
+    let result = state
+        .log_manager
+        .tokens(range.start, range.end)
+        .await
+        .map_err(AnalyticsError::into_response)?;
     Ok(Json(result))
 }
 
@@ -84,7 +93,11 @@ pub async fn model_dist(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<Vec<ModelDistEntry>>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
-    let result = state.log_manager.model_dist(range.start, range.end).await;
+    let result = state
+        .log_manager
+        .model_dist(range.start, range.end)
+        .await
+        .map_err(AnalyticsError::into_response)?;
     Ok(Json(result))
 }
 
@@ -93,7 +106,11 @@ pub async fn token_dist(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<Vec<TokenDistEntry>>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
-    let result = state.log_manager.token_dist(range.start, range.end).await;
+    let result = state
+        .log_manager
+        .token_dist(range.start, range.end)
+        .await
+        .map_err(AnalyticsError::into_response)?;
     Ok(Json(result))
 }
 
@@ -190,6 +207,7 @@ mod http_tests {
                 .log_manager
                 .overview(h - 7200, h + 7200)
                 .await
+                .unwrap()
                 .total_requests
                 >= 3
             {

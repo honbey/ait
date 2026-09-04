@@ -1,10 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use gloo_net::Error as NetError;
-use gloo_net::http::Request;
 use leptos::prelude::*;
-use leptos::task::spawn_local;
 
 include!(concat!(env!("OUT_DIR"), "/i18n_keys.rs"));
 
@@ -12,10 +9,6 @@ struct I18nInner {
     lang: RwSignal<String>,
     translations: RwSignal<HashMap<String, String>>,
     cache: RwLock<HashMap<String, HashMap<String, String>>>,
-    /// Locales with an in-flight network fetch. Switching language rapidly
-    /// re-enters `fetch_and_cache` before the first request resolves; without
-    /// this set every toggle would fire another request for the same locale.
-    in_flight: RwLock<HashSet<String>>,
 }
 
 #[derive(Clone)]
@@ -28,7 +21,6 @@ impl I18n {
             lang: RwSignal::new(initial_lang.to_string()),
             translations: RwSignal::new(default.clone()),
             cache: RwLock::new(HashMap::from([(initial_lang.to_string(), default)])),
-            in_flight: RwLock::new(HashSet::new()),
         };
         Self(Arc::new(inner))
     }
@@ -46,18 +38,21 @@ impl I18n {
             return;
         }
         self.0.lang.set(lang.to_string());
-        if let Some(cached) = self.0.cache.read().unwrap().get(lang).cloned() {
-            self.0.translations.set(cached);
-        } else {
-            let embedded = Self::embedded_translations(lang);
-            self.0
-                .cache
-                .write()
-                .unwrap()
-                .insert(lang.to_string(), embedded.clone());
-            self.0.translations.set(embedded);
-            self.fetch_and_cache(lang);
-        }
+        let translations = match self.0.cache.read().unwrap().get(lang) {
+            Some(cached) => cached.clone(),
+            None => {
+                // Translations are embedded at build time (`include_str!`), so
+                // there is nothing to fetch over the network.
+                let embedded = Self::embedded_translations(lang);
+                self.0
+                    .cache
+                    .write()
+                    .unwrap()
+                    .insert(lang.to_string(), embedded.clone());
+                embedded
+            }
+        };
+        self.0.translations.set(translations);
     }
 
     pub fn t(&self, key: K) -> String {
@@ -87,48 +82,6 @@ impl I18n {
         pairs.iter().fold(self.t(key), |s, (ph, val)| {
             s.replace(&format!("{{{{ {} }}}}", ph), val)
         })
-    }
-
-    /// Fetch a locale in the background and cache it. Concurrent calls for the
-    /// same language are deduplicated. Only the language matching the current
-    /// selection updates the live translations.
-    fn fetch_and_cache(&self, lang: &str) {
-        if !self.0.in_flight.write().unwrap().insert(lang.to_string()) {
-            return;
-        }
-        let this = self.clone();
-        let lang = lang.to_string();
-        spawn_local(async move {
-            match Self::fetch_translations(&lang).await {
-                Ok(map) => {
-                    this.0
-                        .cache
-                        .write()
-                        .unwrap()
-                        .insert(lang.clone(), map.clone());
-                    if this.0.lang.get_untracked() == lang {
-                        this.0.translations.set(map);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to load locale {}: {:?}", lang, e);
-                }
-            }
-            this.0.in_flight.write().unwrap().remove(&lang);
-        });
-    }
-
-    async fn fetch_translations(lang: &str) -> Result<HashMap<String, String>, NetError> {
-        let url = format!("/locales/{}.json", lang);
-        let resp = Request::get(&url).send().await?;
-        if !resp.ok() {
-            return Err(NetError::GlooError(format!(
-                "HTTP {} loading locale {}",
-                resp.status(),
-                lang
-            )));
-        }
-        resp.json().await
     }
 
     fn embedded_translations(lang: &str) -> HashMap<String, String> {

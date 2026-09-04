@@ -75,10 +75,10 @@ pub struct UpdateProviderRequest {
 // ── Validation ──
 
 fn validate_base_url(url: &str) -> Result<reqwest::Url, AitError> {
-    if !url
-        .chars()
-        .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '~' | ':' | '/'))
-    {
+    // `[` / `]` allow IPv6 literal hosts; `%` allows percent-encoded labels.
+    if !url.chars().all(|c| {
+        c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '~' | ':' | '/' | '[' | ']' | '%')
+    }) {
         return Err(AitError::bad_request(
             "base_url contains invalid characters",
         ));
@@ -93,12 +93,17 @@ fn validate_base_url(url: &str) -> Result<reqwest::Url, AitError> {
     if parsed.host_str().is_none() {
         return Err(AitError::bad_request("base_url must include a host"));
     }
-    let host_start = url.find("://").map(|i| i + 3).unwrap_or(0);
-    let host_end = url[host_start..]
-        .find(['/', ':'])
-        .unwrap_or(url.len() - host_start);
-    let host = &url[host_start..host_start + host_end];
-    if !host.is_empty() && host.chars().all(|c| c.is_ascii_digit()) {
+    // `Url` normalizes a bare decimal integer host (`http://1234567890`) into
+    // a dotted IPv4, so the all-numeric rejection must run on the raw
+    // authority, not on the normalized host. IPv6 literals are bracketed and
+    // therefore skipped by the numeric check.
+    let rest = &url[url.find("://").map(|i| i + 3).unwrap_or(0)..];
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let raw_host = match authority.strip_prefix('[') {
+        Some(after) => &after[..after.find(']').unwrap_or(after.len())],
+        None => authority.split(':').next().unwrap_or(authority),
+    };
+    if raw_host.chars().all(|c| c.is_ascii_digit()) {
         return Err(AitError::bad_request(
             "base_url host cannot be purely numeric",
         ));
@@ -357,9 +362,15 @@ pub async fn list_provider_types() -> Json<&'static Vec<serde_json::Value>> {
     Json(PROVIDER_TYPES.get_or_init(|| {
         ProviderType::iter()
             .map(|t| {
+                // Fall back to the type string rather than panicking if a
+                // variant is added without a `#[strum(message)]`.
+                let display_name = t
+                    .get_message()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| t.as_ref().to_string());
                 serde_json::json!({
                     "type": t.as_ref(),
-                    "display_name": t.get_message().expect("every ProviderType must carry a display message"),
+                    "display_name": display_name,
                 })
             })
             .collect()
@@ -693,5 +704,17 @@ mod tests {
         )
         .await;
         assert_eq!(resp.json["api_key"], "sk-new-key");
+    }
+
+    #[test]
+    fn validate_base_url_accepts_ipv6_literal() {
+        let url = validate_base_url("http://[2001:db8::1]:11434/v1").unwrap();
+        assert_eq!(url.host_str(), Some("[2001:db8::1]"));
+        assert_eq!(url.port(), Some(11434));
+    }
+
+    #[test]
+    fn validate_base_url_rejects_numeric_host() {
+        assert!(validate_base_url("http://1234567890").is_err());
     }
 }

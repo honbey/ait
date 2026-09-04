@@ -169,14 +169,16 @@ pub fn attach_save_effect<T, A>(
             Some(Ok(model)) => {
                 consumed.set(true);
                 if let Some(field) = edit_field {
+                    // A concurrent refetch can re-patch the keyed store and
+                    // dispose the Field; patch best-effort and still surface
+                    // success so the toast and modal close fire.
                     if !field.is_disposed() {
                         field.patch(model);
-                        (on_success)();
                     }
                 } else if let Some(mut items) = store_items.try_write() {
                     items.push(model);
-                    (on_success)();
                 }
+                (on_success)();
             }
             Some(Err(e)) => {
                 consumed.set(true);

@@ -5,7 +5,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tracing::{error, info, warn};
 
-use super::analytics::Analytics;
+use super::analytics::{Analytics, AnalyticsError};
 use super::loki::LokiSink;
 use super::models::{
     AccessEvent, AuditEvent, BucketEntry, LogEvent, ModelDistEntry, OverviewMetrics, ProxyEvent,
@@ -143,27 +143,50 @@ impl LogManager {
         }
     }
 
-    pub async fn requests(&self, start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
+    pub async fn requests(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<BucketEntry>, AnalyticsError> {
         self.analytics.requests(start_ts, end_ts).await
     }
 
-    pub async fn tokens(&self, start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
+    pub async fn tokens(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<BucketEntry>, AnalyticsError> {
         self.analytics.tokens(start_ts, end_ts).await
     }
 
-    pub async fn model_dist(&self, start_ts: i64, end_ts: i64) -> Vec<ModelDistEntry> {
+    pub async fn model_dist(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<ModelDistEntry>, AnalyticsError> {
         self.analytics.model_dist(start_ts, end_ts).await
     }
 
-    pub async fn token_dist(&self, start_ts: i64, end_ts: i64) -> Vec<TokenDistEntry> {
+    pub async fn token_dist(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<TokenDistEntry>, AnalyticsError> {
         self.analytics.token_dist(start_ts, end_ts).await
     }
 
-    pub async fn overview(&self, start_ts: i64, end_ts: i64) -> OverviewMetrics {
+    pub async fn overview(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<OverviewMetrics, AnalyticsError> {
         self.analytics.overview(start_ts, end_ts).await
     }
 
-    pub async fn query_proxy_logs(&self, params: ProxyLogQueryParams) -> ProxyLogQueryResult {
+    pub async fn query_proxy_logs(
+        &self,
+        params: ProxyLogQueryParams,
+    ) -> Result<ProxyLogQueryResult, AnalyticsError> {
         self.analytics.query_proxy_logs(params).await
     }
 
@@ -496,6 +519,7 @@ mod tests {
             let count = manager
                 .overview(now - 3600, now + 3600)
                 .await
+                .unwrap()
                 .total_requests;
             if count >= 1 {
                 break;
@@ -505,7 +529,7 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let dist = manager.model_dist(now - 3600, now + 3600).await;
+        let dist = manager.model_dist(now - 3600, now + 3600).await.unwrap();
         assert_eq!(dist.len(), 1);
         assert_eq!(dist[0].model, "gpt-4");
         assert_eq!(dist[0].count, 1);

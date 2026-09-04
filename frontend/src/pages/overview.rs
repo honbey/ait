@@ -230,80 +230,70 @@ pub fn Overview() -> impl IntoView {
         }
     };
 
-    // Chart data signals memoized from overview_resource
-    let req_x_data: Signal<Vec<String>> = Memo::new(move |_| {
+    // Daily buckets are computed once each and shared by the axis/line memos
+    // below; `fill_daily_range` walks every day (one JS Date per bucket), so
+    // doing it four times doubled that cost for no benefit.
+    let daily_requests: Signal<Vec<BucketEntry>> = Memo::new(move |_| {
         overview_resource
             .get()
             .and_then(|r| r.ok())
             .map(|data| {
-                let req_filled = fill_daily_range(
+                fill_daily_range(
                     &aggregate_daily(&data.request_buckets),
                     data.range_start,
                     data.range_end,
-                );
-                req_filled
-                    .iter()
-                    .map(|r| ts_to_date_str(r.timestamp))
-                    .collect::<Vec<_>>()
+                )
             })
             .unwrap_or_default()
+    })
+    .into();
+
+    let daily_tokens: Signal<Vec<BucketEntry>> = Memo::new(move |_| {
+        overview_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|data| {
+                fill_daily_range(
+                    &aggregate_daily(&data.token_buckets),
+                    data.range_start,
+                    data.range_end,
+                )
+            })
+            .unwrap_or_default()
+    })
+    .into();
+
+    let req_x_data: Signal<Vec<String>> = Memo::new(move |_| {
+        daily_requests
+            .get()
+            .iter()
+            .map(|r| ts_to_date_str(r.timestamp))
+            .collect::<Vec<_>>()
     })
     .into();
 
     let req_series: Signal<Vec<ChartSeries>> = Memo::new(move |_| {
-        overview_resource
-            .get()
-            .and_then(|r| r.ok())
-            .map(|data| {
-                let req_filled = fill_daily_range(
-                    &aggregate_daily(&data.request_buckets),
-                    data.range_start,
-                    data.range_end,
-                );
-                vec![ChartSeries {
-                    name: "Requests".to_string(),
-                    data: req_filled.iter().map(|r| r.count as f64).collect(),
-                }]
-            })
-            .unwrap_or_default()
+        vec![ChartSeries {
+            name: "Requests".to_string(),
+            data: daily_requests.get().iter().map(|r| r.count as f64).collect(),
+        }]
     })
     .into();
 
     let tok_x_data: Signal<Vec<String>> = Memo::new(move |_| {
-        overview_resource
+        daily_tokens
             .get()
-            .and_then(|r| r.ok())
-            .map(|data| {
-                let tok_filled = fill_daily_range(
-                    &aggregate_daily(&data.token_buckets),
-                    data.range_start,
-                    data.range_end,
-                );
-                tok_filled
-                    .iter()
-                    .map(|r| ts_to_date_str(r.timestamp))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
+            .iter()
+            .map(|r| ts_to_date_str(r.timestamp))
+            .collect::<Vec<_>>()
     })
     .into();
 
     let tok_series: Signal<Vec<ChartSeries>> = Memo::new(move |_| {
-        overview_resource
-            .get()
-            .and_then(|r| r.ok())
-            .map(|data| {
-                let tok_filled = fill_daily_range(
-                    &aggregate_daily(&data.token_buckets),
-                    data.range_start,
-                    data.range_end,
-                );
-                vec![ChartSeries {
-                    name: "Tokens".to_string(),
-                    data: tok_filled.iter().map(|r| r.count as f64).collect(),
-                }]
-            })
-            .unwrap_or_default()
+        vec![ChartSeries {
+            name: "Tokens".to_string(),
+            data: daily_tokens.get().iter().map(|r| r.count as f64).collect(),
+        }]
     })
     .into();
 
