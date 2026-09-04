@@ -275,7 +275,11 @@ pub fn Overview() -> impl IntoView {
     let req_series: Signal<Vec<ChartSeries>> = Memo::new(move |_| {
         vec![ChartSeries {
             name: "Requests".to_string(),
-            data: daily_requests.get().iter().map(|r| r.count as f64).collect(),
+            data: daily_requests
+                .get()
+                .iter()
+                .map(|r| r.count as f64)
+                .collect(),
         }]
     })
     .into();
