@@ -4,18 +4,13 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 use super::models::*;
 
 mod apikeys;
 mod models;
 mod providers;
-
-/// Number of read-only connections opened alongside the writer. WAL allows
-/// concurrent readers, so each additional reader removes one queue point from
-/// the read path without touching write serialization.
-const READER_POOL_SIZE: usize = 4;
 
 pub(crate) fn hash_key(key: &str) -> String {
     let mut hasher = Sha256::new();
@@ -171,15 +166,34 @@ impl Database {
         self.writer.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Acquire a reader, round-robining across the pool.
+    /// Acquire a reader, preferring one that is not already held.
+    ///
+    /// Plain round-robin blocked on whichever reader the counter named, so one
+    /// slow query held every subsequent read assigned to it while the rest of
+    /// the pool sat idle. Scanning for a free reader first spreads work across
+    /// the pool; only when all are busy does a caller wait.
     fn lock_reader(&self) -> MutexGuard<'_, Connection> {
-        let index = self.next_reader.fetch_add(1, Ordering::Relaxed) % self.readers.len();
-        self.readers[index]
+        let start = self.next_reader.fetch_add(1, Ordering::Relaxed);
+        for offset in 0..self.readers.len() {
+            let index = (start + offset) % self.readers.len();
+            match self.readers[index].try_lock() {
+                Ok(guard) => return guard,
+                // A poisoned mutex still holds a usable guard: every DB
+                // operation runs inside `run_blocking`, which contains the
+                // panic that poisoned it.
+                Err(TryLockError::Poisoned(poisoned)) => return poisoned.into_inner(),
+                Err(TryLockError::WouldBlock) => {}
+            }
+        }
+        self.readers[start % self.readers.len()]
             .lock()
             .unwrap_or_else(|e| e.into_inner())
     }
 
-    pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new(
+        path: &str,
+        reader_pool_size: usize,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(parent) = Path::new(path).parent() {
             fs::create_dir_all(parent)?;
         }
@@ -192,7 +206,7 @@ impl Database {
         )?;
         create_tables(&writer)?;
 
-        let readers: Vec<Connection> = (0..READER_POOL_SIZE)
+        let readers: Vec<Connection> = (0..reader_pool_size)
             .map(
                 |_| -> Result<Connection, Box<dyn std::error::Error + Send + Sync>> {
                     let conn = Connection::open(path)?;
@@ -225,6 +239,36 @@ mod tests {
 
     fn setup() -> (Database, tempfile::TempDir) {
         crate::test_utils::create_test_db()
+    }
+
+    #[test]
+    fn reader_pool_size_is_honoured() {
+        let (db, _dir) = setup();
+        assert_eq!(db.readers.len(), 4);
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::new(dir.path().join("a.db").to_str().unwrap(), 1).unwrap();
+        assert_eq!(db.readers.len(), 1);
+    }
+
+    #[test]
+    fn lock_reader_skips_a_held_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::new(dir.path().join("a.db").to_str().unwrap(), 2).unwrap();
+
+        // Held guards must not be revisited: under the old round-robin the
+        // counter below pointed straight at a held reader and blocked, even
+        // though the rest of the pool was idle.
+        crate::test_utils::assert_no_deadlock(std::time::Duration::from_secs(5), move || {
+            let first = db.lock_reader();
+            // Burn a turn so the counter lands back on `first` next time.
+            drop(db.lock_reader());
+            let again = db.lock_reader();
+            assert!(
+                !std::ptr::eq(&*first, &*again),
+                "must take the free reader, not queue behind the held one"
+            );
+        });
     }
 
     fn make_prov(id: &str) -> Provider {

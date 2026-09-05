@@ -22,6 +22,24 @@ pub struct LogManager {
     loki: Option<LokiSink>,
 }
 
+/// Pin DuckDB's memory ceiling and thread count.
+///
+/// Left alone, DuckDB sizes itself from the memory and CPU it can see, which
+/// inside a container is the host rather than the cgroup limit: a single wide
+/// aggregate over a long retention window can then grow past what the
+/// container is allowed and take the proxy down with it.
+///
+/// Both settings are database-scoped, so applying them once here covers the
+/// log worker and every analytics connection cloned from it. Verified: clones
+/// inherit the values, while a connection opened from scratch against the same
+/// file does not - only `LogManager` opens this database.
+fn apply_duckdb_limits(conn: &Connection, config: &crate::config::LogConfig) -> Result<()> {
+    conn.execute_batch(&format!(
+        "SET memory_limit = '{} MiB'; SET threads = {};",
+        config.duckdb_memory_limit_mb, config.duckdb_threads
+    ))
+}
+
 /// Create the log tables and indexes if they do not exist yet.
 pub(crate) fn create_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
@@ -72,6 +90,7 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<()> {
 impl LogManager {
     pub fn new(config: &crate::config::LogConfig) -> Result<Self> {
         let conn = Connection::open(&config.path)?;
+        apply_duckdb_limits(&conn, config)?;
         create_schema(&conn)?;
 
         let flush_interval = Duration::from_secs(config.flush_interval_secs);
@@ -79,7 +98,11 @@ impl LogManager {
         let retention_every = config.retention_every;
         let retention_days = config.retention_days;
         let (sender, receiver) = mpsc::sync_channel(config.channel_cap as usize);
-        let analytics = Analytics::new(conn.try_clone()?, config.analytics_timeout_secs);
+        let analytics = Analytics::new(
+            conn.try_clone()?,
+            config.analytics_timeout_secs,
+            config.analytics_workers,
+        );
 
         let worker_conn = conn.try_clone()?;
         let handle = thread::spawn(move || {
@@ -298,6 +321,36 @@ fn worker_loop(
 mod tests {
     use super::writes::cleanup_expired;
     use super::*;
+
+    #[test]
+    fn duckdb_limits_reach_cloned_connections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("limits.duckdb");
+        let mut config = crate::test_utils::test_config_fast_logs(
+            dir.path().join("t.db").to_str().unwrap(),
+            path.to_str().unwrap(),
+        )
+        .log;
+        config.duckdb_memory_limit_mb = 256;
+        config.duckdb_threads = 3;
+
+        let conn = Connection::open(path.to_str().unwrap()).unwrap();
+        apply_duckdb_limits(&conn, &config).unwrap();
+
+        // The log worker and the analytics workers are clones of this
+        // connection, and clones share the database instance, so the ceiling
+        // set once here covers all of them. (A connection opened separately
+        // would instead fall back to the host's memory and core count.)
+        let clone = conn.try_clone().unwrap();
+        let memory: String = clone
+            .query_row("SELECT current_setting('memory_limit')", [], |r| r.get(0))
+            .unwrap();
+        let threads: i64 = clone
+            .query_row("SELECT current_setting('threads')", [], |r| r.get(0))
+            .unwrap();
+        assert!(memory.starts_with("256"), "memory_limit was {memory}");
+        assert_eq!(threads, 3);
+    }
     use crate::test_utils::{
         make_access_event, make_audit_event, make_proxy_event, test_config_fast_logs,
     };

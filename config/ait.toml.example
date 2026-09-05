@@ -30,6 +30,10 @@ enabled = true
 
 [database]
 path = "./data/ait.db"
+# 只读连接数（1 个写入连接之外另开）。WAL 模式下这些连接可并发读取，
+# 因此该值决定了同时能处理多少个查询——包括代理热路径上的模型解析与
+# API Key 校验。每个连接自带数 MB 页缓存。范围 1-32。
+reader_pool_size = 4
 
 [log]
 path = "./data/ait-logs.duckdb"
@@ -45,6 +49,14 @@ channel_cap = 10000
 retention_every = 100
 # Analytics 查询超时（秒）
 analytics_timeout_secs = 10
+# 消费分析查询队列的 worker 数，每个 worker 持有一个 DuckDB 连接，
+# 因此即为并发查询上限；全部繁忙时新查询排队，超时后返回 503。范围 1-8。
+analytics_workers = 2
+# DuckDB 内存上限（MiB）。不设时 DuckDB 按它"看到"的内存自行分配，
+# 在容器里看到的是宿主机而非 cgroup 上限，大范围聚合可能被 OOM kill。
+duckdb_memory_limit_mb = 512
+# DuckDB 单查询线程数
+duckdb_threads = 2
 
 # 日志级别（trace / debug / info / warn / error）
 level = "info"

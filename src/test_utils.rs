@@ -23,7 +23,7 @@ use tower::ServiceExt;
 pub fn create_test_db() -> (Database, TempDir) {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("test.db");
-    let db = Database::new(path.to_str().unwrap()).unwrap();
+    let db = Database::new(path.to_str().unwrap(), 4).unwrap();
     (db, dir)
 }
 
@@ -92,6 +92,7 @@ pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
         auth: AuthConfig { enabled: true },
         database: DatabaseConfig {
             path: db_path.to_string(),
+            reader_pool_size: 4,
         },
         log: LogConfig {
             path: log_path.to_string(),
@@ -104,6 +105,9 @@ pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
             axum: "info".to_string(),
             tower_http_trace: "info".to_string(),
             analytics_timeout_secs: 10,
+            analytics_workers: 2,
+            duckdb_memory_limit_mb: 512,
+            duckdb_threads: 2,
             loki: LokiConfig::default(),
         },
         proxy: ProxyConfig {
@@ -138,7 +142,8 @@ pub(crate) fn test_config_fast_logs(db_path: &str, log_path: &str) -> ConfigApp 
 }
 
 fn build_state(config: ConfigApp, dir: TempDir) -> (AppState, TempDir) {
-    let db = Arc::new(Database::new(&config.database.path).unwrap());
+    let db =
+        Arc::new(Database::new(&config.database.path, config.database.reader_pool_size).unwrap());
     let log_manager = LogManager::new(&config.log).unwrap();
     let dlp = DlpScanner::new(&config.security.dlp);
     let http_client = reqwest::Client::builder()

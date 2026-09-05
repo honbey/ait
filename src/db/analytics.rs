@@ -59,10 +59,9 @@ impl AnalyticsError {
     }
 }
 
-/// Analytics workers, each with its own DuckDB connection, pulling from a
-/// shared queue. Extra readers never conflict with the log worker's writes,
-/// so a heavy `query_proxy_logs` no longer blocks a concurrent `/api/stats`.
-const ANALYTICS_WORKERS: usize = 2;
+/// Upper bound on analytics workers: past this, concurrent scans fight over
+/// the configured memory ceiling instead of finishing sooner.
+const MAX_ANALYTICS_WORKERS: usize = 8;
 
 /// LRU bound for cached prepared statements. The static aggregate queries
 /// occupy three slots; the rest absorbs the `query_proxy_logs` variants,
@@ -183,14 +182,20 @@ fn send_result<T>(
 }
 
 impl Analytics {
-    pub fn new(conn: Connection, timeout_secs: u64) -> Self {
+    /// Workers each own a DuckDB connection, so they never conflict with the
+    /// log worker's writes and a heavy `query_proxy_logs` no longer blocks a
+    /// concurrent `/api/stats`.
+    ///
+    /// `workers` is expected to have been clamped by config validation.
+    pub fn new(conn: Connection, timeout_secs: u64, workers: usize) -> Self {
         let (tx, rx) = mpsc::channel::<AnalyticsRequest>();
         let rx = Arc::new(Mutex::new(rx));
+        let workers = workers.clamp(1, MAX_ANALYTICS_WORKERS);
 
         // One DuckDB connection per worker. Cloning can only fail on resource
         // exhaustion; degrade to fewer workers rather than refusing to start.
-        let mut connections = Vec::with_capacity(ANALYTICS_WORKERS);
-        for _ in 1..ANALYTICS_WORKERS {
+        let mut connections = Vec::with_capacity(workers);
+        for _ in 1..workers {
             match conn.try_clone() {
                 Ok(clone) => connections.push(clone),
                 Err(e) => {
@@ -373,7 +378,7 @@ mod tests {
         let path = dir.path().join("analytics.duckdb");
         let conn = Connection::open(&path).unwrap();
         create_schema(&conn).unwrap();
-        let analytics = Analytics::new(conn.try_clone().unwrap(), 5);
+        let analytics = Analytics::new(conn.try_clone().unwrap(), 5, 2);
         (dir, conn, analytics)
     }
 

@@ -103,6 +103,12 @@ pub struct AuthConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
     pub path: String,
+    /// Read-only connections opened alongside the single writer. WAL lets them
+    /// serve reads concurrently with the writer and with each other, so this
+    /// caps how many lookups run at once - including the two on the proxy hot
+    /// path, model resolution and API key verification. Each connection keeps
+    /// its own page cache, a few MB.
+    pub reader_pool_size: usize,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -117,6 +123,17 @@ pub struct LogConfig {
     pub axum: String,
     pub tower_http_trace: String,
     pub analytics_timeout_secs: u64,
+    /// Workers draining the analytics queue. Each owns a DuckDB connection, so
+    /// this caps concurrent analytics queries; a request that finds them all
+    /// busy waits and fails with 503 after `analytics_timeout_secs`.
+    pub analytics_workers: usize,
+    /// Memory ceiling for the log/analytics database, in MiB. DuckDB otherwise
+    /// sizes itself from the memory it can see, which inside a container is the
+    /// host rather than the cgroup limit - enough to get the process
+    /// OOM-killed part way through a large scan.
+    pub duckdb_memory_limit_mb: u64,
+    /// DuckDB threads per query.
+    pub duckdb_threads: u64,
     #[serde(default)]
     pub loki: LokiConfig,
 }
@@ -247,6 +264,7 @@ impl ConfigApp {
             .set_default("server.trusted_proxy_hops", 1u64)?
             .set_default("auth.enabled", true)?
             .set_default("database.path", "./data/ait.db")?
+            .set_default("database.reader_pool_size", 4u64)?
             .set_default("log.path", "./data/ait-logs.duckdb")?
             .set_default("log.retention_days", 30u64)?
             .set_default("log.flush_interval_secs", 10u64)?
@@ -257,6 +275,9 @@ impl ConfigApp {
             .set_default("log.axum", "info")?
             .set_default("log.tower_http_trace", "info")?
             .set_default("log.analytics_timeout_secs", 10u64)?
+            .set_default("log.analytics_workers", 2u64)?
+            .set_default("log.duckdb_memory_limit_mb", 512u64)?
+            .set_default("log.duckdb_threads", 2u64)?
             .set_default("proxy.timeout_secs", 300u64)?
             .set_default("proxy.stream", true)?
             .set_default("proxy.sse_idle_timeout_secs", 60u64)?
@@ -318,6 +339,27 @@ impl ConfigApp {
                 "log.channel_cap must be >= 1".to_string(),
             ));
         }
+
+        // Bounded rather than merely positive. A pool sized from a request
+        // would hand out a SQLite connection per caller and defeat the point
+        // of pooling; unbounded DuckDB workers would let concurrent scans
+        // fight over the memory ceiling configured below.
+        if !(1..=32).contains(&app.database.reader_pool_size) {
+            return Err(ConfigError::Message(
+                "database.reader_pool_size must be between 1 and 32".to_string(),
+            ));
+        }
+        if !(1..=8).contains(&app.log.analytics_workers) {
+            return Err(ConfigError::Message(
+                "log.analytics_workers must be between 1 and 8".to_string(),
+            ));
+        }
+        if app.log.duckdb_memory_limit_mb == 0 {
+            return Err(ConfigError::Message(
+                "log.duckdb_memory_limit_mb must be >= 1".to_string(),
+            ));
+        }
+        require_positive_secs(app.log.duckdb_threads, "log.duckdb_threads")?;
 
         if app.log.retention_days > MAX_RETENTION_DAYS {
             return Err(ConfigError::Message(format!(
@@ -608,6 +650,55 @@ trusted_proxies = ["{bad}"]
             assert!(
                 ConfigApp::new(Some(&path)).is_err(),
                 "'{bad}' must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn pool_and_worker_defaults() {
+        let config = ConfigApp::new(Some("config/ait.toml.example")).unwrap();
+        assert_eq!(config.database.reader_pool_size, 4);
+        assert_eq!(config.log.analytics_workers, 2);
+        assert_eq!(config.log.duckdb_memory_limit_mb, 512);
+        assert_eq!(config.log.duckdb_threads, 2);
+    }
+
+    #[test]
+    fn pool_and_worker_overrides() {
+        let (_dir, path) = write_toml(
+            r#"
+[database]
+reader_pool_size = 8
+
+[log]
+analytics_workers = 4
+duckdb_memory_limit_mb = 1024
+duckdb_threads = 4
+"#,
+        );
+        let config = ConfigApp::new(Some(&path)).unwrap();
+        assert_eq!(config.database.reader_pool_size, 8);
+        assert_eq!(config.log.analytics_workers, 4);
+        assert_eq!(config.log.duckdb_memory_limit_mb, 1024);
+        assert_eq!(config.log.duckdb_threads, 4);
+    }
+
+    #[test]
+    fn pool_and_worker_bounds_rejected() {
+        // Each of these either starves the pool or lets concurrent scans fight
+        // over the memory ceiling instead of finishing sooner.
+        for (section, key, value) in [
+            ("database", "reader_pool_size", "0"),
+            ("database", "reader_pool_size", "33"),
+            ("log", "analytics_workers", "0"),
+            ("log", "analytics_workers", "9"),
+            ("log", "duckdb_memory_limit_mb", "0"),
+            ("log", "duckdb_threads", "0"),
+        ] {
+            let (_dir, path) = write_toml(&format!("[{section}]\n{key} = {value}\n"));
+            assert!(
+                ConfigApp::new(Some(&path)).is_err(),
+                "{key} = {value} must be rejected"
             );
         }
     }

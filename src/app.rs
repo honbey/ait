@@ -77,7 +77,10 @@ impl AppState {
         // same instance ends up in AppState at the end.
         let shutdown_token = CancellationToken::new();
 
-        let db = Arc::new(Database::new(&config.database.path).map_err(AppInitError::Database)?);
+        let db = Arc::new(
+            Database::new(&config.database.path, config.database.reader_pool_size)
+                .map_err(AppInitError::Database)?,
+        );
 
         let http_client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
