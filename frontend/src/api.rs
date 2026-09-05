@@ -497,7 +497,7 @@ pub async fn fetch_overview_stats(
     .await
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
 pub struct ProxyLogEntryResponse {
