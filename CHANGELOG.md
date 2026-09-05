@@ -1,5 +1,55 @@
 # 更新日志
 
+## [v0.2.1] - 2026-09-05 - **未发布**
+
+### Breaking Changes
+
+- **移除 provider 明文密钥接口** — `GET /api/providers/{id}/api-key`（含 `?reveal=true`）已删除。上游凭证改为**只写不可读**：可以设置、可以替换，但任何接口都不再返回明文。掩码后的 key 仍可从 provider 列表/详情获取。
+- **配置错误改为拒绝启动** — 一批此前会被静默接受、随后以错误方式运行的值现在启动即失败：
+  - 取 `0` 的时长/容量：`server.cache_cleanup_interval_secs`、`log.flush_interval_secs`、`log.channel_cap`、`proxy.timeout_secs`、`proxy.sse_idle_timeout_secs`、`proxy.connect_timeout_secs`。这些值每种都有具体的破坏方式（`interval(0)` 直接 panic、`recv_timeout(0)` 空转、零超时让每个请求立刻失败）
+  - `security.cors_allowed_origins = ["*"]` 与 `security.cors_allow_credentials = true` 同用 —— 该组合反射任意 Origin 且允许凭据
+  - Loki 只配置了 `log.loki.basic_auth_user` 或 `basic_auth_password` 其中一个 —— 此前会降级为不鉴权发送日志
+- **新增配置项的取值在启动期校验** — `database.reader_pool_size`（1–32）、`log.analytics_workers`（1–8）、`log.duckdb_memory_limit_mb`、`log.duckdb_threads`、`log.duckdb_query_timeout_secs`；`server.trusted_proxies` 每项必须是 IP 或 CIDR 网段。越界或不合法不再回退到默认值
+
+### 新增功能
+
+- **连接与容量可配**
+  - `database.reader_pool_size`（默认 4）— SQLite 只读连接数。注意该池同时服务于代理热路径上的模型解析与 API Key 校验，不只是 admin 读
+  - `log.analytics_workers`（默认 2）— DuckDB 并发查询上限。全部繁忙时新查询排队，超过 `analytics_timeout_secs` 返回 503，所以配小了的症状是报错而非变慢
+  - `log.duckdb_memory_limit_mb`（默认 512）、`log.duckdb_threads`（默认 2）— DuckDB 默认按它"看到"的内存和核数分配，容器里看到的是宿主机而非 cgroup 上限，实测本机默认值为 **25.5 GiB / 16 线程**，一次大范围聚合就可能被 OOM kill
+  - `log.duckdb_query_timeout_secs`（默认 60，`0` 关闭）— 超时用 `Connection::interrupt()` 打断该操作，这是唯一能让 worker 始终可被 `join()` 的手段
+- **DLP 数字字面量扫描** — 新增 `security.dlp.scan_numbers`（默认 `false`）。开启后 JSON number 字段也参与匹配。默认关闭的理由：字符串里的数字本来就一直能命中，只有敏感值以 number 形式出现（如 `{"user_id": 13800138000}`）才需要，而开启后每个数字字段都要多一次匹配
+- **错误响应体携带 `request_id`** — 失败请求的 JSON 响应体新增 `request_id` 字段（此前仅响应头有），客户端无需读 header 即可关联服务端日志。响应头 `x-request-id` 已加入 CORS `Access-Control-Expose-Headers`，浏览器可直接读取
+
+### 修复
+
+- **API Key 撤销绕过** — 删除或更新 API Key 时，若同一时刻已有该 key 的查库请求在途，它返回的结果会被写回缓存，使已删除或已停用的 key 继续可用最长 5 分钟。现在通过世代号作废这些在途查询的结果
+- **SSRF**
+  - 上游请求绑定到 SSRF 校验通过的 IP 集合，避免校验与实际连接之间被 DNS rebinding 插入；解析结果变化时重建连接
+  - 支持 `trusted_proxies` 填 CIDR 网段。此前只能填精确 IP，而 `docs/auth-proxy.md` 里的示例早已写了 `10.0.0.0/8`，照抄会启动失败
+  - 修复 IPv6 字面量 provider 无法创建：`Url::host_str()` 带方括号，直接交给 `lookup_host` 会被当成主机名解析失败
+- **上游响应头过滤** — 透传时丢弃 `x-forwarded-*`、`x-real-ip`（上游无权描述客户端网络路径）以及 `x-api-key`、`x-auth-token`、`x-authorization` 等凭证类头（发往上游的请求带着 provider 密钥，上游回显即泄露）
+- **响应头等待超时** — 非流式与流式上游请求等待响应头的时间纳入 `proxy.timeout_secs`，超时返回 408。此前只有 body 读取有上限，上游只连不发就能挂住请求
+- **分析查询错误不再静默** — DuckDB 查询失败此前返回空结果，仪表盘显示全 0；现在向上冒泡为 503
+- **日志深翻页** — `OFFSET` 上限 10 万行，超出直接返回空页，避免用一次廉价请求占满分析 worker
+- **日志 worker 挂起风险** — 新增看门狗。实测：2M 行聚合 9.5ms、过期清理 87ms、`CHECKPOINT` 17ms，正常路径不会触发；但一旦出现病态扫描，worker 无法被 `join()`，进程就退不出去
+
+### 优化
+
+- **模块拆分** — `db/store.rs` 按资源拆为 `store/{providers,models,apikeys}.rs`，`analytics` 的 SQL 抽到 `analytics/queries.rs`（成为唯一触碰 SQL 的模块），`logger` 的写入路径抽到 `logger/writes.rs`，代理的模型解析抽到 `proxy/resolve.rs`。`proxy_request` 由约 330 行降至 210 行
+- **错误体一次成型** — `AitError` 在序列化时自行带上 `request_id`，省去按 4xx/5xx 重新读取、解析并再次序列化响应体的中间件开销
+- **构建配置** — `[profile.dev]` 移除 `panic = "abort"`：该 profile 开启了 `overflow-checks`，任何算术溢出 panic 都会终结整个进程而不是让单个请求失败；analytics 的 `run_guarded` 也依赖 unwind 才能兜住 panic。`[profile.release-wasm]` 增加 `strip = true`
+- **前端深色模式** — 改为中性黑灰色板 `ink`（`oklch` 亮度逐档对齐 Tailwind `gray`、色度归零；Tailwind v4 的 `gray` 色相约 260、暗端色度 0.034，所以此前偏蓝）。暗色表面各降一档以拉开层次；ECharts 的暗色硬编码配色同步为同亮度中性值。**亮色模式与文字对比度均未改变**
+- **测试** — 新增 SSRF 编码绕过（十进制/十六进制/八进制/短格式）、IPv6 字面量解析、pinned client 端到端（用 `.invalid` 域名证明连接走的是 pin 而非真实 DNS）、408/SSE 空闲超时集成、并发 shutdown、缓存淘汰并发等用例。全量测试 356 个通过
+
+### Chore
+
+- `config/ait.toml.example` 补齐 `reader_pool_size`、`analytics_workers`、`duckdb_*` 等新增配置项的中文说明
+- 新增依赖安装脚本 `scripts/install_rust_wasm.sh`
+- AGENTS.md 精简为项目特定约定
+- 移除前端文本生成演示页；页面标题统一为「<页面> - Ait」
+- 前端：日志行在数据刷新时保持挂载，避免整表重建
+
 ## [v0.2.0] - 2026-08-23
 
 ### Breaking Changes
