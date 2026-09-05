@@ -20,7 +20,7 @@ pub fn ModalShell(
     children: Children,
 ) -> impl IntoView {
     let class = format!(
-        "relative z-10 bg-white dark:bg-gray-800 rounded-xl p-6 shadow-2xl w-full mx-4 {}",
+        "relative z-10 bg-white dark:bg-ink-900 rounded-xl p-6 shadow-2xl w-full mx-4 {}",
         card_class
     );
     let on_close_esc = on_close.clone();
@@ -36,7 +36,7 @@ pub fn ModalShell(
             <div class="absolute inset-0 bg-black/50" on:click=close.clone()></div>
             <div class=class>
                 <div class="flex items-center justify-between mb-4">
-                    <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">{title}</h2>
+                    <h2 class="text-lg font-semibold text-gray-800 dark:text-ink-100">{title}</h2>
                     <button type="button" class=CLASS_ICON_BTN on:click=close.clone()>
                         <i class="fas fa-times"></i>
                     </button>
@@ -103,7 +103,7 @@ pub fn DeleteConfirmModal(
 
     view! {
         <ModalShell on_close=close_when_idle title=ts!(DeleteConfirmTitle)>
-            <p class="text-gray-600 dark:text-gray-400 text-sm mb-6">
+            <p class="text-gray-600 dark:text-ink-400 text-sm mb-6">
                 {tr!(DeleteConfirmMessage, &[("name", &item_name)])}
             </p>
             <div class="flex items-center justify-end gap-3">

@@ -100,7 +100,7 @@ fn StatCard(
     label: impl IntoView,
 ) -> impl IntoView {
     view! {
-        <div class="bg-white dark:bg-gray-800 rounded-xl p-6 flex items-center gap-4 shadow-sm">
+        <div class="bg-white dark:bg-ink-900 rounded-xl p-6 flex items-center gap-4 shadow-sm">
             <div class=format!(
                 "w-14 h-14 rounded-full flex items-center justify-center text-xl {}",
                 icon_bg,
@@ -108,7 +108,7 @@ fn StatCard(
                 <i class=format!("fas {}", icon)></i>
             </div>
             <div>
-                <div class="text-3xl font-bold text-gray-800 dark:text-gray-100">{value}</div>
+                <div class="text-3xl font-bold text-gray-800 dark:text-ink-100">{value}</div>
                 <div class=format!("text-sm {}", CLASS_TEXT_MUTED)>{label}</div>
             </div>
         </div>
@@ -129,9 +129,9 @@ fn TabButton(
                       bg-indigo-600 text-white shadow-sm cursor-pointer"
                 } else {
                     "px-4 py-1.5 text-sm font-medium rounded-lg \
-                      bg-gray-100 dark:bg-gray-700 \
-                      text-gray-600 dark:text-gray-300 \
-                      hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                      bg-gray-100 dark:bg-ink-800 \
+                      text-gray-600 dark:text-ink-300 \
+                      hover:bg-gray-200 dark:hover:bg-ink-700 cursor-pointer"
                 }
             }
             on:click=move |_| on_click()
@@ -427,12 +427,12 @@ pub fn Overview() -> impl IntoView {
     view! {
         <div class="space-y-6 sm:space-y-8">
             <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <h2 class="text-xl font-semibold text-gray-800 dark:text-gray-200">{greeting}</h2>
+                <h2 class="text-xl font-semibold text-gray-800 dark:text-ink-200">{greeting}</h2>
                 <div class="flex flex-wrap items-center gap-2">
                     <button
-                        class="px-3 py-1.5 text-sm font-medium rounded-lg bg-gray-100 dark:bg-gray-700 \
-                        text-gray-600 dark:text-gray-300 \
-                        hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                        class="px-3 py-1.5 text-sm font-medium rounded-lg bg-gray-100 dark:bg-ink-800 \
+                        text-gray-600 dark:text-ink-300 \
+                        hover:bg-gray-200 dark:hover:bg-ink-700 cursor-pointer"
                         on:click=move |_| {
                             let now = now_timestamp();
                             let today = midnight_ts(now);
@@ -442,9 +442,9 @@ pub fn Overview() -> impl IntoView {
                         {t!(Last7Days)}
                     </button>
                     <button
-                        class="px-3 py-1.5 text-sm font-medium rounded-lg bg-gray-100 dark:bg-gray-700 \
-                        text-gray-600 dark:text-gray-300 \
-                        hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                        class="px-3 py-1.5 text-sm font-medium rounded-lg bg-gray-100 dark:bg-ink-800 \
+                        text-gray-600 dark:text-ink-300 \
+                        hover:bg-gray-200 dark:hover:bg-ink-700 cursor-pointer"
                         on:click=move |_| {
                             let now = now_timestamp();
                             let today = midnight_ts(now);
@@ -453,8 +453,8 @@ pub fn Overview() -> impl IntoView {
                     >
                         {t!(Last30Days)}
                     </button>
-                    <div class="flex items-center border rounded-lg bg-white dark:bg-gray-700 \
-                    border-gray-300 dark:border-gray-600 overflow-hidden">
+                    <div class="flex items-center border rounded-lg bg-white dark:bg-ink-800 \
+                    border-gray-300 dark:border-ink-600 overflow-hidden">
                         <input
                             type="date"
                             id="filter-start-date"
@@ -462,11 +462,11 @@ pub fn Overview() -> impl IntoView {
                             aria-label=t!(StartDate)
                             prop:value=move || start_str.get()
                             class="px-2 py-1.5 text-sm border-0 bg-transparent \
-                            text-gray-700 dark:text-gray-200 cursor-pointer \
+                            text-gray-700 dark:text-ink-200 cursor-pointer \
                             focus:ring-0 focus:outline-none"
                             on:change=on_start_date
                         />
-                        <span class="px-1 text-gray-400 dark:text-gray-500 select-none">-</span>
+                        <span class="px-1 text-gray-400 dark:text-ink-500 select-none">-</span>
                         <input
                             type="date"
                             id="filter-end-date"
@@ -474,15 +474,15 @@ pub fn Overview() -> impl IntoView {
                             aria-label=t!(EndDate)
                             prop:value=move || end_str.get()
                             class="px-2 py-1.5 text-sm border-0 bg-transparent \
-                            text-gray-700 dark:text-gray-200 cursor-pointer \
+                            text-gray-700 dark:text-ink-200 cursor-pointer \
                             focus:ring-0 focus:outline-none"
                             on:change=on_end_date
                         />
                     </div>
                     <button
-                        class="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 \
-                        text-gray-600 dark:text-gray-300 \
-                        hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                        class="p-2 rounded-lg bg-gray-100 dark:bg-ink-800 \
+                        text-gray-600 dark:text-ink-300 \
+                        hover:bg-gray-200 dark:hover:bg-ink-700 cursor-pointer"
                         on:click=move |_| refresh()
                     >
                         <i class="fas fa-sync-alt"></i>

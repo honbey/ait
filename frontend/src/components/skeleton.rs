@@ -3,13 +3,13 @@ use leptos::prelude::*;
 use crate::components::style::{CLASS_BORDER_B, CLASS_CARD};
 
 fn sk(extra: &str) -> impl IntoView {
-    view! { <div class=format!("skeleton bg-gray-200 dark:bg-gray-600 {}", extra)></div> }
+    view! { <div class=format!("skeleton bg-gray-200 dark:bg-ink-700 {}", extra)></div> }
 }
 
 fn stat_card() -> impl IntoView {
     view! {
-        <div class="bg-white dark:bg-gray-800 rounded-xl p-6 flex items-center gap-4 shadow-sm">
-            <div class="w-14 h-14 rounded-full skeleton bg-gray-200 dark:bg-gray-600 shrink-0"></div>
+        <div class="bg-white dark:bg-ink-900 rounded-xl p-6 flex items-center gap-4 shadow-sm">
+            <div class="w-14 h-14 rounded-full skeleton bg-gray-200 dark:bg-ink-700 shrink-0"></div>
             <div class="flex-1 space-y-3">{sk("h-8 w-24 rounded")}{sk("h-4 w-16 rounded")}</div>
         </div>
     }

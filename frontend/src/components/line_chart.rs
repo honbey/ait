@@ -25,11 +25,13 @@ fn build_line_option(x_data: &[String], series_list: &[ChartSeries], dark: bool)
         })
         .collect();
 
-    let axis_color = if dark { "#d1d5db" } else { "#374151" };
-    let split_color = if dark { "#374151" } else { "#e5e7eb" };
-    let tooltip_bg = if dark { "#1f2937" } else { "#ffffff" };
-    let tooltip_border = if dark { "#374151" } else { "#e5e7eb" };
-    let tooltip_color = if dark { "#e5e7eb" } else { "#374151" };
+    // Dark values are the neutral `ink` ramp: same lightness as the Tailwind
+    // greys they replace (see tailwind.css), blue cast removed.
+    let axis_color = if dark { "#d5d5d5" } else { "#374151" };
+    let split_color = if dark { "#404040" } else { "#e5e7eb" };
+    let tooltip_bg = if dark { "#282828" } else { "#ffffff" };
+    let tooltip_border = if dark { "#404040" } else { "#e5e7eb" };
+    let tooltip_color = if dark { "#e7e7e7" } else { "#374151" };
 
     let option = serde_json::json!({
         "tooltip": {

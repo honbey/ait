@@ -32,13 +32,13 @@ pub fn ErrorCard(
     view! {
         <div class=format!("{} p-8", CLASS_CARD)>
             <div class="text-center py-12">
-                <p class="font-semibold text-gray-900 dark:text-gray-100 mb-2">{t!(LoadFailed)}</p>
+                <p class="font-semibold text-gray-900 dark:text-ink-100 mb-2">{t!(LoadFailed)}</p>
                 <p class="text-red-500 mb-4">{message}</p>
                 {request_id
                     .map(|id| {
                         let copy_value = id.clone();
                         view! {
-                            <div class="flex items-center justify-center gap-2 mb-4 text-xs text-gray-400 dark:text-gray-500">
+                            <div class="flex items-center justify-center gap-2 mb-4 text-xs text-gray-400 dark:text-ink-500">
                                 <span>{t!(RequestId)}</span>
                                 <code class="font-mono">{id}</code>
                                 <button

@@ -10,11 +10,11 @@ pub fn Topbar(dark: Memo<bool>, theme: RwSignal<Option<bool>>) -> impl IntoView 
     let i18n = use_context::<I18n>().expect("I18n");
 
     view! {
-        <nav class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 flex items-center justify-between h-14 sticky top-0 z-50">
+        <nav class="bg-white dark:bg-ink-900 border-b border-gray-200 dark:border-ink-700 px-6 flex items-center justify-between h-14 sticky top-0 z-50">
             <div class="flex items-center gap-2">
                 <A href="/" {..} class="flex items-center gap-2 mr-2 cursor-pointer">
                     <img src="/ait-logo.svg" alt="ait" class="h-8" />
-                    <span class="text-xl font-bold text-gray-900 dark:text-gray-100">Ait</span>
+                    <span class="text-xl font-bold text-gray-900 dark:text-ink-100">Ait</span>
                 </A>
                 <div class="flex items-center gap-2">
                     <A href="/" exact=true {..} class=CLASS_NAV_LINK>
@@ -69,12 +69,12 @@ pub fn Topbar(dark: Memo<bool>, theme: RwSignal<Option<bool>>) -> impl IntoView 
                         }
                     }></i>
                 </button>
-                <div class="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1"></div>
+                <div class="w-px h-6 bg-gray-200 dark:bg-ink-800 mx-1"></div>
 
                 <A
                     href="/console"
                     {..}
-                    class="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer transition-colors text-sm text-gray-600 dark:text-gray-300"
+                    class="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-ink-900 cursor-pointer transition-colors text-sm text-gray-600 dark:text-ink-300"
                 >
                     <i class="fas fa-terminal w-4 text-center"></i>
                     <span>{t!(Console)}</span>

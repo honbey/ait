@@ -11,9 +11,9 @@ pub fn Home() -> impl IntoView {
 
     move || {
         view! {
-            <div class="min-h-[calc(100vh-3.5rem)] flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+            <div class="min-h-[calc(100vh-3.5rem)] flex items-center justify-center bg-gray-50 dark:bg-ink-950">
                 <div class="text-center px-4">
-                    <h1 class="text-6xl font-bold text-gray-900 dark:text-gray-100 mb-6">
+                    <h1 class="text-6xl font-bold text-gray-900 dark:text-ink-100 mb-6">
                         {t!(IndexTitle)}
                     </h1>
                     <p class=format!(

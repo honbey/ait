@@ -24,7 +24,7 @@ fn latency_pill(latency_s: f64) -> &'static str {
 }
 
 fn grey_pill() -> &'static str {
-    "bg-gray-100 text-gray-600 dark:bg-gray-600 dark:text-gray-300"
+    "bg-gray-100 text-gray-600 dark:bg-ink-700 dark:text-ink-300"
 }
 
 fn latency_s(ms: i64) -> f64 {
@@ -55,7 +55,7 @@ fn PaginationBar(
     };
 
     let select_cls = "w-16 text-center px-1 py-1 text-sm rounded border border-gray-300 \
-        dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 \
+        dark:border-ink-600 bg-white dark:bg-ink-800 text-gray-900 dark:text-ink-100 \
         outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500";
 
     let on_keydown = move |ev: leptos::ev::KeyboardEvent| {
@@ -89,7 +89,7 @@ fn PaginationBar(
 
         view! {
             <div class=format!(
-                "flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-700 text-sm {}",
+                "flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-ink-700 text-sm {}",
                 CLASS_TEXT_MUTED,
             )>
                 <div>
@@ -129,9 +129,9 @@ fn PaginationBar(
                     <div class="flex items-center gap-1">
                         <button
                             class=if is_first {
-                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-ink-600 cursor-not-allowed"
                             } else {
-                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-ink-300 hover:bg-gray-100 dark:hover:bg-ink-800 cursor-pointer"
                             }
                             disabled=is_first
                             title=t!(FirstPage)
@@ -141,9 +141,9 @@ fn PaginationBar(
                         </button>
                         <button
                             class=if is_first {
-                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-ink-600 cursor-not-allowed"
                             } else {
-                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-ink-300 hover:bg-gray-100 dark:hover:bg-ink-800 cursor-pointer"
                             }
                             disabled=is_first
                             title=t!(PreviousPage)
@@ -154,7 +154,7 @@ fn PaginationBar(
                         <input
                             node_ref=input_ref
                             id="filter-page"
-                            class="w-10 text-center px-1 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 outline-none"
+                            class="w-10 text-center px-1 py-1 text-sm rounded border border-gray-300 dark:border-ink-600 bg-white dark:bg-ink-800 text-gray-900 dark:text-ink-100 outline-none"
                             prop:value=move || page.get().to_string()
                             on:keydown=on_keydown
                             on:blur=on_blur
@@ -165,9 +165,9 @@ fn PaginationBar(
                         )>{" / "}{total_pages}</span>
                         <button
                             class=if is_last {
-                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-ink-600 cursor-not-allowed"
                             } else {
-                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-ink-300 hover:bg-gray-100 dark:hover:bg-ink-800 cursor-pointer"
                             }
                             disabled=is_last
                             title=t!(NextPage)
@@ -177,9 +177,9 @@ fn PaginationBar(
                         </button>
                         <button
                             class=if is_last {
-                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-ink-600 cursor-not-allowed"
                             } else {
-                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-ink-300 hover:bg-gray-100 dark:hover:bg-ink-800 cursor-pointer"
                             }
                             disabled=is_last
                             title=t!(LastPage)
@@ -311,8 +311,8 @@ pub fn LogsPage() -> impl IntoView {
         set_end_ts.set(date_str_to_ts(&val));
     };
 
-    let select_cls = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 \
-        rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 \
+    let select_cls = "w-full px-3 py-2 border border-gray-300 dark:border-ink-600 \
+        rounded-lg bg-white dark:bg-ink-800 text-gray-900 dark:text-ink-100 \
         focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none";
 
     view! {
@@ -327,7 +327,7 @@ pub fn LogsPage() -> impl IntoView {
                         title=t!(LogSource)
                         disabled
                         class=format!(
-                            "{} cursor-not-allowed bg-gray-100 dark:bg-gray-600",
+                            "{} cursor-not-allowed bg-gray-100 dark:bg-ink-700",
                             select_cls,
                         )
                     >
@@ -394,23 +394,23 @@ pub fn LogsPage() -> impl IntoView {
 
                 <div class="grid grid-cols-8 gap-3 items-end">
                     <div class="col-span-2">
-                        <div class="flex items-center border rounded-lg bg-white dark:bg-gray-700 \
-                        border-gray-300 dark:border-gray-600 overflow-hidden">
+                        <div class="flex items-center border rounded-lg bg-white dark:bg-ink-800 \
+                        border-gray-300 dark:border-ink-600 overflow-hidden">
                             <input
                                 id="filter-start-date"
                                 type="date"
                                 class="flex-1 px-3 py-2 text-sm border-0 bg-transparent \
-                                text-gray-900 dark:text-gray-100 cursor-pointer \
+                                text-gray-900 dark:text-ink-100 cursor-pointer \
                                 focus:ring-0 focus:outline-none"
                                 prop:value=move || start_str.get()
                                 on:change=on_start_date
                             />
-                            <span class="px-1 text-gray-400 dark:text-gray-500 select-none">-</span>
+                            <span class="px-1 text-gray-400 dark:text-ink-500 select-none">-</span>
                             <input
                                 id="filter-end-date"
                                 type="date"
                                 class="flex-1 px-3 py-2 text-sm border-0 bg-transparent \
-                                text-gray-900 dark:text-gray-100 cursor-pointer \
+                                text-gray-900 dark:text-ink-100 cursor-pointer \
                                 focus:ring-0 focus:outline-none"
                                 prop:value=move || end_str.get()
                                 on:change=on_end_date
@@ -462,9 +462,9 @@ pub fn LogsPage() -> impl IntoView {
                     <div class="col-span-4 flex justify-end gap-3">
                         <button
                             class="px-4 py-2 text-sm font-medium rounded-lg \
-                            bg-gray-100 dark:bg-gray-700 \
-                            text-gray-600 dark:text-gray-300 \
-                            hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                            bg-gray-100 dark:bg-ink-800 \
+                            text-gray-600 dark:text-ink-300 \
+                            hover:bg-gray-200 dark:hover:bg-ink-700 cursor-pointer"
                             on:click=do_reset
                         >
                             {t!(LogReset)}
@@ -501,7 +501,7 @@ pub fn LogsPage() -> impl IntoView {
                             when=move || !rows.get().is_empty()
                             fallback=move || {
                                 view! {
-                                    <div class="p-12 text-center text-gray-400 dark:text-gray-500 text-sm">
+                                    <div class="p-12 text-center text-gray-400 dark:text-ink-500 text-sm">
                                         {t!(LogNoData)}
                                     </div>
                                 }
@@ -556,16 +556,16 @@ pub fn LogsPage() -> impl IntoView {
                                                 let entry_clone = entry.clone();
                                                 view! {
                                                     <tr
-                                                        class="odd:bg-gray-50 dark:odd:bg-gray-800/50 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700/50"
+                                                        class="odd:bg-gray-50 dark:odd:bg-ink-900/50 cursor-pointer hover:bg-gray-100 dark:hover:bg-ink-800/50"
                                                         on:click=move |_| detail_item.set(Some(entry_clone.clone()))
                                                     >
-                                                        <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
+                                                        <td class="px-6 py-4 text-gray-400 dark:text-ink-500 text-sm">
                                                             {timestamp_str(e.timestamp)}
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-800 dark:text-gray-200 font-medium whitespace-nowrap">
+                                                        <td class="px-6 py-4 text-gray-800 dark:text-ink-200 font-medium whitespace-nowrap">
                                                             {e.provider_name}
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                                                        <td class="px-6 py-4 text-gray-600 dark:text-ink-400 whitespace-nowrap">
                                                             {e.model_name}
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
@@ -578,7 +578,7 @@ pub fn LogsPage() -> impl IntoView {
                                                                     when=move || e.is_streaming
                                                                     fallback=move || {
                                                                         view! {
-                                                                            <i class="fas fa-box text-xs text-gray-300 dark:text-gray-600"></i>
+                                                                            <i class="fas fa-box text-xs text-gray-300 dark:text-ink-600"></i>
                                                                         }
                                                                     }
                                                                 >
@@ -599,7 +599,7 @@ pub fn LogsPage() -> impl IntoView {
                                                             </div>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
-                                                            <span class="text-gray-800 dark:text-gray-200 font-medium">
+                                                            <span class="text-gray-800 dark:text-ink-200 font-medium">
                                                                 {e.prompt_tokens.unwrap_or(0)}
                                                             </span>
                                                             {if e.cached_tokens.unwrap_or(0) > 0 {
@@ -614,10 +614,10 @@ pub fn LogsPage() -> impl IntoView {
                                                                 ().into_any()
                                                             }}
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-800 dark:text-gray-200 font-medium whitespace-nowrap">
+                                                        <td class="px-6 py-4 text-gray-800 dark:text-ink-200 font-medium whitespace-nowrap">
                                                             {e.completion_tokens.unwrap_or(0)}
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-xs font-mono whitespace-nowrap">
+                                                        <td class="px-6 py-4 text-gray-400 dark:text-ink-500 text-xs font-mono whitespace-nowrap">
                                                             {e.client_ip.clone().unwrap_or_else(|| "-".to_string())}
                                                         </td>
                                                         <td class="px-6 py-4 text-center whitespace-nowrap">

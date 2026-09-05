@@ -117,11 +117,11 @@ pub fn ApiKeysPage() -> impl IntoView {
                                             key=|row| row.clone().id().read_untracked().to_owned()
                                             let:key
                                         >
-                                            <tr class="odd:bg-gray-50 dark:odd:bg-gray-800/50">
+                                            <tr class="odd:bg-gray-50 dark:odd:bg-ink-900/50">
                                                 {
                                                     let k: Field<ApiKey> = key.into();
                                                     view! {
-                                                        <td class="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">
+                                                        <td class="px-6 py-4 font-medium text-gray-800 dark:text-ink-200">
                                                             {move || k.name().get()}
                                                         </td>
                                                         <td class="px-6 py-4">
@@ -130,13 +130,13 @@ pub fn ApiKeysPage() -> impl IntoView {
                                                                 CLASS_TEXT_MUTED,
                                                             )>{k.display().read_untracked().to_owned()}</span>
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
+                                                        <td class="px-6 py-4 text-gray-400 dark:text-ink-500 text-sm">
                                                             {move || expires_at_display(k.expires_at().get())}
                                                         </td>
                                                         <td class="px-6 py-4">
                                                             {move || status_badge(k.enabled().get())}
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
+                                                        <td class="px-6 py-4 text-gray-400 dark:text-ink-500 text-sm">
                                                             {move || timestamp_str(k.updated_at().get())}
                                                         </td>
                                                         <td class="px-6 py-4 text-center whitespace-nowrap">
@@ -233,7 +233,7 @@ pub fn ApiKeysPage() -> impl IntoView {
                                     "text-sm {}",
                                     CLASS_TEXT_MUTED,
                                 )>{t!(ApiKeyName)}</label>
-                                <p class="text-gray-900 dark:text-gray-100 font-medium mt-0.5">
+                                <p class="text-gray-900 dark:text-ink-100 font-medium mt-0.5">
                                     {raw_name.clone()}
                                 </p>
                             </div>
@@ -243,11 +243,11 @@ pub fn ApiKeysPage() -> impl IntoView {
                                     CLASS_TEXT_MUTED,
                                 )>{t!(ApiKeyKey)}</label>
                                 <div class="flex items-center gap-2 mt-0.5">
-                                    <div class="flex-1 bg-gray-100 dark:bg-gray-700 px-3 py-2 rounded-lg text-sm font-mono break-all text-gray-800 dark:text-gray-200 select-all">
+                                    <div class="flex-1 bg-gray-100 dark:bg-ink-800 px-3 py-2 rounded-lg text-sm font-mono break-all text-gray-800 dark:text-ink-200 select-all">
                                         {raw.clone()}
                                     </div>
                                     <button
-                                        class="shrink-0 px-3 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 border border-gray-300 dark:border-gray-600 rounded-lg transition-colors cursor-pointer active:scale-95"
+                                        class="shrink-0 px-3 py-2 text-sm text-gray-600 dark:text-ink-300 hover:text-gray-800 dark:hover:text-ink-100 border border-gray-300 dark:border-ink-600 rounded-lg transition-colors cursor-pointer active:scale-95"
                                         on:click=move |_| {
                                             copy_action.dispatch(raw.clone());
                                         }

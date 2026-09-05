@@ -145,14 +145,14 @@ pub fn ProvidersPage() -> impl IntoView {
                                             key=|row| row.clone().id().read_untracked().to_owned()
                                             let:provider
                                         >
-                                            <tr class="odd:bg-gray-50 dark:odd:bg-gray-800/50">
+                                            <tr class="odd:bg-gray-50 dark:odd:bg-ink-900/50">
                                                 {
                                                     let p: Field<Provider> = provider.into();
                                                     view! {
-                                                        <td class="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">
+                                                        <td class="px-6 py-4 font-medium text-gray-800 dark:text-ink-200">
                                                             {move || p.name().get()}
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
+                                                        <td class="px-6 py-4 text-gray-600 dark:text-ink-400">
                                                             {move || {
                                                                 type_names
                                                                     .get()
@@ -161,13 +161,13 @@ pub fn ProvidersPage() -> impl IntoView {
                                                                     .unwrap_or_else(|| p.provider_type().get())
                                                             }}
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-xs font-mono">
+                                                        <td class="px-6 py-4 text-gray-400 dark:text-ink-500 text-xs font-mono">
                                                             {move || p.base_url().get()}
                                                         </td>
                                                         <td class="px-6 py-4">
                                                             {move || status_badge(p.enabled().get())}
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
+                                                        <td class="px-6 py-4 text-gray-400 dark:text-ink-500 text-sm">
                                                             {move || timestamp_str(p.updated_at().get())}
                                                         </td>
                                                         <td class="px-6 py-4 text-center whitespace-nowrap">
@@ -502,7 +502,7 @@ fn ProviderFormModal(
                 <label for="form-api-key" class=CLASS_LABEL>
                     {t!(ApiKey)}
                     <Show when=move || is_edit>
-                        <span class="text-xs text-gray-400 dark:text-gray-500 ml-1">
+                        <span class="text-xs text-gray-400 dark:text-ink-500 ml-1">
                             {t!(KeepKeyHint)}
                         </span>
                     </Show>

@@ -75,8 +75,8 @@ pub fn ModelsPage() -> impl IntoView {
 
     let do_refetch = move || models_rsc.refetch();
 
-    let filter_select_cls = "w-44 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 \
-        rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 \
+    let filter_select_cls = "w-44 px-3 py-2 text-sm border border-gray-300 dark:border-ink-600 \
+        rounded-lg bg-white dark:bg-ink-800 text-gray-900 dark:text-ink-100 \
         focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none";
 
     view! {
@@ -174,11 +174,11 @@ pub fn ModelsPage() -> impl IntoView {
                                                         provider_filter.get().is_empty()
                                                             || m.provider_id().get() == provider_filter.get()
                                                     }>
-                                                        <tr class="odd:bg-gray-50 dark:odd:bg-gray-800/50">
-                                                            <td class="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">
+                                                        <tr class="odd:bg-gray-50 dark:odd:bg-ink-900/50">
+                                                            <td class="px-6 py-4 font-medium text-gray-800 dark:text-ink-200">
                                                                 {m.name().read_untracked().to_owned()}
                                                             </td>
-                                                            <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
+                                                            <td class="px-6 py-4 text-gray-600 dark:text-ink-400">
                                                                 {move || {
                                                                     provider_names
                                                                         .get()
@@ -187,13 +187,13 @@ pub fn ModelsPage() -> impl IntoView {
                                                                         .unwrap_or_else(|| { m.provider_id().get() })
                                                                 }}
                                                             </td>
-                                                            <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
+                                                            <td class="px-6 py-4 text-gray-600 dark:text-ink-400">
                                                                 {move || m.upstream_model().get()}
                                                             </td>
                                                             <td class="px-6 py-4">
                                                                 {move || status_badge(m.enabled().get())}
                                                             </td>
-                                                            <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
+                                                            <td class="px-6 py-4 text-gray-400 dark:text-ink-500 text-sm">
                                                                 {move || timestamp_str(m.updated_at().get())}
                                                             </td>
                                                             <td class="px-6 py-4 text-center whitespace-nowrap">
