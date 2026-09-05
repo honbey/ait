@@ -6,7 +6,7 @@ use crate::i18n::{K, use_i18n};
 use crate::t;
 
 const PROJECT_README_URL: &str = "https://github.com/honbey/ait/blob/main/README.md";
-const FRONTEND_README_URL: &str = "https://github.com/honbey/ait/blob/main/frontend/README.md";
+const FRONTEND_DOCS_URL: &str = "https://github.com/honbey/ait/blob/main/docs/frontend.md";
 
 #[component]
 fn DocLinkCard(
@@ -62,7 +62,7 @@ pub fn DocsPage() -> impl IntoView {
                         description_key=K::DocsProjectReadmeDesc
                     />
                     <DocLinkCard
-                        url=FRONTEND_README_URL
+                        url=FRONTEND_DOCS_URL
                         icon_class="fas fa-code"
                         title_key=K::DocsFrontendReadme
                         description_key=K::DocsFrontendReadmeDesc
