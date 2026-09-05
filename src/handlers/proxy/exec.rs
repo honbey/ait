@@ -24,12 +24,36 @@ use super::sse::SseTransformStream;
 /// Upper bound on the buffer pre-sized from `Content-Length`.
 const MAX_BODY_HINT_BYTES: usize = 1024 * 1024;
 
-/// Collect `x-*` and `retry-after` headers from an upstream response.
+/// Whether an upstream response header may be relayed to the client.
+///
+/// Only `x-*` and `retry-after` are forwarded at all, and two groups of `x-*`
+/// headers are dropped on top of that:
+///
+/// - `x-forwarded-*` and `x-real-ip` describe the path a request took through
+///   the network. An upstream has no business setting them, and a reverse
+///   proxy sitting behind Ait would trust them.
+/// - Credential-ish headers, because the upstream request carries the
+///   provider's key: an upstream that echoes it must not have it relayed.
+fn is_forwardable_upstream_header(name: &HeaderName) -> bool {
+    let lower = name.as_str().to_ascii_lowercase();
+    if !lower.starts_with("x-") {
+        // The one non-`x-` header worth relaying: upstreams use it on 429s.
+        return lower == "retry-after";
+    }
+    // A prefix rather than a fixed list for the forwarded family: vendors keep
+    // adding variants, and every one of them describes the client's own path.
+    !lower.starts_with("x-forwarded-")
+        && !matches!(
+            lower.as_str(),
+            "x-real-ip" | "x-api-key" | "x-api-token" | "x-auth-token" | "x-authorization"
+        )
+}
+
+/// Collect the relayed headers from an upstream response.
 fn collect_x_headers(headers: &HeaderMap) -> Vec<(HeaderName, HeaderValue)> {
     let mut filtered = Vec::new();
     for (name, value) in headers {
-        let lower = name.as_str().to_ascii_lowercase();
-        if lower.starts_with("x-") || lower == "retry-after" {
+        if is_forwardable_upstream_header(name) {
             filtered.push((name.clone(), value.clone()));
         }
     }
@@ -363,6 +387,37 @@ mod tests {
         assert!(names.contains(&"x-request-id".to_string()));
         assert!(names.contains(&"x-ratelimit-remaining".to_string()));
         assert!(names.contains(&"retry-after".to_string()));
+    }
+
+    #[test]
+    fn collect_x_headers_drops_proxy_chain_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+        headers.insert("x-forwarded-host", "evil.example.com".parse().unwrap());
+        headers.insert("x-forwarded-proto", "http".parse().unwrap());
+        headers.insert("x-real-ip", "1.2.3.4".parse().unwrap());
+        headers.insert("x-ratelimit-remaining", "100".parse().unwrap());
+
+        // Only the rate-limit header survives: the rest describe a path the
+        // upstream never saw.
+        let collected = collect_x_headers(&headers);
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].0, "x-ratelimit-remaining");
+    }
+
+    #[test]
+    fn collect_x_headers_drops_credential_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key", "sk-upstream-secret".parse().unwrap());
+        headers.insert("x-auth-token", "t".parse().unwrap());
+        headers.insert("x-authorization", "Bearer t".parse().unwrap());
+        headers.insert("x-request-id", "abc".parse().unwrap());
+
+        let names: Vec<String> = collect_x_headers(&headers)
+            .iter()
+            .map(|(n, _)| n.as_str().to_string())
+            .collect();
+        assert_eq!(names, vec!["x-request-id".to_string()]);
     }
 
     #[test]
