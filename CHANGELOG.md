@@ -16,14 +16,14 @@
 - **连接与容量可配**
   - `database.reader_pool_size`（默认 4）— SQLite 只读连接数。注意该池同时服务于代理热路径上的模型解析与 API Key 校验，不只是 admin 读
   - `log.analytics_workers`（默认 2）— DuckDB 并发查询上限。全部繁忙时新查询排队，超过 `analytics_timeout_secs` 返回 503，所以配小了的症状是报错而非变慢
-  - `log.duckdb_memory_limit_mb`（默认 512）、`log.duckdb_threads`（默认 2）— DuckDB 默认按它"看到"的内存和核数分配，容器里看到的是宿主机而非 cgroup 上限，实测本机默认值为 **25.5 GiB / 16 线程**，一次大范围聚合就可能被 OOM kill
-  - `log.duckdb_query_timeout_secs`（默认 60，`0` 关闭）— 超时用 `Connection::interrupt()` 打断该操作，这是唯一能让 worker 始终可被 `join()` 的手段
+  - `log.duckdb_memory_limit_mb`（默认 512）、`log.duckdb_threads`（默认 2）— DuckDB 默认按它"看到"的内存和核数自行分配，而容器里看到的是宿主机而非 cgroup 上限，默认值往往远超容器配额，一次大范围聚合就可能被 OOM kill
+  - `log.duckdb_query_timeout_secs`（默认 60，`0` 关闭）— 单个 DuckDB 操作超时后用 `Connection::interrupt()` 打断，避免病态查询卡住 worker 导致进程无法正常退出。正常路径不会触发
 - **DLP 数字字面量扫描** — 新增 `security.dlp.scan_numbers`（默认 `false`）。开启后 JSON number 字段也参与匹配。默认关闭的理由：字符串里的数字本来就一直能命中，只有敏感值以 number 形式出现（如 `{"user_id": 13800138000}`）才需要，而开启后每个数字字段都要多一次匹配
 - **错误响应体携带 `request_id`** — 失败请求的 JSON 响应体新增 `request_id` 字段（此前仅响应头有），客户端无需读 header 即可关联服务端日志。响应头 `x-request-id` 已加入 CORS `Access-Control-Expose-Headers`，浏览器可直接读取
 
 ### 修复
 
-- **API Key 撤销绕过** — 删除或更新 API Key 时，若同一时刻已有该 key 的查库请求在途，它返回的结果会被写回缓存，使已删除或已停用的 key 继续可用最长 5 分钟。现在通过世代号作废这些在途查询的结果
+- **API Key 撤销绕过** — 删除或更新 API Key 时，若同一时刻已有该 key 的查库请求在途，它返回的结果会被写回缓存，使已删除或已停用的 key 继续可用最长 5 分钟。现在这些在途结果会被作废
 - **SSRF**
   - 上游请求绑定到 SSRF 校验通过的 IP 集合，避免校验与实际连接之间被 DNS rebinding 插入；解析结果变化时重建连接
   - 支持 `trusted_proxies` 填 CIDR 网段。此前只能填精确 IP，而 `docs/auth-proxy.md` 里的示例早已写了 `10.0.0.0/8`，照抄会启动失败
@@ -32,15 +32,14 @@
 - **响应头等待超时** — 非流式与流式上游请求等待响应头的时间纳入 `proxy.timeout_secs`，超时返回 408。此前只有 body 读取有上限，上游只连不发就能挂住请求
 - **分析查询错误不再静默** — DuckDB 查询失败此前返回空结果，仪表盘显示全 0；现在向上冒泡为 503
 - **日志深翻页** — `OFFSET` 上限 10 万行，超出直接返回空页，避免用一次廉价请求占满分析 worker
-- **日志 worker 挂起风险** — 新增看门狗。实测：2M 行聚合 9.5ms、过期清理 87ms、`CHECKPOINT` 17ms，正常路径不会触发；但一旦出现病态扫描，worker 无法被 `join()`，进程就退不出去
 
 ### 优化
 
 - **模块拆分** — `db/store.rs` 按资源拆为 `store/{providers,models,apikeys}.rs`，`analytics` 的 SQL 抽到 `analytics/queries.rs`（成为唯一触碰 SQL 的模块），`logger` 的写入路径抽到 `logger/writes.rs`，代理的模型解析抽到 `proxy/resolve.rs`。`proxy_request` 由约 330 行降至 210 行
 - **错误体一次成型** — `AitError` 在序列化时自行带上 `request_id`，省去按 4xx/5xx 重新读取、解析并再次序列化响应体的中间件开销
-- **构建配置** — `[profile.dev]` 移除 `panic = "abort"`：该 profile 开启了 `overflow-checks`，任何算术溢出 panic 都会终结整个进程而不是让单个请求失败；analytics 的 `run_guarded` 也依赖 unwind 才能兜住 panic。`[profile.release-wasm]` 增加 `strip = true`
-- **前端深色模式** — 改为中性黑灰色板 `ink`（`oklch` 亮度逐档对齐 Tailwind `gray`、色度归零；Tailwind v4 的 `gray` 色相约 260、暗端色度 0.034，所以此前偏蓝）。暗色表面各降一档以拉开层次；ECharts 的暗色硬编码配色同步为同亮度中性值。**亮色模式与文字对比度均未改变**
-- **测试** — 新增 SSRF 编码绕过（十进制/十六进制/八进制/短格式）、IPv6 字面量解析、pinned client 端到端（用 `.invalid` 域名证明连接走的是 pin 而非真实 DNS）、408/SSE 空闲超时集成、并发 shutdown、缓存淘汰并发等用例。全量测试 356 个通过
+- **构建配置** — `[profile.dev]` 移除 `panic = "abort"`：该 profile 开启了 `overflow-checks`，任何算术溢出 panic 都会终结整个进程而不是让单个请求失败。`[profile.release-wasm]` 增加 `strip = true`
+- **前端深色模式** — 改为中性黑灰色板。Tailwind v4 的 `gray` 偏蓝，新色板在保持各档亮度不变的前提下将色度归零；暗色表面再各降一档以拉开层次，ECharts 的暗色配色同步调整。**亮色模式与文字对比度均未改变**
+- **测试** — 补充 SSRF 绕过、IPv6 上游、连接绑定、超时路径、并发关闭与缓存淘汰等场景的用例。全量测试 356 个通过
 
 ### Chore
 
