@@ -546,3 +546,83 @@ pub fn mock_upstream_sse_server(events: Vec<String>) -> String {
 
     rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
 }
+
+/// Start a mock upstream server that reads the request and then never answers,
+/// holding the socket open. Exercises the proxy's response-header timeout.
+pub fn mock_upstream_hanging() -> String {
+    // Scoped to this function: at module level the name would also resolve
+    // for the stream combinators used by the SSE mock.
+    use tokio::io::AsyncReadExt;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            tx.send(format!("http://{}", listener.local_addr().unwrap()))
+                .unwrap();
+
+            // Drain each connection without ever replying, so the client is
+            // left waiting for headers until its own deadline fires.
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    while matches!(socket.read(&mut buf).await, Ok(n) if n > 0) {}
+                });
+            }
+        });
+    });
+
+    rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
+}
+
+/// Start a mock upstream SSE server that sends `events` and then goes silent
+/// without closing the connection, so only the proxy's idle deadline can end
+/// the response.
+pub fn mock_upstream_sse_silent(events: Vec<String>) -> String {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            tx.send(format!("http://{}", listener.local_addr().unwrap()))
+                .unwrap();
+
+            let app = Router::new().fallback(axum::routing::any(move || {
+                let events = events.clone();
+                async move {
+                    let mut body = events.join("\n\n");
+                    body.push_str("\n\n");
+                    // Yields the events, then pends forever with no waker: the
+                    // socket stays open and nothing more is ever read.
+                    let mut remaining = Some(body);
+                    let chunks = futures_util::stream::poll_fn(move |_cx| match remaining.take() {
+                        Some(body) => {
+                            std::task::Poll::Ready(Some(Ok::<String, std::io::Error>(body)))
+                        }
+                        None => std::task::Poll::Pending,
+                    });
+                    (
+                        StatusCode::OK,
+                        [("content-type", "text/event-stream")],
+                        Body::from_stream(chunks),
+                    )
+                }
+            }));
+            axum::serve(listener, app).await.unwrap();
+        });
+    });
+
+    rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
+}

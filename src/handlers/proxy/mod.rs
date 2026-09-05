@@ -594,14 +594,15 @@ mod tests {
     use crate::db::{ApiKeyContext, RequestId};
     use crate::providers::UpstreamProvider;
     use crate::test_utils::{
-        create_test_provider, create_test_state, create_test_state_dlp, mock_upstream_redirect,
-        mock_upstream_server, mock_upstream_sse_server, seed_provider_and_model, send_request,
-        test_router,
+        create_test_provider, create_test_state, create_test_state_dlp, mock_upstream_hanging,
+        mock_upstream_redirect, mock_upstream_server, mock_upstream_sse_server,
+        mock_upstream_sse_silent, seed_provider_and_model, send_request, test_router,
     };
     use axum::Extension;
     use axum::http::Method;
     use bytes::Bytes;
     use std::sync::Arc;
+    use std::time::Duration;
 
     #[test]
     fn insert_capped_respects_cap() {
@@ -1017,6 +1018,74 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status, axum::http::StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn proxy_returns_408_when_upstream_never_responds() {
+        let (mut state, _dir) = create_test_state();
+        state.config.proxy.timeout_secs = 1;
+        let base_url = mock_upstream_hanging();
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            &base_url,
+            "test-model",
+        );
+        let router = test_router(state);
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::REQUEST_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn proxy_stream_is_cut_at_idle_timeout() {
+        let (mut state, _dir) = create_test_state();
+        state.config.proxy.sse_idle_timeout_secs = 1;
+        let base_url = mock_upstream_sse_silent(vec![
+            r#"data: {"choices":[{"delta":{"content":"hello"}}]}"#.to_string(),
+        ]);
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            &base_url,
+            "test-model",
+        );
+        let router = test_router(state);
+
+        let started = Instant::now();
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "test-model",
+                "stream": true,
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(resp.status, axum::http::StatusCode::OK);
+        assert_eq!(
+            resp.headers.get("content-type").unwrap(),
+            "text/event-stream"
+        );
+        // The upstream holds the socket open, so the response can only have
+        // finished because the idle deadline fired - not instantly, and not
+        // by waiting out the 30s connect timeout.
+        assert!(elapsed >= Duration::from_secs(1), "elapsed={elapsed:?}");
+        assert!(elapsed < Duration::from_secs(15), "elapsed={elapsed:?}");
     }
 
     #[tokio::test]

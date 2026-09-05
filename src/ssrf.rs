@@ -27,6 +27,11 @@ async fn resolve_and_check(
     provider_name: &str,
 ) -> Result<Vec<IpAddr>, SsrfDeny> {
     let host = url.host_str().ok_or(SsrfDeny::NoHost)?;
+    // `Url::host_str` renders IPv6 literals with brackets, and `lookup_host`
+    // reads a bracketed string as a host name and fails, so no IPv6 upstream
+    // could ever be configured. `pinned_client` expects the same bare form,
+    // which keeps both on one cache key.
+    let host = host.trim_start_matches('[').trim_end_matches(']');
 
     let ips = resolve_with_cache(host, dns_cache)
         .await
@@ -561,6 +566,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn check_ssrf_config_rejects_encoded_ipv4_loopback() {
+        // The URL parser folds every IPv4 shorthand into a dotted quad, so
+        // decimal, hex, octal and short forms have to land on the blocked
+        // address instead of reaching the IP check as a bare host name.
+        for raw in [
+            "http://2130706433/api",
+            "http://0x7f.0.0.1/api",
+            "http://0177.0.0.1/api",
+            "http://127.1/api",
+            "http://127.0.0.1/api",
+        ] {
+            let url = reqwest::Url::parse(raw).unwrap();
+            assert_eq!(url.host_str(), Some("127.0.0.1"), "{raw} must normalize");
+            let dns_cache = Arc::new(DashMap::new());
+            let err = check_ssrf_config(&url, &[], &dns_cache, "test")
+                .await
+                .expect_err("{raw} must be rejected");
+            assert!(err.message.contains("blocked"), "{raw}: {err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn check_ssrf_config_rejects_ipv4_mapped_ipv6_literal() {
+        let dns_cache = Arc::new(DashMap::new());
+        let url = reqwest::Url::parse("http://[::ffff:127.0.0.1]/api").unwrap();
+        let err = check_ssrf_config(&url, &[], &dns_cache, "test")
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("blocked"));
+    }
+
+    #[tokio::test]
+    async fn check_ssrf_config_resolves_ipv6_literal() {
+        // Regression: the bracketed host_str used to be handed to lookup_host
+        // as-is, which failed for every IPv6 literal and made those providers
+        // impossible to create.
+        let dns_cache = Arc::new(DashMap::new());
+        let url = reqwest::Url::parse("http://[2001:db8::1]:11434/v1").unwrap();
+        assert_eq!(url.host_str(), Some("[2001:db8::1]"));
+        check_ssrf_config(&url, &[], &dns_cache, "test")
+            .await
+            .expect("a public IPv6 literal must resolve");
+    }
+
+    #[tokio::test]
     async fn check_ssrf_config_allowed_returns_ok() {
         let dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
         dns_cache.insert(
@@ -638,6 +688,50 @@ mod tests {
         // client per request.
         let _ = pinned_client(&state, &url, &first).unwrap();
         assert_eq!(state.pinned_clients.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn pinned_client_reaches_host_only_through_the_pin() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // A real server on loopback, addressed by a name no resolver knows
+        // (`.invalid` is reserved by RFC 2606). The request can only succeed
+        // through the pinned mapping - which is exactly the split a rebinding
+        // attack targets: the connection is placed by address, not by name.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (host_tx, host_rx) = tokio::sync::oneshot::channel();
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 2048];
+            let read = socket.read(&mut buf).await.unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..read]).to_string();
+            let host = request
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("host:")
+                        .map(|value| value.trim().to_string())
+                })
+                .unwrap_or_default();
+            let _ = host_tx.send(host);
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok")
+                .await;
+        });
+
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let url = reqwest::Url::parse(&format!("http://pinned.invalid:{port}/api")).unwrap();
+        let verified = vec![IpAddr::from_str("127.0.0.1").unwrap()];
+
+        let client = pinned_client(&state, &url, &verified).unwrap();
+        let response = client.get(url.clone()).send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+        // The socket was placed on the verified address while HTTP still
+        // addressed the original name.
+        assert_eq!(host_rx.await.unwrap(), format!("pinned.invalid:{port}"));
     }
 
     #[test]
