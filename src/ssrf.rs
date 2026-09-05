@@ -1,12 +1,13 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use reqwest::Url;
 use tracing::warn;
 
+use crate::app::AppState;
 use crate::error::AitError;
 use crate::middleware::CACHE_TTL;
 
@@ -16,14 +17,21 @@ enum SsrfDeny {
     Blocked,
 }
 
-/// Shared lookup + IP check.  Logs the block on [`SsrfDeny::Blocked`].
+/// Shared lookup + IP check. Returns the verified IP set so callers can pin
+/// the outgoing connection to it (see [`pinned_client`]).
+/// Logs the block on [`SsrfDeny::Blocked`].
 async fn resolve_and_check(
     url: &Url,
     allowed_cidrs: &[String],
     dns_cache: &Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
     provider_name: &str,
-) -> Result<(), SsrfDeny> {
+) -> Result<Vec<IpAddr>, SsrfDeny> {
     let host = url.host_str().ok_or(SsrfDeny::NoHost)?;
+    // `Url::host_str` renders IPv6 literals with brackets, and `lookup_host`
+    // reads a bracketed string as a host name and fails, so no IPv6 upstream
+    // could ever be configured. `pinned_client` expects the same bare form,
+    // which keeps both on one cache key.
+    let host = host.trim_start_matches('[').trim_end_matches(']');
 
     let ips = resolve_with_cache(host, dns_cache)
         .await
@@ -39,16 +47,23 @@ async fn resolve_and_check(
         }
     }
 
-    Ok(())
+    // Cached only once the addresses passed the check: caching the rejected
+    // set would keep denying this host for the whole TTL after DNS was
+    // corrected to a public address. A rejected host is re-resolved on the
+    // next request instead, which fails closed again while it points inward.
+    dns_cache.insert(host.to_string(), (ips.clone(), Instant::now()));
+
+    Ok(ips)
 }
 
-/// Pre-request SSRF check: opaque 502 on failure (proxy path).
+/// Pre-request SSRF check: opaque 502 on failure (proxy path). Returns the
+/// verified IP set for connection pinning via [`pinned_client`].
 pub(crate) async fn check_ssrf(
     url: &Url,
     allowed_cidrs: &[String],
     dns_cache: &Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
     provider_name: &str,
-) -> Result<(), (axum::http::StatusCode, axum::Json<AitError>)> {
+) -> Result<Vec<IpAddr>, (axum::http::StatusCode, axum::Json<AitError>)> {
     resolve_and_check(url, allowed_cidrs, dns_cache, provider_name)
         .await
         .map_err(|_| AitError::upstream_error(502, "upstream request failed").into_response())
@@ -62,7 +77,7 @@ pub(crate) async fn check_ssrf_config(
     provider_name: &str,
 ) -> Result<(), AitError> {
     match resolve_and_check(url, allowed_cidrs, dns_cache, provider_name).await {
-        Ok(()) => Ok(()),
+        Ok(_) => Ok(()),
         Err(SsrfDeny::NoHost) => Err(AitError::bad_request("base_url must include a host")),
         Err(SsrfDeny::DnsFailed(e)) => {
             warn!("[ssrf] config check DNS error: {}", e);
@@ -74,6 +89,76 @@ pub(crate) async fn check_ssrf_config(
     }
 }
 
+/// Return a client whose DNS for `url.host` is pinned to `verified_ips`.
+///
+/// [`check_ssrf`] validates the IPs the host resolves to, but reqwest would
+/// resolve DNS again when actually connecting — a window an attacker with DNS
+/// control can abuse (DNS rebinding). Pinning the client to the verified set
+/// closes that window. Clients are cached per `host:port` plus the verified
+/// address set, and rebuilt once the cache entry ages past `CACHE_TTL`,
+/// mirroring the DNS cache lifetime.
+pub(crate) fn pinned_client(
+    state: &AppState,
+    url: &Url,
+    verified_ips: &[IpAddr],
+) -> Result<reqwest::Client, (axum::http::StatusCode, axum::Json<AitError>)> {
+    let opaque_error = || AitError::upstream_error(502, "upstream request failed").into_response();
+
+    let host = url.host_str().ok_or_else(opaque_error)?;
+    let port = url.port_or_known_default().unwrap_or(80);
+    // Url::host_str renders IPv6 hosts with brackets; reqwest's resolve
+    // matches the bare address form.
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    // The key carries the verified address set: a client built for the
+    // addresses an earlier request checked would connect to hosts this one
+    // never validated, so a DNS change must miss. Sorted, because lookup
+    // order varies between resolutions of the same name.
+    let mut pinned_ips = verified_ips.to_vec();
+    pinned_ips.sort_unstable();
+    let pinned_ips = pinned_ips
+        .iter()
+        .map(IpAddr::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let cache_key = format!("{host}:{port}:{pinned_ips}");
+
+    // Reuse while fresh; drop the guard before any later insert on the same
+    // map (parking_lot RwLock is not reentrant).
+    if let Some(entry) = state.pinned_clients.get(&cache_key) {
+        if entry.1.elapsed() < CACHE_TTL {
+            let client = entry.0.clone();
+            drop(entry);
+            return Ok(client);
+        }
+        drop(entry);
+    }
+
+    if verified_ips.is_empty() {
+        // A pinned client without verified addresses would silently fall back
+        // to real DNS at connect time, defeating the SSRF check.
+        return Err(opaque_error());
+    }
+
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(state.config.proxy.connect_timeout_secs))
+        .tcp_keepalive(Some(Duration::from_secs(60)));
+    for ip in verified_ips {
+        builder = builder.resolve(host, SocketAddr::new(*ip, port));
+    }
+    let client = builder.build().map_err(|e| {
+        warn!("[ssrf] pinned client build failed: {e}");
+        opaque_error()
+    })?;
+
+    state
+        .pinned_clients
+        .insert(cache_key, (client.clone(), Instant::now()));
+    Ok(client)
+}
+
+/// Resolve `host`, serving the DNS cache while it is fresh. Callers decide
+/// whether the result is worth caching — see [`resolve_and_check`].
 async fn resolve_with_cache(
     host: &str,
     cache: &Arc<DashMap<String, (Vec<IpAddr>, Instant)>>,
@@ -90,7 +175,6 @@ async fn resolve_with_cache(
         .map(|addr| addr.ip())
         .collect();
 
-    cache.insert(host.to_string(), (ips.clone(), Instant::now()));
     Ok(ips)
 }
 
@@ -104,14 +188,19 @@ fn is_allowed(ip: &IpAddr, allowed_cidrs: &[String]) -> bool {
     !is_blocked_ip(&ip)
 }
 
-/// Canonicalize IPv6 forms that embed an IPv4 address (RFC 4291 IPv4-mapped
-/// `::ffff:a.b.c.d` and RFC 6052 NAT64 `64:ff9b::/96`) into plain IPv4, so
+/// Canonicalize IPv6 forms that embed an IPv4 address into plain IPv4, so
 /// blocked/CIDR checks see the address the connection actually reaches.
+///
+/// RFC 4291 IPv4-mapped `::ffff:a.b.c.d` and the deprecated IPv4-compatible
+/// `::a.b.c.d` are both covered by [`Ipv6Addr::to_ipv4`]; the latter matters
+/// because `::` maps to `0.0.0.0` and connecting to the unspecified address
+/// reaches loopback on Linux. RFC 6052 NAT64 `64:ff9b::/96` is decoded by
+/// hand below.
 fn normalize_ip(ip: &IpAddr) -> IpAddr {
     match ip {
         IpAddr::V4(_) => *ip,
         IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
+            if let Some(v4) = v6.to_ipv4() {
                 return IpAddr::V4(v4);
             }
             let s = v6.segments();
@@ -152,18 +241,9 @@ fn is_blocked_v4(ip: &Ipv4Addr) -> bool {
 
 fn is_blocked_v6(ip: &Ipv6Addr) -> bool {
     let s = ip.segments();
-    // ::1 (loopback)
-    if s[0] == 0
-        && s[1] == 0
-        && s[2] == 0
-        && s[3] == 0
-        && s[4] == 0
-        && s[5] == 0
-        && s[6] == 0
-        && s[7] == 1
-    {
-        return true;
-    }
+    // Loopback (::1) and the unspecified address (::) never reach this point:
+    // both lie in ::/96 and `normalize_ip` has already mapped them to IPv4
+    // (0.0.0.1 / 0.0.0.0), which `is_blocked_v4` rejects.
     // fc00::/7 (unique local)
     if s[0] & 0xfe00 == 0xfc00 {
         return true;
@@ -180,11 +260,8 @@ fn is_blocked_v6(ip: &Ipv6Addr) -> bool {
 /// A bare IP without a prefix length is treated as a /32 (IPv4) or /128 (IPv6).
 pub(crate) fn ip_in_cidr(ip: &IpAddr, cidr_str: &str) -> bool {
     let (addr_str, prefix_len) = match cidr_str.split_once('/') {
-        Some((a, p)) => (a, p.parse::<u8>().unwrap_or(32)),
-        None => match ip {
-            IpAddr::V4(_) => (cidr_str, 32),
-            IpAddr::V6(_) => (cidr_str, 128),
-        },
+        Some((a, p)) => (a, Some(p)),
+        None => (cidr_str, None),
     };
 
     let cidr_addr = match IpAddr::from_str(addr_str) {
@@ -192,10 +269,39 @@ pub(crate) fn ip_in_cidr(ip: &IpAddr, cidr_str: &str) -> bool {
         Err(_) => return false,
     };
 
-    match (ip, cidr_addr) {
-        (IpAddr::V4(ip), IpAddr::V4(cidr)) => ipv4_in_prefix(ip, &cidr, prefix_len.min(32)),
-        (IpAddr::V6(ip), IpAddr::V6(cidr)) => ipv6_in_prefix(ip, &cidr, prefix_len.min(128)),
-        _ => false,
+    // The default (and cap) follow the CIDR's own address family. Falling back
+    // to a bare 32 would turn an IPv6 entry with an unparseable prefix into a
+    // /32, matching far more than intended; such an entry fails closed.
+    let family_max = match cidr_addr {
+        IpAddr::V4(_) => 32u8,
+        IpAddr::V6(_) => 128u8,
+    };
+    let prefix_len = match prefix_len {
+        Some(p) => match p.parse::<u8>() {
+            Ok(len) if len <= family_max => len,
+            _ => return false,
+        },
+        None => family_max,
+    };
+
+    ip_in_prefix(ip, &cidr_addr, prefix_len)
+}
+
+/// Whether `ip` falls inside `prefix/len`.
+///
+/// Address families are compared as written and only canonicalized when they
+/// disagree (see [`normalize_ip`]), so an IPv4-mapped peer still matches a
+/// plain IPv4 prefix. Canonicalizing up front would collapse a `::` prefix to
+/// `0.0.0.0` and stop matching IPv6 entirely, including `::/0`.
+pub(crate) fn ip_in_prefix(ip: &IpAddr, prefix: &IpAddr, len: u8) -> bool {
+    match (ip, prefix) {
+        (IpAddr::V4(ip), IpAddr::V4(prefix)) => ipv4_in_prefix(ip, prefix, len.min(32)),
+        (IpAddr::V6(ip), IpAddr::V6(prefix)) => ipv6_in_prefix(ip, prefix, len.min(128)),
+        _ => match (normalize_ip(ip), normalize_ip(prefix)) {
+            (IpAddr::V4(ip), IpAddr::V4(prefix)) => ipv4_in_prefix(&ip, &prefix, len.min(32)),
+            (IpAddr::V6(ip), IpAddr::V6(prefix)) => ipv6_in_prefix(&ip, &prefix, len.min(128)),
+            _ => false,
+        },
     }
 }
 
@@ -235,6 +341,24 @@ mod tests {
     #[test]
     fn v6_loopback_blocked() {
         assert!(!allowed("::1"));
+    }
+
+    #[test]
+    fn v6_unspecified_blocked() {
+        // Connecting to `::` reaches loopback on Linux, so it must not be
+        // treated as a public address.
+        assert!(!allowed("::"));
+    }
+
+    #[test]
+    fn ipv4_compatible_loopback_blocked() {
+        // IPv4-compatible `::a.b.c.d` embeds 127.0.0.1.
+        assert!(!allowed("::7f00:1"));
+    }
+
+    #[test]
+    fn ipv4_compatible_metadata_blocked() {
+        assert!(!allowed("::a9fe:a9fe"));
     }
 
     #[test]
@@ -366,6 +490,21 @@ mod tests {
     }
 
     #[test]
+    fn ip_in_cidr_prefix_follows_cidr_family() {
+        // An unparseable or out-of-range prefix fails closed instead of
+        // degrading to an IPv4 /32, which would widen an IPv6 entry a lot.
+        assert!(!ip_in_cidr(
+            &"2001:db8::1".parse().unwrap(),
+            "2001:db8::/abc"
+        ));
+        assert!(!ip_in_cidr(&"10.0.0.1".parse().unwrap(), "10.0.0.0/abc"));
+        assert!(!ip_in_cidr(&"10.0.0.1".parse().unwrap(), "10.0.0.0/33"));
+        // A bare IPv6 address defaults to /128, not /32.
+        assert!(ip_in_cidr(&"2001:db8::1".parse().unwrap(), "2001:db8::1"));
+        assert!(!ip_in_cidr(&"2001:db8::2".parse().unwrap(), "2001:db8::1"));
+    }
+
+    #[test]
     fn ip_in_cidr_invalid_cidr_returns_false() {
         assert!(!ip_in_cidr(
             &"8.8.28"
@@ -427,6 +566,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn check_ssrf_config_rejects_encoded_ipv4_loopback() {
+        // The URL parser folds every IPv4 shorthand into a dotted quad, so
+        // decimal, hex, octal and short forms have to land on the blocked
+        // address instead of reaching the IP check as a bare host name.
+        for raw in [
+            "http://2130706433/api",
+            "http://0x7f.0.0.1/api",
+            "http://0177.0.0.1/api",
+            "http://127.1/api",
+            "http://127.0.0.1/api",
+        ] {
+            let url = reqwest::Url::parse(raw).unwrap();
+            assert_eq!(url.host_str(), Some("127.0.0.1"), "{raw} must normalize");
+            let dns_cache = Arc::new(DashMap::new());
+            let err = check_ssrf_config(&url, &[], &dns_cache, "test")
+                .await
+                .expect_err("{raw} must be rejected");
+            assert!(err.message.contains("blocked"), "{raw}: {err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn check_ssrf_config_rejects_ipv4_mapped_ipv6_literal() {
+        let dns_cache = Arc::new(DashMap::new());
+        let url = reqwest::Url::parse("http://[::ffff:127.0.0.1]/api").unwrap();
+        let err = check_ssrf_config(&url, &[], &dns_cache, "test")
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("blocked"));
+    }
+
+    #[tokio::test]
+    async fn check_ssrf_config_resolves_ipv6_literal() {
+        // Regression: the bracketed host_str used to be handed to lookup_host
+        // as-is, which failed for every IPv6 literal and made those providers
+        // impossible to create.
+        let dns_cache = Arc::new(DashMap::new());
+        let url = reqwest::Url::parse("http://[2001:db8::1]:11434/v1").unwrap();
+        assert_eq!(url.host_str(), Some("[2001:db8::1]"));
+        check_ssrf_config(&url, &[], &dns_cache, "test")
+            .await
+            .expect("a public IPv6 literal must resolve");
+    }
+
+    #[tokio::test]
     async fn check_ssrf_config_allowed_returns_ok() {
         let dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
         dns_cache.insert(
@@ -437,5 +621,136 @@ mod tests {
         let result =
             check_ssrf_config(&url, &["127.0.0.1/8".to_string()], &dns_cache, "test").await;
         assert!(result.is_ok());
+    }
+
+    // ── DNS cache contents ──
+
+    #[tokio::test]
+    async fn blocked_resolution_is_not_cached() {
+        // A literal IP needs no DNS, so the check runs offline. Caching the
+        // rejected set would keep denying the host for a full TTL after DNS
+        // was repointed at a public address.
+        let dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
+        let url = reqwest::Url::parse("http://127.0.0.1/api").unwrap();
+        let result = check_ssrf(&url, &[], &dns_cache, "test").await;
+        assert!(result.is_err());
+        assert!(dns_cache.is_empty(), "blocked host must not be cached");
+    }
+
+    #[tokio::test]
+    async fn allowed_resolution_is_cached() {
+        // 192.0.2.0/24 is reserved for documentation: a literal, DNS-free
+        // address that the blocked ranges do not cover.
+        let dns_cache: Arc<DashMap<String, (Vec<IpAddr>, Instant)>> = Arc::new(DashMap::new());
+        let url = reqwest::Url::parse("http://192.0.2.1/api").unwrap();
+        let ips = check_ssrf(&url, &[], &dns_cache, "test").await.unwrap();
+        assert_eq!(ips, vec!["192.0.2.1".parse::<IpAddr>().unwrap()]);
+        assert!(dns_cache.contains_key("192.0.2.1"));
+    }
+
+    // ── pinned_client ──
+
+    #[test]
+    fn pinned_client_caches_per_host_and_port() {
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let ips = vec!["127.0.0.1".parse().unwrap()];
+
+        let url = reqwest::Url::parse("http://upstream.test/api").unwrap();
+        let _first = pinned_client(&state, &url, &ips).unwrap();
+        let _second = pinned_client(&state, &url, &ips).unwrap();
+        assert_eq!(state.pinned_clients.len(), 1, "same host:port is reused");
+
+        let url_8080 = reqwest::Url::parse("http://upstream.test:8080/api").unwrap();
+        let _third = pinned_client(&state, &url_8080, &ips).unwrap();
+        assert_eq!(
+            state.pinned_clients.len(),
+            2,
+            "different port gets its own entry"
+        );
+    }
+
+    #[test]
+    fn pinned_client_rebuilds_when_verified_ips_change() {
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let url = reqwest::Url::parse("http://upstream.test/api").unwrap();
+        let first: Vec<IpAddr> = vec!["192.0.2.1".parse().unwrap()];
+        let second: Vec<IpAddr> = vec!["192.0.2.2".parse().unwrap()];
+
+        let _ = pinned_client(&state, &url, &first).unwrap();
+        assert_eq!(state.pinned_clients.len(), 1);
+
+        // Same host:port, different verified set: reusing the old client would
+        // connect to addresses this request never checked.
+        let _ = pinned_client(&state, &url, &second).unwrap();
+        assert_eq!(state.pinned_clients.len(), 2);
+
+        // An earlier set is still a hit, so a single host does not leak one
+        // client per request.
+        let _ = pinned_client(&state, &url, &first).unwrap();
+        assert_eq!(state.pinned_clients.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn pinned_client_reaches_host_only_through_the_pin() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // A real server on loopback, addressed by a name no resolver knows
+        // (`.invalid` is reserved by RFC 2606). The request can only succeed
+        // through the pinned mapping - which is exactly the split a rebinding
+        // attack targets: the connection is placed by address, not by name.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (host_tx, host_rx) = tokio::sync::oneshot::channel();
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 2048];
+            let read = socket.read(&mut buf).await.unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..read]).to_string();
+            let host = request
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("host:")
+                        .map(|value| value.trim().to_string())
+                })
+                .unwrap_or_default();
+            let _ = host_tx.send(host);
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok")
+                .await;
+        });
+
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let url = reqwest::Url::parse(&format!("http://pinned.invalid:{port}/api")).unwrap();
+        let verified = vec![IpAddr::from_str("127.0.0.1").unwrap()];
+
+        let client = pinned_client(&state, &url, &verified).unwrap();
+        let response = client.get(url.clone()).send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+        // The socket was placed on the verified address while HTTP still
+        // addressed the original name.
+        assert_eq!(host_rx.await.unwrap(), format!("pinned.invalid:{port}"));
+    }
+
+    #[test]
+    fn pinned_client_strips_ipv6_brackets() {
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let url = reqwest::Url::parse("http://[::1]/api").unwrap();
+        let ips = vec!["::1".parse().unwrap()];
+        let _ = pinned_client(&state, &url, &ips).unwrap();
+        // The cache key must use the bare address form; a bracketed key would
+        // miss on subsequent lookups and rebuild a client per request.
+        assert_eq!(state.pinned_clients.len(), 1);
+    }
+
+    #[test]
+    fn pinned_client_without_verified_ips_is_rejected() {
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let url = reqwest::Url::parse("http://upstream.test/api").unwrap();
+        let result = pinned_client(&state, &url, &[]);
+        assert!(result.is_err(), "must not fall back to real DNS");
+        assert!(state.pinned_clients.is_empty());
     }
 }

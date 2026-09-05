@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 
-use crate::api::{self, PaginatedResponse, ProxyLogEntryResponse};
+use crate::api::{self, ApiError, PaginatedResponse, ProxyLogEntryResponse};
 use crate::components::error_display::ErrorCard;
 use crate::components::modal::ModalShell;
 use crate::components::skeleton::logs_table_skeleton;
@@ -24,7 +24,7 @@ fn latency_pill(latency_s: f64) -> &'static str {
 }
 
 fn grey_pill() -> &'static str {
-    "bg-gray-100 text-gray-600 dark:bg-gray-600 dark:text-gray-300"
+    "bg-gray-100 text-gray-600 dark:bg-ink-700 dark:text-ink-300"
 }
 
 fn latency_s(ms: i64) -> f64 {
@@ -55,7 +55,7 @@ fn PaginationBar(
     };
 
     let select_cls = "w-16 text-center px-1 py-1 text-sm rounded border border-gray-300 \
-        dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 \
+        dark:border-ink-600 bg-white dark:bg-ink-800 text-gray-900 dark:text-ink-100 \
         outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500";
 
     let on_keydown = move |ev: leptos::ev::KeyboardEvent| {
@@ -89,7 +89,7 @@ fn PaginationBar(
 
         view! {
             <div class=format!(
-                "flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-700 text-sm {}",
+                "flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-ink-700 text-sm {}",
                 CLASS_TEXT_MUTED,
             )>
                 <div>
@@ -129,9 +129,9 @@ fn PaginationBar(
                     <div class="flex items-center gap-1">
                         <button
                             class=if is_first {
-                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-ink-600 cursor-not-allowed"
                             } else {
-                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-ink-300 hover:bg-gray-100 dark:hover:bg-ink-800 cursor-pointer"
                             }
                             disabled=is_first
                             title=t!(FirstPage)
@@ -141,9 +141,9 @@ fn PaginationBar(
                         </button>
                         <button
                             class=if is_first {
-                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-ink-600 cursor-not-allowed"
                             } else {
-                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-ink-300 hover:bg-gray-100 dark:hover:bg-ink-800 cursor-pointer"
                             }
                             disabled=is_first
                             title=t!(PreviousPage)
@@ -154,7 +154,7 @@ fn PaginationBar(
                         <input
                             node_ref=input_ref
                             id="filter-page"
-                            class="w-10 text-center px-1 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 outline-none"
+                            class="w-10 text-center px-1 py-1 text-sm rounded border border-gray-300 dark:border-ink-600 bg-white dark:bg-ink-800 text-gray-900 dark:text-ink-100 outline-none"
                             prop:value=move || page.get().to_string()
                             on:keydown=on_keydown
                             on:blur=on_blur
@@ -165,9 +165,9 @@ fn PaginationBar(
                         )>{" / "}{total_pages}</span>
                         <button
                             class=if is_last {
-                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-ink-600 cursor-not-allowed"
                             } else {
-                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-ink-300 hover:bg-gray-100 dark:hover:bg-ink-800 cursor-pointer"
                             }
                             disabled=is_last
                             title=t!(NextPage)
@@ -177,9 +177,9 @@ fn PaginationBar(
                         </button>
                         <button
                             class=if is_last {
-                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                                "px-2 py-1 text-sm rounded text-gray-300 dark:text-ink-600 cursor-not-allowed"
                             } else {
-                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                                "px-2 py-1 text-sm rounded text-gray-600 dark:text-ink-300 hover:bg-gray-100 dark:hover:bg-ink-800 cursor-pointer"
                             }
                             disabled=is_last
                             title=t!(LastPage)
@@ -196,7 +196,7 @@ fn PaginationBar(
 
 #[component]
 pub fn LogsPage() -> impl IntoView {
-    use_page_title(move || format!("Ait - {}", t!(LogQuery)()));
+    use_page_title(move || format!("{} - Ait", t!(LogQuery)()));
 
     let page = RwSignal::new(1u64);
     let query_trigger = RwSignal::new(0u64);
@@ -222,7 +222,7 @@ pub fn LogsPage() -> impl IntoView {
 
     let detail_item = RwSignal::new(None::<ProxyLogEntryResponse>);
 
-    let logs_resource: LocalResource<Result<PaginatedResponse<ProxyLogEntryResponse>, String>> =
+    let logs_resource: LocalResource<Result<PaginatedResponse<ProxyLogEntryResponse>, ApiError>> =
         LocalResource::new(move || {
             let p = page.get();
             let pp = per_page.get();
@@ -253,7 +253,6 @@ pub fn LogsPage() -> impl IntoView {
                     ist,
                 )
                 .await
-                .map_err(|e| e.to_string())
             }
         });
 
@@ -263,6 +262,22 @@ pub fn LogsPage() -> impl IntoView {
             .and_then(|r| r.ok())
             .map(|r| r.total)
             .unwrap_or(0)
+    });
+
+    // Rows live in a memo rather than a closure-local Vec. The <For> below
+    // reads this from a stable position in the tree, so a refetch diffs rows
+    // by request_id instead of tearing down and rebuilding the whole tbody.
+    let rows = Memo::new(move |_| {
+        logs_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|d| d.items)
+            .unwrap_or_default()
+    });
+
+    let failure = Memo::new(move |_| match logs_resource.get() {
+        Some(Err(e)) => Some(e),
+        _ => None,
     });
 
     let do_query = move |_| {
@@ -296,8 +311,8 @@ pub fn LogsPage() -> impl IntoView {
         set_end_ts.set(date_str_to_ts(&val));
     };
 
-    let select_cls = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 \
-        rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 \
+    let select_cls = "w-full px-3 py-2 border border-gray-300 dark:border-ink-600 \
+        rounded-lg bg-white dark:bg-ink-800 text-gray-900 dark:text-ink-100 \
         focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none";
 
     view! {
@@ -312,7 +327,7 @@ pub fn LogsPage() -> impl IntoView {
                         title=t!(LogSource)
                         disabled
                         class=format!(
-                            "{} cursor-not-allowed bg-gray-100 dark:bg-gray-600",
+                            "{} cursor-not-allowed bg-gray-100 dark:bg-ink-700",
                             select_cls,
                         )
                     >
@@ -379,23 +394,23 @@ pub fn LogsPage() -> impl IntoView {
 
                 <div class="grid grid-cols-8 gap-3 items-end">
                     <div class="col-span-2">
-                        <div class="flex items-center border rounded-lg bg-white dark:bg-gray-700 \
-                        border-gray-300 dark:border-gray-600 overflow-hidden">
+                        <div class="flex items-center border rounded-lg bg-white dark:bg-ink-800 \
+                        border-gray-300 dark:border-ink-600 overflow-hidden">
                             <input
                                 id="filter-start-date"
                                 type="date"
                                 class="flex-1 px-3 py-2 text-sm border-0 bg-transparent \
-                                text-gray-900 dark:text-gray-100 cursor-pointer \
+                                text-gray-900 dark:text-ink-100 cursor-pointer \
                                 focus:ring-0 focus:outline-none"
                                 prop:value=move || start_str.get()
                                 on:change=on_start_date
                             />
-                            <span class="px-1 text-gray-400 dark:text-gray-500 select-none">-</span>
+                            <span class="px-1 text-gray-400 dark:text-ink-500 select-none">-</span>
                             <input
                                 id="filter-end-date"
                                 type="date"
                                 class="flex-1 px-3 py-2 text-sm border-0 bg-transparent \
-                                text-gray-900 dark:text-gray-100 cursor-pointer \
+                                text-gray-900 dark:text-ink-100 cursor-pointer \
                                 focus:ring-0 focus:outline-none"
                                 prop:value=move || end_str.get()
                                 on:change=on_end_date
@@ -406,14 +421,13 @@ pub fn LogsPage() -> impl IntoView {
                         <select
                             id="filter-endpoint"
                             class=select_cls
+                            prop:value=move || endpoint.get()
                             on:change=move |ev| {
                                 let v = event_target_value(&ev);
                                 set_endpoint.set(v);
                             }
                         >
-                            <option value="" selected>
-                                {move || t!(LogEndpointAll)}
-                            </option>
+                            <option value="">{move || t!(LogEndpointAll)}</option>
                             <option value="/chat/completions">{"/chat/completions"}</option>
                             <option value="/completions">{"/completions"}</option>
                             <option value="/embeddings">{"/embeddings"}</option>
@@ -423,6 +437,11 @@ pub fn LogsPage() -> impl IntoView {
                         <select
                             id="filter-streaming"
                             class=select_cls
+                            prop:value=move || match is_streaming.get() {
+                                Some(true) => "true".to_string(),
+                                Some(false) => "false".to_string(),
+                                None => String::new(),
+                            }
                             on:change=move |ev| {
                                 let v = event_target_value(&ev);
                                 set_is_streaming
@@ -435,9 +454,7 @@ pub fn LogsPage() -> impl IntoView {
                                     );
                             }
                         >
-                            <option value="" selected>
-                                {move || t!(LogStreamingAll)}
-                            </option>
+                            <option value="">{move || t!(LogStreamingAll)}</option>
                             <option value="true">{"Streaming"}</option>
                             <option value="false">{"Non-streaming"}</option>
                         </select>
@@ -445,9 +462,9 @@ pub fn LogsPage() -> impl IntoView {
                     <div class="col-span-4 flex justify-end gap-3">
                         <button
                             class="px-4 py-2 text-sm font-medium rounded-lg \
-                            bg-gray-100 dark:bg-gray-700 \
-                            text-gray-600 dark:text-gray-300 \
-                            hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                            bg-gray-100 dark:bg-ink-800 \
+                            text-gray-600 dark:text-ink-300 \
+                            hover:bg-gray-200 dark:hover:bg-ink-700 cursor-pointer"
                             on:click=do_reset
                         >
                             {t!(LogReset)}
@@ -462,170 +479,173 @@ pub fn LogsPage() -> impl IntoView {
 
             <div class=CLASS_CARD>
                 <Transition fallback=move || logs_table_skeleton()>
-                    {move || match logs_resource.get() {
-                        Some(Ok(ref data)) => {
-                            let items = &data.items;
-                            if items.is_empty() {
+                    {move || {
+                        failure
+                            .get()
+                            .map(|e| {
                                 view! {
-                                    <div class="p-12 text-center text-gray-400 dark:text-gray-500 text-sm">
+                                    <ErrorCard
+                                        message=e.message.clone()
+                                        request_id=e.request_id.clone()
+                                        on_retry=Box::new(move || logs_resource.refetch())
+                                    />
+                                }
+                                    .into_any()
+                            })
+                            .unwrap_or_else(|| ().into_any())
+                    }} // Nested Shows keep the table (and therefore the <For>) at
+                    // a fixed position: while the row set stays non-empty the
+                    // component is not rebuilt, so keyed diffing applies.
+                    <Show when=move || failure.get().is_none()>
+                        <Show
+                            when=move || !rows.get().is_empty()
+                            fallback=move || {
+                                view! {
+                                    <div class="p-12 text-center text-gray-400 dark:text-ink-500 text-sm">
                                         {t!(LogNoData)}
                                     </div>
                                 }
-                                    .into_any()
-                            } else {
-                                let rows = items.clone();
-                                view! {
-                                    <>
-                                        <div class="overflow-x-auto">
-                                            <table class="w-full text-sm">
-                                                <thead>
-                                                    <tr class=CLASS_BORDER_B>
-                                                        <th class=format!(
-                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
-                                                            CLASS_TEXT_MUTED,
-                                                        )>{t!(CreatedAt)}</th>
-                                                        <th class=format!(
-                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
-                                                            CLASS_TEXT_MUTED,
-                                                        )>{t!(Providers)}</th>
-                                                        <th class=format!(
-                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
-                                                            CLASS_TEXT_MUTED,
-                                                        )>{t!(Models)}</th>
-                                                        <th class=format!(
-                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
-                                                            CLASS_TEXT_MUTED,
-                                                        )>{t!(LogLatency)}</th>
-                                                        <th class=format!(
-                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
-                                                            CLASS_TEXT_MUTED,
-                                                        )>{t!(LogInput)}</th>
-                                                        <th class=format!(
-                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
-                                                            CLASS_TEXT_MUTED,
-                                                        )>{t!(LogOutput)}</th>
-                                                        <th class=format!(
-                                                            "px-6 py-3 text-left {} font-medium whitespace-nowrap",
-                                                            CLASS_TEXT_MUTED,
-                                                        )>{t!(LogClientIp)}</th>
-                                                        <th class=format!(
-                                                            "px-6 py-3 text-center {} font-medium whitespace-nowrap",
-                                                            CLASS_TEXT_MUTED,
-                                                        )>{t!(TableStatus)}</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {rows
-                                                        .iter()
-                                                        .map(|entry| {
-                                                            let e = entry.clone();
-                                                            let entry_clone = entry.clone();
-                                                            view! {
-                                                                <tr
-                                                                    class="odd:bg-gray-50 dark:odd:bg-gray-800/50 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700/50"
-                                                                    on:click=move |_| detail_item.set(Some(entry_clone.clone()))
+                            }
+                        >
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-sm">
+                                    <thead>
+                                        <tr class=CLASS_BORDER_B>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(CreatedAt)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(Providers)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(Models)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(LogLatency)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(LogInput)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(LogOutput)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-left {} font-medium whitespace-nowrap",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(LogClientIp)}</th>
+                                            <th class=format!(
+                                                "px-6 py-3 text-center {} font-medium whitespace-nowrap",
+                                                CLASS_TEXT_MUTED,
+                                            )>{t!(TableStatus)}</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <For
+                                            each=move || rows.get()
+                                            key=|entry| entry.request_id.clone()
+                                            let:entry
+                                        >
+                                            {{
+                                                let e = entry.clone();
+                                                let entry_clone = entry.clone();
+                                                view! {
+                                                    <tr
+                                                        class="odd:bg-gray-50 dark:odd:bg-ink-900/50 cursor-pointer hover:bg-gray-100 dark:hover:bg-ink-800/50"
+                                                        on:click=move |_| detail_item.set(Some(entry_clone.clone()))
+                                                    >
+                                                        <td class="px-6 py-4 text-gray-400 dark:text-ink-500 text-sm">
+                                                            {timestamp_str(e.timestamp)}
+                                                        </td>
+                                                        <td class="px-6 py-4 text-gray-800 dark:text-ink-200 font-medium whitespace-nowrap">
+                                                            {e.provider_name}
+                                                        </td>
+                                                        <td class="px-6 py-4 text-gray-600 dark:text-ink-400 whitespace-nowrap">
+                                                            {e.model_name}
+                                                        </td>
+                                                        <td class="px-6 py-4 whitespace-nowrap">
+                                                            <div class="flex items-center gap-1">
+                                                                <span class=format!(
+                                                                    "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium {}",
+                                                                    CLASS_PILL_GREEN,
+                                                                )>{format!("{:.2}s", latency_s(e.latency_ms))}</span>
+                                                                <Show
+                                                                    when=move || e.is_streaming
+                                                                    fallback=move || {
+                                                                        view! {
+                                                                            <i class="fas fa-box text-xs text-gray-300 dark:text-ink-600"></i>
+                                                                        }
+                                                                    }
                                                                 >
-                                                                    <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
-                                                                        {timestamp_str(e.timestamp)}
-                                                                    </td>
-                                                                    <td class="px-6 py-4 text-gray-800 dark:text-gray-200 font-medium whitespace-nowrap">
-                                                                        {e.provider_name}
-                                                                    </td>
-                                                                    <td class="px-6 py-4 text-gray-600 dark:text-gray-400 whitespace-nowrap">
-                                                                        {e.model_name}
-                                                                    </td>
-                                                                    <td class="px-6 py-4 whitespace-nowrap">
-                                                                        <div class="flex items-center gap-1">
+                                                                    {{
+                                                                        let ttft = e.time_to_first_token_ms.unwrap_or(0);
+                                                                        let ttft_s = latency_s(ttft);
+                                                                        view! {
                                                                             <span class=format!(
                                                                                 "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium {}",
-                                                                                CLASS_PILL_GREEN,
-                                                                            )>{format!("{:.2}s", latency_s(e.latency_ms))}</span>
-                                                                            <Show
-                                                                                when=move || e.is_streaming
-                                                                                fallback=move || {
-                                                                                    view! {
-                                                                                        <i class="fas fa-box text-xs text-gray-300 dark:text-gray-600"></i>
-                                                                                    }
-                                                                                }
-                                                                            >
-                                                                                {{
-                                                                                    let ttft = e.time_to_first_token_ms.unwrap_or(0);
-                                                                                    let ttft_s = latency_s(ttft);
-                                                                                    view! {
-                                                                                        <span class=format!(
-                                                                                            "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium {}",
-                                                                                            latency_pill(ttft_s),
-                                                                                        )>
-                                                                                            <i class="fas fa-bolt text-xs"></i>
-                                                                                            {format!("{:.2}s", ttft_s)}
-                                                                                        </span>
-                                                                                    }
-                                                                                }}
-                                                                            </Show>
-                                                                        </div>
-                                                                    </td>
-                                                                    <td class="px-6 py-4 whitespace-nowrap">
-                                                                        <span class="text-gray-800 dark:text-gray-200 font-medium">
-                                                                            {e.prompt_tokens.unwrap_or(0)}
-                                                                        </span>
-                                                                        {if e.cached_tokens.unwrap_or(0) > 0 {
-                                                                            view! {
-                                                                                <span class=format!(
-                                                                                    "inline-flex ml-1 px-1.5 py-0.5 rounded text-xs font-medium {}",
-                                                                                    grey_pill(),
-                                                                                )>{e.cached_tokens.unwrap_or(0)}</span>
-                                                                            }
-                                                                                .into_any()
-                                                                        } else {
-                                                                            ().into_any()
-                                                                        }}
-                                                                    </td>
-                                                                    <td class="px-6 py-4 text-gray-800 dark:text-gray-200 font-medium whitespace-nowrap">
-                                                                        {e.completion_tokens.unwrap_or(0)}
-                                                                    </td>
-                                                                    <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-xs font-mono whitespace-nowrap">
-                                                                        {e.client_ip.clone().unwrap_or_else(|| "-".to_string())}
-                                                                    </td>
-                                                                    <td class="px-6 py-4 text-center whitespace-nowrap">
-                                                                        {{
-                                                                            let code: u16 = e.status.parse().unwrap_or(0);
-                                                                            let cls = if code >= 400 {
-                                                                                CLASS_PILL_RED
-                                                                            } else {
-                                                                                CLASS_PILL_GREEN
-                                                                            };
-                                                                            view! {
-                                                                                <span class=format!(
-                                                                                    "inline-block px-2 py-1 rounded-full text-xs font-medium {}",
-                                                                                    cls,
-                                                                                )>{e.status.clone()}</span>
-                                                                            }
-                                                                        }}
-                                                                    </td>
-                                                                </tr>
-                                                            }
-                                                        })
-                                                        .collect::<Vec<_>>()}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                        <PaginationBar page total_signal=total per_page />
-                                    </>
-                                }
-                                    .into_any()
-                            }
-                        }
-                        Some(Err(ref e)) => {
-                            view! {
-                                <ErrorCard
-                                    message=e.clone()
-                                    on_retry=Box::new(move || logs_resource.refetch())
-                                />
-                            }
-                                .into_any()
-                        }
-                        None => ().into_any(),
-                    }}
+                                                                                latency_pill(ttft_s),
+                                                                            )>
+                                                                                <i class="fas fa-bolt text-xs"></i>
+                                                                                {format!("{:.2}s", ttft_s)}
+                                                                            </span>
+                                                                        }
+                                                                    }}
+                                                                </Show>
+                                                            </div>
+                                                        </td>
+                                                        <td class="px-6 py-4 whitespace-nowrap">
+                                                            <span class="text-gray-800 dark:text-ink-200 font-medium">
+                                                                {e.prompt_tokens.unwrap_or(0)}
+                                                            </span>
+                                                            {if e.cached_tokens.unwrap_or(0) > 0 {
+                                                                view! {
+                                                                    <span class=format!(
+                                                                        "inline-flex ml-1 px-1.5 py-0.5 rounded text-xs font-medium {}",
+                                                                        grey_pill(),
+                                                                    )>{e.cached_tokens.unwrap_or(0)}</span>
+                                                                }
+                                                                    .into_any()
+                                                            } else {
+                                                                ().into_any()
+                                                            }}
+                                                        </td>
+                                                        <td class="px-6 py-4 text-gray-800 dark:text-ink-200 font-medium whitespace-nowrap">
+                                                            {e.completion_tokens.unwrap_or(0)}
+                                                        </td>
+                                                        <td class="px-6 py-4 text-gray-400 dark:text-ink-500 text-xs font-mono whitespace-nowrap">
+                                                            {e.client_ip.clone().unwrap_or_else(|| "-".to_string())}
+                                                        </td>
+                                                        <td class="px-6 py-4 text-center whitespace-nowrap">
+                                                            {{
+                                                                let code: u16 = e.status.parse().unwrap_or(0);
+                                                                let cls = if code >= 400 {
+                                                                    CLASS_PILL_RED
+                                                                } else {
+                                                                    CLASS_PILL_GREEN
+                                                                };
+                                                                view! {
+                                                                    <span class=format!(
+                                                                        "inline-block px-2 py-1 rounded-full text-xs font-medium {}",
+                                                                        cls,
+                                                                    )>{e.status.clone()}</span>
+                                                                }
+                                                            }}
+                                                        </td>
+                                                    </tr>
+                                                }
+                                            }}
+                                        </For>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <PaginationBar page total_signal=total per_page />
+                        </Show>
+                    </Show>
                 </Transition>
             </div>
         </div>

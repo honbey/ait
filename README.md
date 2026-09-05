@@ -10,7 +10,7 @@
 
 - **多提供商支持** — [llama.cpp](https://llama.app/)、[Ollama](https://ollama.com)、[DeepSeek](https://www.deepseek.com/)、[Zhipu](https://bigmodel.cn/) 等提供了 OpenAI Compatible 接口的
 - **Web 管理界面** — 基于 Leptos 0.8 CSR 的 WASM 前端（ECharts 图表）
-  - **Admin 管理** — 添加/更新/删除提供商和模型
+  - **Admin 管理** — 添加/更新/删除提供商和模型，注意：**Admin API 接口不鉴权**，鉴权完全交由前方反代服务
   - **API Key 管理** — 创建/启用/禁用/删除 API Key
   - **Docs / About** — 文档中心与关于页面
   - **骨架屏加载** — 页面切换时显示占位骨架屏，减少布局抖动
@@ -54,12 +54,14 @@ cache_cleanup_interval_secs = 300
 cache_max_entries = 1000
 graceful_timeout_secs = 10
 trusted_proxies = ["127.0.0.1", "::1"]
+trusted_proxy_hops = 1
 
 [auth]
 enabled = true
 
 [database]
 path = "./data/ait.db"
+reader_pool_size = 4
 
 [log]
 path = "./data/ait-logs.duckdb"
@@ -69,6 +71,10 @@ flush_batch = 100
 channel_cap = 10000
 retention_every = 100
 analytics_timeout_secs = 10
+analytics_workers = 2
+duckdb_memory_limit_mb = 512
+duckdb_threads = 2
+duckdb_query_timeout_secs = 60
 level = "info"
 axum = "info"
 tower_http_trace = "info"
@@ -77,9 +83,11 @@ tower_http_trace = "info"
 timeout_secs = 300
 connect_timeout_secs = 30
 sse_idle_timeout_secs = 60
+sse_max_duration_secs = 1800
 stream = true
 max_response_body_bytes = 8388608
 max_request_body_bytes = 8388608
+prompt_token_divisor = 3
 
 [security]
 cors_allowed_origins = []
@@ -89,6 +97,7 @@ ssrf_allowed_cidrs = []
 [security.dlp]
 enabled = false
 sensitive_values = []
+scan_numbers = false
 ```
 
 **注意**：大部分配置项都可通过 `AIT_<SECTION>_<KEY>` 环境变量覆盖，例如：
@@ -123,12 +132,12 @@ ait -c /path/to/config.toml
 
 构建前端后将 `frontend/dist/` 与后端二进制一起部署，启动后通过 `http://{host}:{port}` 访问。
 
-详细说明见 [frontend/README.md](frontend/README.md)。
+详细说明见 [docs/frontend.md](docs/frontend.md)。
 
 ## OpenAI Compatible 接口
 
 认证方式：`Authorization: Bearer <token>` ，
-可以通过配置文件 `auth.enabled: false` 关闭认证。
+可以通过配置文件 `auth.enabled: false` 关闭认证，注意：关闭后**整个项目内部会完全没鉴权**。
 
 | 方法 | 路径 | 说明 |
 | ------ | ------ | ------ |

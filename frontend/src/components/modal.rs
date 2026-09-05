@@ -9,8 +9,9 @@ use crate::components::table::SubmitButton;
 use crate::components::toast::use_toast;
 use crate::{t, tr, trs, ts};
 
-/// One-shot modal shell. All props are static (not reactive) — modals are
-/// dismissed and re-created on language switch, so tracking is unnecessary.
+/// One-shot modal shell. All props are static (not reactive): the overlay
+/// covers the whole viewport, so no other UI can be operated while the modal
+/// is open, and every prop is re-computed whenever the modal is re-created.
 #[component]
 pub fn ModalShell(
     on_close: impl Fn() + 'static + Clone + Send,
@@ -19,7 +20,7 @@ pub fn ModalShell(
     children: Children,
 ) -> impl IntoView {
     let class = format!(
-        "relative z-10 bg-white dark:bg-gray-800 rounded-xl p-6 shadow-2xl w-full mx-4 {}",
+        "relative z-10 bg-white dark:bg-ink-900 rounded-xl p-6 shadow-2xl w-full mx-4 {}",
         card_class
     );
     let on_close_esc = on_close.clone();
@@ -35,7 +36,7 @@ pub fn ModalShell(
             <div class="absolute inset-0 bg-black/50" on:click=close.clone()></div>
             <div class=class>
                 <div class="flex items-center justify-between mb-4">
-                    <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">{title}</h2>
+                    <h2 class="text-lg font-semibold text-gray-800 dark:text-ink-100">{title}</h2>
                     <button type="button" class=CLASS_ICON_BTN on:click=close.clone()>
                         <i class="fas fa-times"></i>
                     </button>
@@ -88,13 +89,30 @@ pub fn DeleteConfirmModal(
         action.dispatch(());
     };
 
+    // Closing mid-flight disposes the Effect above, dropping the delete result
+    // (and its toast) even though the delete already happened upstream.
+    let close_when_idle = {
+        let pending = action.pending();
+        move || {
+            if !pending.get_untracked() {
+                on_close();
+            }
+        }
+    };
+    let close_cancel = close_when_idle.clone();
+
     view! {
-        <ModalShell on_close=on_close.clone() title=ts!(DeleteConfirmTitle)>
-            <p class="text-gray-600 dark:text-gray-400 text-sm mb-6">
+        <ModalShell on_close=close_when_idle title=ts!(DeleteConfirmTitle)>
+            <p class="text-gray-600 dark:text-ink-400 text-sm mb-6">
                 {tr!(DeleteConfirmMessage, &[("name", &item_name)])}
             </p>
             <div class="flex items-center justify-end gap-3">
-                <button type="button" class=CLASS_BTN_CANCEL on:click=move |_| on_close()>
+                <button
+                    type="button"
+                    class=CLASS_BTN_CANCEL
+                    disabled=move || action.pending().get()
+                    on:click=move |_| close_cancel()
+                >
                     {t!(Cancel)}
                 </button>
                 <button
@@ -132,13 +150,29 @@ pub fn FormModalShell(
     form_error: RwSignal<String>,
     children: Children,
 ) -> impl IntoView {
+    // Closing while the save is in flight disposes the caller's save Effect,
+    // so a successful write would land on the backend with no store update and
+    // no toast. Requests are capped by the 30s timeout in api.rs, so the modal
+    // can never be stuck open indefinitely.
+    let close_when_idle = move || {
+        if !pending.get_untracked() {
+            on_close();
+        }
+    };
+    let close_cancel = close_when_idle.clone();
+
     view! {
-        <ModalShell on_close=on_close.clone() title=title>
+        <ModalShell on_close=close_when_idle title=title>
             <form on:submit=on_submit class="space-y-4">
                 {children()}
                 <ErrorText msg=form_error />
                 <div class=CLASS_FORM_FOOTER>
-                    <button type="button" class=CLASS_BTN_CANCEL on:click=move |_| on_close()>
+                    <button
+                        type="button"
+                        class=CLASS_BTN_CANCEL
+                        disabled=move || pending.get()
+                        on:click=move |_| close_cancel()
+                    >
                         {t!(Cancel)}
                     </button>
                     <SubmitButton is_edit=is_edit pending=pending />

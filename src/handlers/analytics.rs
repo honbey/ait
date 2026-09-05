@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use crate::app::AppState;
 
+use crate::db::analytics::AnalyticsError;
 use crate::db::models::{BucketEntry, ModelDistEntry, TokenDistEntry};
 use crate::error::AitError;
 
@@ -45,12 +46,15 @@ pub fn validate_ts_range(
 
     let max_range = (retention_days as i64 + 1) * 86400;
 
+    // Clamp `end` on its own so the bound holds whichever range correction
+    // below applies; folding it into the chain let a future `end` through
+    // whenever `start >= end` short-circuited on the first arm.
+    let end = end.min(now + 3600);
+
     let (start, end) = if start >= end {
         (end - 86400, end)
     } else if end - start > max_range {
         (end - max_range, end)
-    } else if end > now + 3600 {
-        (start, now + 3600)
     } else {
         (start, end)
     };
@@ -63,7 +67,11 @@ pub async fn requests(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<Vec<BucketEntry>>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
-    let result = state.log_manager.requests(range.start, range.end).await;
+    let result = state
+        .log_manager
+        .requests(range.start, range.end)
+        .await
+        .map_err(AnalyticsError::into_response)?;
     Ok(Json(result))
 }
 
@@ -72,7 +80,11 @@ pub async fn tokens(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<Vec<BucketEntry>>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
-    let result = state.log_manager.tokens(range.start, range.end).await;
+    let result = state
+        .log_manager
+        .tokens(range.start, range.end)
+        .await
+        .map_err(AnalyticsError::into_response)?;
     Ok(Json(result))
 }
 
@@ -81,7 +93,11 @@ pub async fn model_dist(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<Vec<ModelDistEntry>>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
-    let result = state.log_manager.model_dist(range.start, range.end).await;
+    let result = state
+        .log_manager
+        .model_dist(range.start, range.end)
+        .await
+        .map_err(AnalyticsError::into_response)?;
     Ok(Json(result))
 }
 
@@ -90,7 +106,11 @@ pub async fn token_dist(
     Query(q): Query<AnalyticsQuery>,
 ) -> Result<Json<Vec<TokenDistEntry>>, (StatusCode, Json<AitError>)> {
     let range = validate_ts_range(q.start_ts, q.end_ts, state.config.log.retention_days)?;
-    let result = state.log_manager.token_dist(range.start, range.end).await;
+    let result = state
+        .log_manager
+        .token_dist(range.start, range.end)
+        .await
+        .map_err(AnalyticsError::into_response)?;
     Ok(Json(result))
 }
 
@@ -128,6 +148,16 @@ mod tests {
         let range = validate_ts_range(Some(now - 3600), Some(now + 7200), 30).unwrap();
         assert_eq!(range.end, now + 3600);
         assert_eq!(range.start, now - 3600);
+    }
+
+    #[test]
+    fn future_end_is_clamped_even_when_start_after_end() {
+        let now = Utc::now().timestamp();
+        // Both bounds far in the future: the previous mutually-exclusive chain
+        // short-circuited on `start >= end` and let `end` through unclamped.
+        let range = validate_ts_range(Some(now + 10_000), Some(now + 20_000), 30).unwrap();
+        assert_eq!(range.end, now + 3600);
+        assert_eq!(range.start, now + 3600 - 86400);
     }
 
     #[test]
@@ -173,7 +203,14 @@ mod http_tests {
         // Wait for all three events to be flushed.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            if state.log_manager.total_requests(h - 7200, h + 7200).await >= 3 {
+            if state
+                .log_manager
+                .overview(h - 7200, h + 7200)
+                .await
+                .unwrap()
+                .total_requests
+                >= 3
+            {
                 break;
             }
             assert!(

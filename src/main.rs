@@ -16,10 +16,14 @@ pub(crate) use blocking::run_blocking;
 #[cfg(test)]
 mod test_utils;
 
+use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, Method, header};
 use axum::routing::{Router, delete, get, post, put};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
+use tokio::signal::unix::SignalKind;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
@@ -30,8 +34,8 @@ use handlers::apikeys::{create_api_key, delete_api_key, list_api_keys, update_ap
 use handlers::logs::list_proxy_logs;
 use handlers::models::{create_model, delete_model, get_model, list_models, update_model};
 use handlers::providers::{
-    create_provider, delete_provider, get_provider, get_provider_api_key, list_provider_types,
-    list_providers, update_provider,
+    create_provider, delete_provider, get_provider, list_provider_types, list_providers,
+    update_provider,
 };
 use handlers::proxy::{
     chat_completions, completions, embeddings, health, list_models_proxy, responses,
@@ -93,12 +97,20 @@ async fn main() {
     tokio::pin!(server);
 
     let shutdown_watcher = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl-C handler");
+        // Docker, Kubernetes and systemd stop the container with SIGTERM;
+        // without this handler the process dies immediately and the log
+        // worker's unflushed buffer is lost.
+        let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = sigterm.recv() => {}
+        }
         tracing::info!("Shutdown requested, waiting for in-flight requests...");
         shutdown_token.cancel();
 
+        let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
         tokio::select! {
             _ = tokio::time::sleep(graceful_timeout) => {
                 tracing::warn!("Graceful shutdown timeout, forcing exit");
@@ -107,6 +119,11 @@ async fn main() {
             }
             _ = tokio::signal::ctrl_c() => {
                 tracing::warn!("Forced shutdown via Ctrl+C");
+                log_manager.shutdown();
+                std::process::exit(0);
+            }
+            _ = sigterm.recv() => {
+                tracing::warn!("Forced shutdown via SIGTERM");
                 log_manager.shutdown();
                 std::process::exit(0);
             }
@@ -168,6 +185,11 @@ fn init_logging(cfg: &config::LogConfig) {
         .init();
 }
 
+/// Let browser clients read the correlation id from a failed response.
+fn expose_headers() -> [header::HeaderName; 1] {
+    [header::HeaderName::from_static("x-request-id")]
+}
+
 fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer {
     let methods = [Method::GET, Method::POST, Method::PUT, Method::DELETE];
     let headers = [
@@ -182,23 +204,19 @@ fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer 
         return CorsLayer::new()
             .allow_origin(AllowOrigin::list(Vec::<HeaderValue>::new()))
             .allow_methods(methods)
-            .allow_headers(headers);
+            .allow_headers(headers)
+            .expose_headers(expose_headers());
     }
 
     if allowed_origins.iter().any(|o| o == "*") {
-        return if allow_credentials {
-            // `*` combined with credentials is rejected by browsers; mirror the
-            // request origin instead so cross-origin cookie auth can work
-            CorsLayer::new()
-                .allow_origin(AllowOrigin::mirror_request())
-                .allow_methods(methods)
-                .allow_headers(headers)
-                .allow_credentials(true)
-        } else {
-            CorsLayer::permissive()
-                .allow_methods(methods)
-                .allow_headers(headers)
-        };
+        // `ConfigApp::new` rejects `*` together with `cors_allow_credentials`,
+        // so reaching this branch means credentials are off. Reflecting the
+        // request Origin while allowing credentials would let any site read
+        // authenticated responses, hence the hard failure at startup.
+        return CorsLayer::permissive()
+            .allow_methods(methods)
+            .allow_headers(headers)
+            .expose_headers(expose_headers());
     }
 
     let origins: Vec<_> = allowed_origins
@@ -212,7 +230,37 @@ fn cors_layer(allowed_origins: &[String], allow_credentials: bool) -> CorsLayer 
         .allow_origin(origins)
         .allow_methods(methods)
         .allow_headers(headers)
+        .expose_headers(expose_headers())
         .allow_credentials(allow_credentials)
+}
+
+/// Admin API payloads are small (provider / model / api-key metadata). Cap the
+/// body so an oversized POST is rejected instead of being buffered in full;
+/// the limit is checked inside the access-log layer so a 413 is still audited.
+const ADMIN_MAX_BODY_BYTES: usize = 64 * 1024;
+
+/// Relative path of the built frontend bundle inside a deployment root.
+const FRONTEND_DIST: &str = "frontend/dist";
+
+/// Root of the built frontend bundle.
+///
+/// Prefers the directory beside the executable (the deployed layout) and falls
+/// back to a CWD-relative path for `cargo run`, so serving the UI no longer
+/// depends on being started from the workspace root. A candidate is only used
+/// when it actually contains `index.html`.
+fn frontend_dist_dir() -> PathBuf {
+    let candidates = [
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join(FRONTEND_DIST))),
+        Some(PathBuf::from(FRONTEND_DIST)),
+    ];
+    candidates
+        .iter()
+        .flatten()
+        .find(|dir| dir.join("index.html").is_file())
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from(FRONTEND_DIST))
 }
 
 fn build_app(state: app::AppState) -> Router {
@@ -225,7 +273,6 @@ fn build_app(state: app::AppState) -> Router {
         .route("/providers/{id}", get(get_provider))
         .route("/providers/{id}", put(update_provider))
         .route("/providers/{id}", delete(delete_provider))
-        .route("/providers/{id}/api-key", get(get_provider_api_key))
         .route("/provider-types", get(list_provider_types))
         // Model management
         .route("/models", post(create_model))
@@ -247,10 +294,14 @@ fn build_app(state: app::AppState) -> Router {
         .route("/data/token-dist", get(token_dist))
         // Proxy logs
         .route("/data/proxy-log", get(list_proxy_logs))
+        .layer(DefaultBodyLimit::max(ADMIN_MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             access_log_middleware,
         ))
+        // Admin JSON responses only; /v1 is excluded so SSE streams and
+        // upstream-encoded bodies are never re-compressed.
+        .layer(CompressionLayer::new())
         .fallback(|| async { not_found("404 not found") });
 
     // Health check (no auth required)
@@ -263,21 +314,31 @@ fn build_app(state: app::AppState) -> Router {
         .route("/embeddings", post(embeddings))
         .route("/responses", post(responses))
         .route("/models", get(list_models_proxy))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            access_log_middleware,
-        ))
+        // Innermost-first: the body limit rejects oversized bodies before the
+        // handler parses them, access_log wraps auth so that rejected
+        // requests still appear in the audit trail, and the limit sits inside
+        // access_log so a 413 is audited (same as the admin API).
+        .layer(if state.config.proxy.max_request_body_bytes == 0 {
+            DefaultBodyLimit::disable()
+        } else {
+            DefaultBodyLimit::max(state.config.proxy.max_request_body_bytes as usize)
+        })
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
         ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            access_log_middleware,
+        ))
         .fallback(|| async { not_found("404 not found") });
 
     // Serve frontend static files
-    let frontend_root = ServeDir::new("frontend/dist");
+    let dist = frontend_dist_dir();
+    let frontend_root = ServeDir::new(&dist);
     let frontend_spa = frontend_root
         .clone()
-        .fallback(ServeFile::new("frontend/dist/index.html"));
+        .fallback(ServeFile::new(dist.join("index.html")));
 
     let trace_level = parse_level(&state.config.log.tower_http_trace);
     let cors = cors_layer(
@@ -345,6 +406,14 @@ mod tests {
         assert_eq!(parse_level("verbose"), tracing::Level::INFO);
     }
 
+    #[test]
+    fn frontend_dist_dir_resolves_to_frontend_dist() {
+        // Both resolutions (beside the executable or CWD relative) must end
+        // with the same path components.
+        let dir = frontend_dist_dir();
+        assert!(dir.ends_with(FRONTEND_DIST), "unexpected dir: {dir:?}");
+    }
+
     fn cors_router(cors: CorsLayer) -> Router {
         Router::new()
             .route("/", axum::routing::get(|| async { "ok" }))
@@ -388,13 +457,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cors_layer_wildcard_with_credentials_mirrors_origin() {
+    async fn cors_layer_wildcard_never_mirrors_origin() {
+        // `*` must stay a literal `*` and must never carry credentials even if
+        // the flag is passed: config load rejects that combination.
         let router = cors_router(cors_layer(&["*".to_string()], true));
         assert_eq!(
             get_with_origin(&router, "https://app.example.com")
                 .await
                 .as_deref(),
-            Some("https://app.example.com")
+            Some("*")
+        );
+        assert!(
+            get_with_origin(&router, "https://app.example.com")
+                .await
+                .is_some()
         );
     }
 
@@ -412,6 +488,22 @@ mod tests {
                 .await
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn stale_static_asset_returns_404() {
+        // A hash-named asset from an old deployment must 404 cleanly, not fall
+        // back to index.html: a 200 + text/html response would surface in the
+        // browser as a MIME error instead of a missing file.
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let router = build_app(state);
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/static/no-such-hash.js")
+            .body(Body::empty())
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

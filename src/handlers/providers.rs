@@ -75,10 +75,10 @@ pub struct UpdateProviderRequest {
 // ── Validation ──
 
 fn validate_base_url(url: &str) -> Result<reqwest::Url, AitError> {
-    if !url
-        .chars()
-        .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '~' | ':' | '/'))
-    {
+    // `[` / `]` allow IPv6 literal hosts; `%` allows percent-encoded labels.
+    if !url.chars().all(|c| {
+        c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '~' | ':' | '/' | '[' | ']' | '%')
+    }) {
         return Err(AitError::bad_request(
             "base_url contains invalid characters",
         ));
@@ -93,12 +93,17 @@ fn validate_base_url(url: &str) -> Result<reqwest::Url, AitError> {
     if parsed.host_str().is_none() {
         return Err(AitError::bad_request("base_url must include a host"));
     }
-    let host_start = url.find("://").map(|i| i + 3).unwrap_or(0);
-    let host_end = url[host_start..]
-        .find(['/', ':'])
-        .unwrap_or(url.len() - host_start);
-    let host = &url[host_start..host_start + host_end];
-    if !host.is_empty() && host.chars().all(|c| c.is_ascii_digit()) {
+    // `Url` normalizes a bare decimal integer host (`http://1234567890`) into
+    // a dotted IPv4, so the all-numeric rejection must run on the raw
+    // authority, not on the normalized host. IPv6 literals are bracketed and
+    // therefore skipped by the numeric check.
+    let rest = &url[url.find("://").map(|i| i + 3).unwrap_or(0)..];
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let raw_host = match authority.strip_prefix('[') {
+        Some(after) => &after[..after.find(']').unwrap_or(after.len())],
+        None => authority.split(':').next().unwrap_or(authority),
+    };
+    if raw_host.chars().all(|c| c.is_ascii_digit()) {
         return Err(AitError::bad_request(
             "base_url host cannot be purely numeric",
         ));
@@ -193,35 +198,6 @@ pub async fn get_provider(
     Ok(Json(ProviderResponse::from(provider)))
 }
 
-pub async fn get_provider_api_key(
-    State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
-    Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
-    let db = state.db.clone();
-    let id_clone = id.clone();
-    let provider = crate::run_blocking(move || db.get_provider(&id_clone))
-        .await
-        .map_err(internal_error)?
-        .map_err(|e| AitError::from_db_error(e).into_response())?
-        .ok_or_else(|| not_found(format!("Provider '{}' not found", id)))?;
-
-    state.log_manager.log_audit(AuditEvent {
-        timestamp: Utc::now(),
-        request_id: request_id.0,
-        action: "view_api_key".into(),
-        resource: "provider".into(),
-        resource_id: provider.id.clone(),
-        detail: None,
-    });
-
-    Ok(Json(serde_json::json!({
-        "id": provider.id,
-        "name": provider.name,
-        "api_key": provider.api_key,
-    })))
-}
-
 pub async fn update_provider(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -281,9 +257,14 @@ pub async fn update_provider(
         .map_err(|e| AitError::from_db_error(e).into_response())?;
 
     state.provider_cache.remove(&id);
-    state
-        .model_cache
-        .retain(|_, v| v.0.as_ref().is_none_or(|(_, p)| p.id != id));
+    state.model_cache.retain(|_, v| v.0.1.id != id);
+    // Toggling `enabled` changes whether every model of this provider
+    // resolves, so the "unknown model" verdicts have to go as well.
+    state.negative_model_cache.clear();
+    // Pinned SSRF clients are pure derived state (rebuilt from the DNS cache
+    // on demand), so dropping them wholesale after a provider mutation is
+    // cheaper than tracking which host changed.
+    state.pinned_clients.clear();
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
@@ -312,9 +293,9 @@ pub async fn delete_provider(
     }
 
     state.provider_cache.remove(&id);
-    state
-        .model_cache
-        .retain(|_, v| v.0.as_ref().is_none_or(|(_, p)| p.id != id));
+    state.model_cache.retain(|_, v| v.0.1.id != id);
+    state.negative_model_cache.clear();
+    state.pinned_clients.clear();
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
         request_id: request_id.0,
@@ -333,9 +314,15 @@ pub async fn list_provider_types() -> Json<&'static Vec<serde_json::Value>> {
     Json(PROVIDER_TYPES.get_or_init(|| {
         ProviderType::iter()
             .map(|t| {
+                // Fall back to the type string rather than panicking if a
+                // variant is added without a `#[strum(message)]`.
+                let display_name = t
+                    .get_message()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| t.as_ref().to_string());
                 serde_json::json!({
                     "type": t.as_ref(),
-                    "display_name": t.get_message().expect("every ProviderType must carry a display message"),
+                    "display_name": display_name,
                 })
             })
             .collect()
@@ -348,12 +335,13 @@ mod tests {
     use crate::test_utils::{create_test_state, send_request, test_router};
     use axum::Router;
     use axum::http::Method;
+    use tempfile::TempDir;
 
     const BASE_URL: &str = "http://127.0.0.1:8080/";
 
-    async fn setup() -> Router {
-        let (state, _dir) = create_test_state();
-        test_router(state)
+    async fn setup() -> (Router, TempDir) {
+        let (state, dir) = create_test_state();
+        (test_router(state), dir)
     }
 
     fn create_body(name: &str) -> serde_json::Value {
@@ -380,7 +368,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_returns_created() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let json = create_provider(&router, "test-provider").await;
         assert_eq!(json["name"], "test-provider");
         assert_eq!(json["type"], "openai_compat");
@@ -391,7 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_empty_name_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(
             &router,
             Method::POST,
@@ -406,7 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_invalid_base_url_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let mut body = create_body("test-provider");
         body["base_url"] = serde_json::json!("not-a-url");
         let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
@@ -415,7 +403,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_providers_includes_created() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         create_provider(&router, "test-provider").await;
         let resp = send_request(&router, Method::GET, "/api/providers", None, None).await;
         assert_eq!(resp.status, StatusCode::OK);
@@ -427,7 +415,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_provider_changes_fields() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let json = create_provider(&router, "test-provider").await;
         let id = json["id"].as_str().unwrap();
         let resp = send_request(
@@ -448,7 +436,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_provider_removes_and_get_returns_404() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let json = create_provider(&router, "test-provider").await;
         let id = json["id"].as_str().unwrap();
         let resp = send_request(
@@ -473,7 +461,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_provider_types_non_empty() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(&router, Method::GET, "/api/provider-types", None, None).await;
         assert_eq!(resp.status, StatusCode::OK);
         let types = resp.json.as_array().expect("types should be an array");
@@ -483,7 +471,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_provider_returns_provider_by_id() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let json = create_provider(&router, "test-provider").await;
         let id = json["id"].as_str().unwrap();
         let resp = send_request(
@@ -500,54 +488,75 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_provider_api_key_returns_stored_key() {
-        let router = setup().await;
+    async fn provider_api_key_is_only_returned_masked() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        const SECRET: &str = "sk-upstream-secret-value";
+
         let resp = send_request(
             &router,
             Method::POST,
             "/api/providers",
             None,
             Some(serde_json::json!({
-                "name": "keyed-provider",
+                "name": "secret-provider",
                 "type": "openai_compat",
                 "base_url": BASE_URL,
-                "api_key": "sk-test-secret",
+                "api_key": SECRET,
                 "enabled": true,
             })),
         )
         .await;
         assert_eq!(resp.status, StatusCode::CREATED);
-        let id = resp.json["id"].as_str().unwrap();
+        let id = resp.json["id"].as_str().unwrap().to_string();
 
-        let resp = send_request(
+        // Every remaining read path has to hand back the masked form.
+        for uri in ["/api/providers".to_string(), format!("/api/providers/{id}")] {
+            let resp = send_request(&router, Method::GET, &uri, None, None).await;
+            assert_eq!(resp.status, StatusCode::OK);
+            assert!(
+                !resp.json.to_string().contains(SECRET),
+                "plaintext key leaked via {uri}"
+            );
+        }
+
+        // The masked form is still shown, so the UI can tell a key is set.
+        let masked = send_request(
             &router,
             Method::GET,
-            &format!("/api/providers/{id}/api-key"),
+            &format!("/api/providers/{id}"),
             None,
             None,
         )
-        .await;
-        assert_eq!(resp.status, StatusCode::OK);
-        assert_eq!(resp.json["api_key"], "sk-test-secret");
+        .await
+        .json["api_key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(masked.contains('*'), "expected a masked key, got {masked}");
     }
 
     #[tokio::test]
-    async fn get_provider_api_key_not_found() {
-        let router = setup().await;
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/api/providers/nonexistent/api-key",
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(resp.status, StatusCode::NOT_FOUND);
+    async fn removed_reveal_endpoint_returns_404() {
+        let (router, _dir) = setup().await;
+        let json = create_provider(&router, "test-provider").await;
+        let id = json["id"].as_str().unwrap();
+
+        // The plaintext-revealing route is gone, including its ?reveal=true
+        // form: no endpoint may hand a live upstream credential to a client.
+        for uri in [
+            format!("/api/providers/{id}/api-key"),
+            format!("/api/providers/{id}/api-key?reveal=true"),
+        ] {
+            let resp = send_request(&router, Method::GET, &uri, None, None).await;
+            assert_eq!(resp.status, StatusCode::NOT_FOUND, "unexpected for {uri}");
+            assert!(!resp.json.to_string().contains("sk-"));
+        }
     }
 
     #[tokio::test]
     async fn delete_provider_not_found_returns_404() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(
             &router,
             Method::DELETE,
@@ -561,7 +570,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_ftp_scheme_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let mut body = create_body("ftp-provider");
         body["base_url"] = serde_json::json!("ftp://example.com");
         let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
@@ -570,7 +579,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_no_host_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let mut body = create_body("no-host-provider");
         body["base_url"] = serde_json::json!("http:///");
         let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
@@ -579,7 +588,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_numeric_host_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let mut body = create_body("numeric-host");
         body["base_url"] = serde_json::json!("http://1234567890");
         let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
@@ -588,7 +597,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_provider_api_key_too_long_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let mut body = create_body("long-key-provider");
         body["api_key"] = serde_json::json!("x".repeat(513));
         let resp = send_request(&router, Method::POST, "/api/providers", None, Some(body)).await;
@@ -597,7 +606,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_provider_api_key_too_long_bad_request() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let json = create_provider(&router, "test-provider").await;
         let id = json["id"].as_str().unwrap();
         let resp = send_request(
@@ -613,9 +622,11 @@ mod tests {
 
     #[tokio::test]
     async fn update_provider_with_api_key_succeeds() {
-        let router = setup().await;
+        let (state, _dir) = create_test_state();
+        let router = test_router(state.clone());
         let json = create_provider(&router, "test-provider").await;
         let id = json["id"].as_str().unwrap();
+
         let resp = send_request(
             &router,
             Method::PUT,
@@ -625,14 +636,28 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status, StatusCode::OK);
-        let resp = send_request(
-            &router,
-            Method::GET,
-            &format!("/api/providers/{id}/api-key"),
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(resp.json["api_key"], "sk-new-key");
+
+        // The stored key really changed...
+        let stored = state.db.get_provider(id).unwrap().unwrap();
+        assert_eq!(stored.api_key.as_deref(), Some("sk-new-key"));
+        // ...but nothing hands it back, so this reads the row directly
+        // instead of going through an endpoint that would.
+        let listed = send_request(&router, Method::GET, "/api/providers", None, None).await;
+        assert!(
+            !listed.json.to_string().contains("sk-new-key"),
+            "plaintext key leaked after update"
+        );
+    }
+
+    #[test]
+    fn validate_base_url_accepts_ipv6_literal() {
+        let url = validate_base_url("http://[2001:db8::1]:11434/v1").unwrap();
+        assert_eq!(url.host_str(), Some("[2001:db8::1]"));
+        assert_eq!(url.port(), Some(11434));
+    }
+
+    #[test]
+    fn validate_base_url_rejects_numeric_host() {
+        assert!(validate_base_url("http://1234567890").is_err());
     }
 }

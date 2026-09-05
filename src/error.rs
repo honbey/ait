@@ -52,6 +52,25 @@ pub struct AitError {
     /// never serialized to clients.
     #[serde(skip_serializing)]
     pub detail: Option<String>,
+    /// Correlation id of the failed request, stamped in by `into_response`.
+    /// Absent when the error is built outside a request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+}
+
+tokio::task_local! {
+    /// Id of the request currently in flight.
+    ///
+    /// `access_log_middleware` scopes it around the rest of the request so
+    /// `AitError::into_response` can stamp it into the body. Threading the id
+    /// through the ~55 error construction sites instead would mean every call
+    /// site carries an argument none of them care about.
+    pub(crate) static REQUEST_ID: String;
+}
+
+/// The in-flight request id, or `None` outside a request.
+pub(crate) fn current_request_id() -> Option<String> {
+    REQUEST_ID.try_with(|id| id.clone()).ok()
 }
 
 impl AitError {
@@ -61,6 +80,7 @@ impl AitError {
             code: 400,
             r#type: "invalid_request_error".to_string(),
             detail: None,
+            request_id: None,
         }
     }
 
@@ -70,6 +90,7 @@ impl AitError {
             code: status,
             r#type: "upstream_error".to_string(),
             detail: None,
+            request_id: None,
         }
     }
 
@@ -89,29 +110,40 @@ impl AitError {
                 code: 404,
                 r#type: "not_found_error".to_string(),
                 detail: None,
+                request_id: None,
             },
             DbError::LimitExceeded(msg) => Self {
                 message: msg,
                 code: 409,
                 r#type: "invalid_request_error".to_string(),
                 detail: None,
+                request_id: None,
             },
             DbError::Duplicate(msg) => Self {
                 message: msg,
                 code: 409,
                 r#type: "invalid_request_error".to_string(),
                 detail: None,
+                request_id: None,
             },
             DbError::Storage(msg) => Self {
                 message: msg,
                 code: 500,
                 r#type: "internal_error".to_string(),
                 detail: None,
+                request_id: None,
             },
         }
     }
 
-    pub fn into_response(self) -> (StatusCode, Json<AitError>) {
+    pub fn into_response(mut self) -> (StatusCode, Json<AitError>) {
+        // Stamped here rather than at each construction site: the id belongs
+        // to the request, and this is the one funnel every error body passes
+        // through. Doing it here is what lets the access-log middleware stop
+        // re-parsing and re-serializing every error response.
+        if self.request_id.is_none() {
+            self.request_id = current_request_id();
+        }
         (self.status_code(), Json(self))
     }
 }
@@ -132,39 +164,37 @@ impl From<DbError> for (StatusCode, Json<AitError>) {
 
 pub fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<AitError>) {
     tracing::error!("Internal error: {}", e);
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(AitError {
-            message: "Internal server error".to_string(),
-            code: 500,
-            r#type: "internal_error".to_string(),
-            detail: None,
-        }),
-    )
+    // Routed through `into_response` so the request id still gets stamped in.
+    AitError {
+        message: "Internal server error".to_string(),
+        code: 500,
+        r#type: "internal_error".to_string(),
+        detail: None,
+        request_id: None,
+    }
+    .into_response()
 }
 
 pub fn not_found(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
-    (
-        StatusCode::NOT_FOUND,
-        Json(AitError {
-            message: msg.into(),
-            code: 404,
-            r#type: "not_found_error".to_string(),
-            detail: None,
-        }),
-    )
+    AitError {
+        message: msg.into(),
+        code: 404,
+        r#type: "not_found_error".to_string(),
+        detail: None,
+        request_id: None,
+    }
+    .into_response()
 }
 
 pub fn unauthorized(msg: impl Into<String>) -> (StatusCode, Json<AitError>) {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(AitError {
-            message: msg.into(),
-            code: 401,
-            r#type: "auth_error".to_string(),
-            detail: None,
-        }),
-    )
+    AitError {
+        message: msg.into(),
+        code: 401,
+        r#type: "auth_error".to_string(),
+        detail: None,
+        request_id: None,
+    }
+    .into_response()
 }
 
 pub fn db_error() -> (StatusCode, Json<AitError>) {
@@ -174,6 +204,32 @@ pub fn db_error() -> (StatusCode, Json<AitError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_id_absent_outside_a_request() {
+        // No scoped id: the field stays None and the JSON keeps its old shape,
+        // so errors built in unit tests or at startup are unaffected.
+        let (_, body) = AitError::bad_request("nope").into_response();
+        assert!(body.0.request_id.is_none());
+
+        let json = serde_json::to_value(AitError::bad_request("nope")).unwrap();
+        assert!(json.get("request_id").is_none());
+        // `detail` is internal and must never reach a client either way.
+        assert!(json.get("detail").is_none());
+    }
+
+    #[tokio::test]
+    async fn into_response_stamps_the_scoped_request_id() {
+        let (_, body) = REQUEST_ID
+            .scope("req-42".to_string(), async {
+                AitError::bad_request("nope").into_response()
+            })
+            .await;
+        assert_eq!(body.0.request_id.as_deref(), Some("req-42"));
+
+        let json = serde_json::to_value(&body.0).unwrap();
+        assert_eq!(json["request_id"], "req-42");
+    }
 
     #[test]
     fn error_constructors_have_correct_shape() {

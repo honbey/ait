@@ -1,23 +1,44 @@
-use chrono::Utc;
-use duckdb::{Connection, Result, params};
+use duckdb::{Connection, Result};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
-use super::analytics::Analytics;
+use super::analytics::{Analytics, AnalyticsError};
 use super::loki::LokiSink;
 use super::models::{
-    AccessEvent, AuditEvent, BucketEntry, LogEvent, ModelDistEntry, ProxyEvent,
+    AccessEvent, AuditEvent, BucketEntry, LogEvent, ModelDistEntry, OverviewMetrics, ProxyEvent,
     ProxyLogQueryParams, ProxyLogQueryResult, TokenDistEntry,
 };
+use super::watchdog::QueryWatchdog;
 
+mod writes;
+
+use writes::{flush_buffer, flush_events};
 #[derive(Clone)]
 pub struct LogManager {
     sender: mpsc::SyncSender<LogEvent>,
     analytics: Analytics,
     worker_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     loki: Option<LokiSink>,
+}
+
+/// Pin DuckDB's memory ceiling and thread count.
+///
+/// Left alone, DuckDB sizes itself from the memory and CPU it can see, which
+/// inside a container is the host rather than the cgroup limit: a single wide
+/// aggregate over a long retention window can then grow past what the
+/// container is allowed and take the proxy down with it.
+///
+/// Both settings are database-scoped, so applying them once here covers the
+/// log worker and every analytics connection cloned from it. Verified: clones
+/// inherit the values, while a connection opened from scratch against the same
+/// file does not - only `LogManager` opens this database.
+fn apply_duckdb_limits(conn: &Connection, config: &crate::config::LogConfig) -> Result<()> {
+    conn.execute_batch(&format!(
+        "SET memory_limit = '{} MiB'; SET threads = {};",
+        config.duckdb_memory_limit_mb, config.duckdb_threads
+    ))
 }
 
 /// Create the log tables and indexes if they do not exist yet.
@@ -70,6 +91,7 @@ pub(crate) fn create_schema(conn: &Connection) -> Result<()> {
 impl LogManager {
     pub fn new(config: &crate::config::LogConfig) -> Result<Self> {
         let conn = Connection::open(&config.path)?;
+        apply_duckdb_limits(&conn, config)?;
         create_schema(&conn)?;
 
         let flush_interval = Duration::from_secs(config.flush_interval_secs);
@@ -77,7 +99,13 @@ impl LogManager {
         let retention_every = config.retention_every;
         let retention_days = config.retention_days;
         let (sender, receiver) = mpsc::sync_channel(config.channel_cap as usize);
-        let analytics = Analytics::new(conn.try_clone()?, config.analytics_timeout_secs);
+        let query_timeout = Duration::from_secs(config.duckdb_query_timeout_secs);
+        let analytics = Analytics::new(
+            conn.try_clone()?,
+            config.analytics_timeout_secs,
+            config.analytics_workers,
+            query_timeout,
+        );
 
         let worker_conn = conn.try_clone()?;
         let handle = thread::spawn(move || {
@@ -88,6 +116,7 @@ impl LogManager {
                 flush_interval,
                 retention_every,
                 retention_days,
+                query_timeout,
             ) {
                 error!("[logs] worker exited with error: {e}");
             }
@@ -143,41 +172,80 @@ impl LogManager {
         }
     }
 
-    pub async fn total_requests(&self, start_ts: i64, end_ts: i64) -> u64 {
-        self.analytics.total_requests(start_ts, end_ts).await
-    }
-
-    pub async fn total_tokens(&self, start_ts: i64, end_ts: i64) -> u64 {
-        self.analytics.total_tokens(start_ts, end_ts).await
-    }
-
-    pub async fn requests(&self, start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
+    pub async fn requests(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<BucketEntry>, AnalyticsError> {
         self.analytics.requests(start_ts, end_ts).await
     }
 
-    pub async fn tokens(&self, start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
+    pub async fn tokens(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<BucketEntry>, AnalyticsError> {
         self.analytics.tokens(start_ts, end_ts).await
     }
 
-    pub async fn model_dist(&self, start_ts: i64, end_ts: i64) -> Vec<ModelDistEntry> {
+    pub async fn model_dist(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<ModelDistEntry>, AnalyticsError> {
         self.analytics.model_dist(start_ts, end_ts).await
     }
 
-    pub async fn token_dist(&self, start_ts: i64, end_ts: i64) -> Vec<TokenDistEntry> {
+    pub async fn token_dist(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<TokenDistEntry>, AnalyticsError> {
         self.analytics.token_dist(start_ts, end_ts).await
     }
 
-    pub async fn query_proxy_logs(&self, params: ProxyLogQueryParams) -> ProxyLogQueryResult {
+    pub async fn overview(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<OverviewMetrics, AnalyticsError> {
+        self.analytics.overview(start_ts, end_ts).await
+    }
+
+    pub async fn query_proxy_logs(
+        &self,
+        params: ProxyLogQueryParams,
+    ) -> Result<ProxyLogQueryResult, AnalyticsError> {
         self.analytics.query_proxy_logs(params).await
     }
 
-    pub fn shutdown(&self) {
-        let sender = self.sender.clone();
-        std::thread::spawn(move || {
-            let _ = sender.send(LogEvent::Shutdown);
-        });
+    /// Hand the worker a shutdown event, retrying while the channel is full.
+    /// `send` would block indefinitely on a full channel, so the wait is
+    /// bounded; returns false when the signal could not be delivered.
+    fn signal_shutdown(&self) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match self.sender.try_send(LogEvent::Shutdown) {
+                Ok(()) => return true,
+                Err(mpsc::TrySendError::Disconnected(_)) => return false,
+                Err(mpsc::TrySendError::Full(_)) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(mpsc::TrySendError::Full(_)) => {
+                    warn!("[logs] shutdown signal not delivered; worker left running");
+                    return false;
+                }
+            }
+        }
+    }
 
-        if let Ok(mut guard) = self.worker_handle.lock()
+    pub fn shutdown(&self) {
+        let signaled = self.signal_shutdown();
+
+        // Joining a worker that never received the signal would hang, so only
+        // wait when the shutdown was actually delivered.
+        if signaled
+            && let Ok(mut guard) = self.worker_handle.lock()
             && let Some(handle) = guard.take()
         {
             let _ = handle.join();
@@ -196,7 +264,14 @@ fn worker_loop(
     flush_interval: Duration,
     retention_every: u64,
     retention_days: u64,
+    query_timeout: Duration,
 ) -> Result<()> {
+    // Same backstop as the analytics workers: a flush or a retention DELETE
+    // that runs forever would keep this thread unjoinable.
+    let watchdog = (query_timeout > Duration::ZERO).then(|| {
+        let interrupt = conn.interrupt_handle();
+        QueryWatchdog::spawn(interrupt, "logs", query_timeout)
+    });
     let mut buffer: Vec<LogEvent> = Vec::with_capacity(flush_batch as usize);
     let mut flush_count = 0u64;
 
@@ -208,7 +283,8 @@ fn worker_loop(
             Ok(event) => buffer.push(event),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if !buffer.is_empty() {
-                    flush_buffer(
+                    flush(
+                        &watchdog,
                         &conn,
                         &mut buffer,
                         &mut flush_count,
@@ -219,9 +295,16 @@ fn worker_loop(
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 if !buffer.is_empty() {
-                    flush_events(&conn, &buffer);
+                    run(&watchdog, || {
+                        let _ = flush_events(&conn, &buffer);
+                    });
                 }
-                let _ = conn.execute_batch("CHECKPOINT");
+                run(&watchdog, || {
+                    let _ = conn.execute_batch("CHECKPOINT");
+                });
+                if let Some(watchdog) = watchdog {
+                    watchdog.stop();
+                }
                 return Ok(());
             }
         }
@@ -234,7 +317,8 @@ fn worker_loop(
         }
 
         if (buffer.len() as u64) >= flush_batch {
-            flush_buffer(
+            flush(
+                &watchdog,
                 &conn,
                 &mut buffer,
                 &mut flush_count,
@@ -245,175 +329,81 @@ fn worker_loop(
 
         if shutdown {
             if !buffer.is_empty() {
-                flush_events(&conn, &buffer);
+                run(&watchdog, || {
+                    let _ = flush_events(&conn, &buffer);
+                });
             }
-            let _ = conn.execute_batch("CHECKPOINT");
+            run(&watchdog, || {
+                let _ = conn.execute_batch("CHECKPOINT");
+            });
+            if let Some(watchdog) = watchdog {
+                watchdog.stop();
+            }
             return Ok(());
         }
     }
 }
 
-fn flush_buffer(
+/// Run a DuckDB operation under the worker's deadline, if the watchdog is armed.
+fn run<T>(watchdog: &Option<QueryWatchdog>, f: impl FnOnce() -> T) -> T {
+    match watchdog {
+        Some(watchdog) => watchdog.run(f),
+        None => f(),
+    }
+}
+
+fn flush(
+    watchdog: &Option<QueryWatchdog>,
     conn: &Connection,
     buffer: &mut Vec<LogEvent>,
     flush_count: &mut u64,
     retention_every: u64,
     retention_days: u64,
 ) {
-    if flush_events(conn, buffer) {
-        *flush_count += 1;
-        if retention_every > 0 && flush_count.is_multiple_of(retention_every) {
-            let _ = conn.execute_batch("CHECKPOINT");
-            cleanup_expired(conn, retention_days);
-        }
-    } else {
-        warn!("[logs] flush failed, dropping {} events", buffer.len());
-    }
-    buffer.clear();
-}
-
-fn flush_events(conn: &Connection, events: &[LogEvent]) -> bool {
-    let mut access = Vec::new();
-    let mut proxy = Vec::new();
-    let mut audit = Vec::new();
-    for event in events {
-        match event {
-            LogEvent::Access(e) => access.push(e),
-            LogEvent::Proxy(e) => proxy.push(e.as_ref()),
-            LogEvent::Audit(e) => audit.push(e),
-            LogEvent::Shutdown => {}
-        }
-    }
-
-    if let Err(e) = conn.execute_batch("BEGIN TRANSACTION") {
-        error!("[logs] begin tx failed: {e}");
-        return false;
-    }
-
-    if flush_accesses(conn, &access)
-        .map_err(|e| error!("[logs] flush access_log failed: {e}"))
-        .is_ok()
-        && flush_proxies(conn, &proxy)
-            .map_err(|e| error!("[logs] flush proxy_log failed: {e}"))
-            .is_ok()
-        && flush_audits(conn, &audit)
-            .map_err(|e| error!("[logs] flush audit_log failed: {e}"))
-            .is_ok()
-    {
-        if let Err(e) = conn.execute_batch("COMMIT") {
-            error!("[logs] commit failed: {e}");
-            return false;
-        }
-        true
-    } else {
-        if let Err(e) = conn.execute_batch("ROLLBACK") {
-            error!("[logs] rollback failed: {e}");
-        }
-        false
-    }
-}
-
-fn flush_accesses(conn: &Connection, events: &[&AccessEvent]) -> Result<()> {
-    if events.is_empty() {
-        return Ok(());
-    }
-    let mut stmt = conn.prepare_cached(
-        "INSERT INTO access_log (timestamp, request_id, method, path, status, latency_ms, client_ip)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-    )?;
-    for e in events {
-        stmt.execute(params![
-            e.timestamp.naive_utc(),
-            e.request_id,
-            e.method,
-            e.path,
-            e.status,
-            e.latency_ms,
-            e.client_ip,
-        ])?;
-    }
-    Ok(())
-}
-
-fn flush_proxies(conn: &Connection, events: &[&ProxyEvent]) -> Result<()> {
-    if events.is_empty() {
-        return Ok(());
-    }
-    let mut stmt = conn.prepare_cached(
-        "INSERT INTO proxy_log (timestamp, request_id, api_key_name, model_name, provider_name,
-         prompt_tokens, completion_tokens, total_tokens, cached_tokens, latency_ms, status,
-         endpoint, is_streaming, time_to_first_token_ms, upstream_model, provider_type,
-         response_body_size, error_message, client_ip)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                 ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
-    )?;
-    for e in events {
-        stmt.execute(params![
-            e.timestamp.naive_utc(),
-            e.request_id,
-            e.api_key_name,
-            e.model_name,
-            e.provider_name,
-            e.prompt_tokens,
-            e.completion_tokens,
-            e.total_tokens,
-            e.cached_tokens,
-            e.latency_ms,
-            e.status,
-            e.endpoint,
-            e.is_streaming,
-            e.time_to_first_token_ms,
-            e.upstream_model,
-            e.provider_type,
-            e.response_body_size,
-            e.error_message,
-            e.client_ip,
-        ])?;
-    }
-    Ok(())
-}
-
-fn flush_audits(conn: &Connection, events: &[&AuditEvent]) -> Result<()> {
-    if events.is_empty() {
-        return Ok(());
-    }
-    let mut stmt = conn.prepare_cached(
-        "INSERT INTO audit_log (timestamp, request_id, action, resource, resource_id, detail)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-    )?;
-    for e in events {
-        stmt.execute(params![
-            e.timestamp.naive_utc(),
-            e.request_id,
-            e.action,
-            e.resource,
-            e.resource_id,
-            e.detail,
-        ])?;
-    }
-    Ok(())
-}
-
-fn cleanup_expired(conn: &Connection, retention_days: u64) {
-    let cutoff = (Utc::now() - chrono::Duration::days(retention_days as i64)).naive_utc();
-    for table in &["access_log", "proxy_log", "audit_log"] {
-        match conn.execute(
-            &format!("DELETE FROM {table} WHERE timestamp < ?1"),
-            params![cutoff],
-        ) {
-            Ok(n) if n > 0 => info!("[logs] cleanup {table}: deleted {n} rows"),
-            Ok(_) => {}
-            Err(e) => warn!("[logs] cleanup {table} failed: {e}"),
-        }
-    }
+    run(watchdog, || {
+        flush_buffer(conn, buffer, flush_count, retention_every, retention_days);
+    });
 }
 
 #[cfg(test)]
 mod tests {
+    use super::writes::cleanup_expired;
     use super::*;
+
+    #[test]
+    fn duckdb_limits_reach_cloned_connections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("limits.duckdb");
+        let mut config = crate::test_utils::test_config_fast_logs(
+            dir.path().join("t.db").to_str().unwrap(),
+            path.to_str().unwrap(),
+        )
+        .log;
+        config.duckdb_memory_limit_mb = 256;
+        config.duckdb_threads = 3;
+
+        let conn = Connection::open(path.to_str().unwrap()).unwrap();
+        apply_duckdb_limits(&conn, &config).unwrap();
+
+        // The log worker and the analytics workers are clones of this
+        // connection, and clones share the database instance, so the ceiling
+        // set once here covers all of them. (A connection opened separately
+        // would instead fall back to the host's memory and core count.)
+        let clone = conn.try_clone().unwrap();
+        let memory: String = clone
+            .query_row("SELECT current_setting('memory_limit')", [], |r| r.get(0))
+            .unwrap();
+        let threads: i64 = clone
+            .query_row("SELECT current_setting('threads')", [], |r| r.get(0))
+            .unwrap();
+        assert!(memory.starts_with("256"), "memory_limit was {memory}");
+        assert_eq!(threads, 3);
+    }
     use crate::test_utils::{
         make_access_event, make_audit_event, make_proxy_event, test_config_fast_logs,
     };
+    use chrono::Utc;
+    use duckdb::params;
     use std::time::{Duration, Instant};
 
     fn temp_log_manager(
@@ -497,7 +487,11 @@ mod tests {
         let now = Utc::now().timestamp();
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            let count = manager.total_requests(now - 3600, now + 3600).await;
+            let count = manager
+                .overview(now - 3600, now + 3600)
+                .await
+                .unwrap()
+                .total_requests;
             if count >= 1 {
                 break;
             }
@@ -506,11 +500,86 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let dist = manager.model_dist(now - 3600, now + 3600).await;
+        let dist = manager.model_dist(now - 3600, now + 3600).await.unwrap();
         assert_eq!(dist.len(), 1);
         assert_eq!(dist[0].model, "gpt-4");
         assert_eq!(dist[0].count, 1);
         manager.shutdown();
+    }
+
+    #[test]
+    fn failed_flush_rolls_back_the_whole_batch() {
+        // A failure part-way through a mixed batch must not leave the tables
+        // that were already appended to; the batch is dropped as a unit.
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = Connection::open(dir.path().join("logs.duckdb")).unwrap();
+        create_schema(&conn).unwrap();
+        conn.execute_batch("DROP TABLE audit_log").unwrap();
+
+        let events = vec![
+            LogEvent::Access(make_access_event("/api/providers", 200)),
+            LogEvent::Proxy(Box::new(make_proxy_event("gpt-4", "200", 100))),
+            LogEvent::Audit(make_audit_event("create")),
+        ];
+        assert!(!flush_events(&conn, &events));
+
+        let access: u64 = conn
+            .query_row("SELECT COUNT(*) FROM access_log", [], |row| row.get(0))
+            .unwrap();
+        let proxy: u64 = conn
+            .query_row("SELECT COUNT(*) FROM proxy_log", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(access, 0, "access_log must be rolled back");
+        assert_eq!(proxy, 0, "proxy_log must be rolled back");
+    }
+
+    #[test]
+    fn flush_events_writes_nulls_and_timestamps() {
+        // The Appender path still has to round-trip optional columns and
+        // timestamps, which the per-row INSERT path used to bind directly.
+        let (manager, dir) = temp_log_manager(1, 1, 10000, u64::MAX, 30);
+        manager.log_proxy(make_proxy_event("gpt-4", "200", 300));
+        manager.shutdown();
+
+        let conn = Connection::open(dir.path().join("logs.duckdb")).unwrap();
+        let (ttft, error_message, timestamp): (Option<i64>, Option<String>, chrono::NaiveDateTime) =
+            conn.query_row(
+                "SELECT time_to_first_token_ms, error_message, timestamp FROM proxy_log",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(ttft, None);
+        assert_eq!(error_message, None);
+        // A timestamp stored as the epoch would mean the binding silently
+        // dropped the value.
+        assert!(
+            timestamp
+                > chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+        );
+    }
+
+    #[test]
+    fn mixed_batch_writes_all_three_tables() {
+        let (manager, dir) = temp_log_manager(100, 3600, 10000, u64::MAX, 30);
+        manager.log_access(make_access_event("/api/providers", 200));
+        manager.log_proxy(make_proxy_event("gpt-4", "200", 100));
+        manager.log_audit(make_audit_event("create"));
+        manager.shutdown();
+
+        let conn = Connection::open(dir.path().join("logs.duckdb")).unwrap();
+        let count = |table: &str| -> u64 {
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(count("access_log"), 1);
+        assert_eq!(count("proxy_log"), 1);
+        assert_eq!(count("audit_log"), 1);
     }
 
     #[test]

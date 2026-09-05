@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::utils::mask_api_key;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Provider {
     pub id: String,
     pub name: String,
@@ -17,6 +17,26 @@ pub struct Provider {
     pub created_at: DateTime<chrono::Utc>,
     #[serde(with = "ts_seconds")]
     pub updated_at: DateTime<chrono::Utc>,
+}
+
+/// Rendered in place of the stored key. `Provider` is cloned into the model
+/// and provider caches, so a stray `{:?}` in a log line would otherwise print
+/// live upstream credentials.
+const REDACTED_API_KEY: &str = "***";
+
+impl std::fmt::Debug for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Provider")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("provider_type", &self.provider_type)
+            .field("base_url", &self.base_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| REDACTED_API_KEY))
+            .field("enabled", &self.enabled)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .finish()
+    }
 }
 
 #[derive(
@@ -223,6 +243,18 @@ pub struct TokenDistEntry {
     pub count: u64,
 }
 
+/// All analytics aggregates the console overview needs, produced by a single
+/// analytics-worker round trip instead of one request per metric.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct OverviewMetrics {
+    pub total_requests: u64,
+    pub total_tokens: u64,
+    pub request_buckets: Vec<BucketEntry>,
+    pub token_buckets: Vec<BucketEntry>,
+    pub model_dist: Vec<ModelDistEntry>,
+    pub token_dist: Vec<TokenDistEntry>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ProxyLogEntryResponse {
@@ -244,6 +276,9 @@ pub struct ProxyLogEntryResponse {
     pub response_body_size: Option<i64>,
     pub error_message: Option<String>,
     pub client_ip: Option<String>,
+    /// Correlation id (from `x-request-id`); unique per request, usable as a
+    /// stable row key on the client.
+    pub request_id: String,
 }
 
 #[derive(Serialize)]
@@ -290,6 +325,49 @@ pub enum LogEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn provider_with_key(key: &str) -> Provider {
+        Provider {
+            id: "p1".to_string(),
+            name: "openai".to_string(),
+            provider_type: ProviderType::OpenAICompat,
+            base_url: "https://api.example.com".to_string(),
+            api_key: Some(key.to_string()),
+            enabled: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn provider_debug_redacts_api_key() {
+        let provider = provider_with_key("sk-super-secret-value");
+        let rendered = format!("{provider:?}");
+        assert!(
+            !rendered.contains("super-secret"),
+            "api_key leaked into Debug output: {rendered}"
+        );
+        assert!(
+            rendered.contains(REDACTED_API_KEY),
+            "missing mask: {rendered}"
+        );
+    }
+
+    #[test]
+    fn provider_debug_keeps_other_fields() {
+        // The mask must not swallow the fields that make the output useful.
+        let rendered = format!("{:?}", provider_with_key("sk-abc"));
+        assert!(rendered.contains("openai"));
+        assert!(rendered.contains("https://api.example.com"));
+        assert!(rendered.contains("OpenAICompat"));
+    }
+
+    #[test]
+    fn provider_debug_without_key_shows_none() {
+        let mut provider = provider_with_key("sk-abc");
+        provider.api_key = None;
+        assert!(format!("{provider:?}").contains("api_key: None"));
+    }
 
     #[test]
     fn deepseek_supports_chat_and_responses_endpoints() {

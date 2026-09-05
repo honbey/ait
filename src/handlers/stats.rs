@@ -8,7 +8,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
+use crate::config::TrustedProxy;
+use crate::db::models::{BucketEntry, ModelDistEntry, TokenDistEntry};
 
+use crate::db::analytics::AnalyticsError;
 use crate::error::{AitError, internal_error};
 use crate::handlers::analytics::validate_ts_range;
 
@@ -23,6 +26,10 @@ pub struct StatsQuery {
 
 #[derive(Serialize)]
 pub struct OverviewStats {
+    /// Effective (validated/clamped) query range, so the frontend charts fill
+    /// exactly the window the aggregates were computed over.
+    pub range_start: i64,
+    pub range_end: i64,
     pub provider_count: usize,
     pub model_count: usize,
     pub api_request_count: u64,
@@ -32,10 +39,10 @@ pub struct OverviewStats {
     /// Caller identity reported by the upstream authenticator; used only for
     /// the overview greeting, not for authentication.
     pub username: Option<String>,
-}
-
-fn is_trusted_proxy(ip: IpAddr, trusted: &[IpAddr]) -> bool {
-    trusted.contains(&ip)
+    pub request_buckets: Vec<BucketEntry>,
+    pub token_buckets: Vec<BucketEntry>,
+    pub model_dist: Vec<ModelDistEntry>,
+    pub token_dist: Vec<TokenDistEntry>,
 }
 
 /// Only trust the identity header when the direct peer is a known reverse
@@ -43,9 +50,9 @@ fn is_trusted_proxy(ip: IpAddr, trusted: &[IpAddr]) -> bool {
 fn remote_user_from_headers(
     headers: &HeaderMap,
     direct_ip: IpAddr,
-    trusted_proxies: &[IpAddr],
+    trusted_proxies: &[TrustedProxy],
 ) -> Option<String> {
-    if !is_trusted_proxy(direct_ip, trusted_proxies) {
+    if !trusted_proxies.iter().any(|t| t.contains(direct_ip)) {
         return None;
     }
     headers
@@ -75,16 +82,21 @@ pub async fn overview_stats(
         .await
         .map_err(internal_error)?
         .map_err(|e| AitError::from_db_error(e).into_response())?;
-    let api_request_count = state
+
+    let metrics = state
         .log_manager
-        .total_requests(range.start, range.end)
-        .await;
-    let token_consumption = state.log_manager.total_tokens(range.start, range.end).await;
+        .overview(range.start, range.end)
+        .await
+        .map_err(AnalyticsError::into_response)?;
+    let api_request_count = metrics.total_requests;
+    let token_consumption = metrics.total_tokens;
 
     let rpm = ((api_request_count as f64 / range_mins) * 100.0).round() / 100.0;
     let tpm = ((token_consumption as f64 / range_mins) * 100.0).round() / 100.0;
 
     Ok(Json(OverviewStats {
+        range_start: range.start,
+        range_end: range.end,
         provider_count,
         model_count,
         api_request_count,
@@ -92,6 +104,10 @@ pub async fn overview_stats(
         rpm,
         tpm,
         username,
+        request_buckets: metrics.request_buckets,
+        token_buckets: metrics.token_buckets,
+        model_dist: metrics.model_dist,
+        token_dist: metrics.token_dist,
     }))
 }
 
@@ -99,37 +115,34 @@ pub async fn overview_stats(
 mod tests {
     use super::*;
     use crate::test_utils::{
-        create_test_state_fast_logs, make_proxy_event, send_request, test_router,
+        create_test_state_fast_logs, make_proxy_event, send_request, send_request_from_peer,
+        test_router,
     };
     use axum::Router;
-    use axum::body::Body;
-    use axum::extract::ConnectInfo;
-    use axum::http::Method;
-    use axum::http::Request;
+    use axum::http::{HeaderName, Method};
     use chrono::Utc;
     use std::net::SocketAddr;
-    use tower::ServiceExt;
+    use tempfile::TempDir;
 
-    async fn setup() -> Router {
-        let (state, _dir) = create_test_state_fast_logs();
-        test_router(state)
+    async fn setup() -> (Router, TempDir) {
+        let (state, dir) = create_test_state_fast_logs();
+        (test_router(state), dir)
     }
 
     async fn stats_with_remote_user(header_value: Option<&str>) -> serde_json::Value {
-        let router = setup().await;
-        let mut builder = Request::builder().method(Method::GET).uri("/api/stats");
-        if let Some(v) = header_value {
-            builder = builder.header(REMOTE_USER_HEADER, v);
-        }
-        let mut request = builder.body(Body::empty()).unwrap();
-        request
-            .extensions_mut()
-            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-        let response = router.clone().oneshot(request).await.unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        let (router, _dir) = setup().await;
+        let headers = header_value
+            .map(|v| vec![(HeaderName::from_static(REMOTE_USER_HEADER), v)])
+            .unwrap_or_default();
+        send_request_from_peer(
+            &router,
+            Method::GET,
+            "/api/stats",
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            &headers,
+        )
+        .await
+        .json
     }
 
     #[tokio::test]
@@ -146,26 +159,22 @@ mod tests {
 
     #[tokio::test]
     async fn overview_stats_ignores_remote_user_from_untrusted_peer() {
-        let router = setup().await;
-        let mut builder = Request::builder().method(Method::GET).uri("/api/stats");
-        builder = builder.header(REMOTE_USER_HEADER, "attacker");
-        let mut request = builder.body(Body::empty()).unwrap();
+        let (router, _dir) = setup().await;
         // 10.0.0.1 is NOT in trusted_proxies (test_config uses 127.0.0.1, ::1)
-        request
-            .extensions_mut()
-            .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 0))));
-        let response = router.oneshot(request).await.unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value =
-            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-        assert_eq!(json["username"], serde_json::Value::Null);
+        let resp = send_request_from_peer(
+            &router,
+            Method::GET,
+            "/api/stats",
+            SocketAddr::from(([10, 0, 0, 1], 0)),
+            &[(HeaderName::from_static(REMOTE_USER_HEADER), "attacker")],
+        )
+        .await;
+        assert_eq!(resp.json["username"], serde_json::Value::Null);
     }
 
     #[tokio::test]
     async fn overview_stats_zero_without_data() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(
             &router,
             Method::GET,
@@ -197,8 +206,10 @@ mod tests {
         loop {
             let count = state
                 .log_manager
-                .total_requests(now - 3600, now + 3600)
-                .await;
+                .overview(now - 3600, now + 3600)
+                .await
+                .unwrap()
+                .total_requests;
             if count >= 2 {
                 break;
             }
@@ -208,13 +219,6 @@ mod tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        let range = crate::handlers::analytics::validate_ts_range(
-            None,
-            None,
-            state.config.log.retention_days,
-        )
-        .unwrap();
-        let _ = range;
         let router = test_router(state);
 
         // Explicit range with headroom: the default end (now, second precision)
@@ -232,11 +236,32 @@ mod tests {
         assert_eq!(resp.json["api_request_count"], 2);
         assert_eq!(resp.json["token_consumption"], 450);
         assert_eq!(resp.json["provider_count"], 0);
+        // Effective range echoes the requested window; data payloads ride
+        // along in the same response.
+        assert_eq!(resp.json["range_start"], now - 3600);
+        assert_eq!(resp.json["range_end"], now + 3600);
+        let buckets = resp.json["request_buckets"].as_array().unwrap();
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0]["count"], 2);
+        let dist = resp.json["model_dist"].as_array().unwrap();
+        assert_eq!(dist.len(), 2);
+        let get = |cat: &str| {
+            resp.json["token_dist"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["category"] == cat)
+                .and_then(|e| e["count"].as_u64())
+                .unwrap_or(0)
+        };
+        assert_eq!(get("uncached_input"), 10);
+        assert_eq!(get("cached_input"), 10);
+        assert_eq!(get("output"), 40);
     }
 
     #[tokio::test]
     async fn overview_stats_rejects_invalid_timestamps() {
-        let router = setup().await;
+        let (router, _dir) = setup().await;
         let resp = send_request(
             &router,
             Method::GET,

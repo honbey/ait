@@ -3,7 +3,7 @@ members = [".", "frontend"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 authors = ["honbey"]
 license = "MIT"
@@ -30,10 +30,17 @@ strip = false
 [profile.release-wasm]
 inherits = "release"
 opt-level = "z"
+# Trunk's wasm-opt pass keeps the name section otherwise.
+strip = true
+# NOTE: panic = "abort" is deliberately NOT set here. The profile is
+# workspace-wide, and the backend's run_guarded (analytics) relies on
+# unwinding to contain panics.
 
 [profile.dev]
 debug = "line-tables-only"
-panic = "abort"
+# Do NOT set `panic = "abort"`: it turns any panic in a request path —
+# including arithmetic overflow, which is enabled below — into a process-wide
+# denial of service instead of a failed request.
 opt-level = 1
 lto = false
 incremental = true
@@ -65,7 +72,7 @@ tokio-util = { version = "0.7", default-features = false }
 
 # HTTP server
 axum = { version = "0.8", features = ["json"] }
-tower-http = { version = "0.7", features = ["trace", "fs", "cors"] }
+tower-http = { version = "0.7", features = ["trace", "fs", "cors", "compression-gzip"] }
 reqwest = { version = "0.13", default-features = false, features = [
   "rustls",
   "stream",
@@ -103,6 +110,9 @@ hex = "0.4"
 
 # Concurrent hashmap
 dashmap = "6.2"
+
+# Multi-pattern substring matching (DLP sensitive-value scan)
+aho-corasick = "1"
 duckdb = { version = "1.10504.0", features = ["bundled", "chrono"] }
 
 # Enum utilities

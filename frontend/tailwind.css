@@ -2,6 +2,30 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Neutral ramp for dark mode.
+   Tailwind's `gray` is tinted blue-violet -- hue ~260 with chroma up to 0.034
+   at the dark end -- which reads navy rather than black on dark surfaces.
+   `ink` keeps every lightness step identical and zeroes the chroma, so text
+   contrast is unchanged and only the cast goes away. Dark surfaces
+   additionally sit one step deeper (see the mapping in the pages):
+     page        ink-950   (was gray-900)
+     card/panel  ink-900   (was gray-800)
+     input/head  ink-800   (was gray-700)
+     hover       ink-700   (was gray-600) */
+@theme {
+  --color-ink-50: oklch(98.5% 0 0);
+  --color-ink-100: oklch(96.7% 0 0);
+  --color-ink-200: oklch(92.8% 0 0);
+  --color-ink-300: oklch(87.2% 0 0);
+  --color-ink-400: oklch(70.7% 0 0);
+  --color-ink-500: oklch(55.1% 0 0);
+  --color-ink-600: oklch(44.6% 0 0);
+  --color-ink-700: oklch(37.3% 0 0);
+  --color-ink-800: oklch(27.8% 0 0);
+  --color-ink-900: oklch(21% 0 0);
+  --color-ink-950: oklch(15% 0 0);
+}
+
 @keyframes skeleton-shimmer {
   to { transform: translateX(100%); }
 }

@@ -18,50 +18,56 @@ thread_local! {
 pub struct Chart(JsValue);
 
 impl Chart {
-    pub fn new(dom: &web_sys::HtmlElement) -> Self {
-        let echarts =
-            js_sys::Reflect::get(&js_sys::global(), &"echarts".into()).expect("echarts not found");
+    /// Initialise (or reuse) the ECharts instance on `dom`. Returns `None`
+    /// when the injected `echarts` global is missing or malformed — the chart
+    /// simply does not render instead of panicking the page.
+    pub fn init(dom: &web_sys::HtmlElement) -> Option<Self> {
+        let echarts = js_sys::Reflect::get(&js_sys::global(), &"echarts".into()).ok()?;
 
         let get_instance: js_sys::Function =
             js_sys::Reflect::get(&echarts, &"getInstanceByDom".into())
-                .expect("echarts.getInstanceByDom not found")
-                .unchecked_into();
+                .ok()?
+                .dyn_into()
+                .ok()?;
         if let Some(existing) = get_instance
             .call1(&JsValue::UNDEFINED, dom)
             .ok()
             .filter(|v| !v.is_undefined() && !v.is_null())
         {
-            return Chart(existing);
+            return Some(Chart(existing));
         }
 
         let init: js_sys::Function = js_sys::Reflect::get(&echarts, &"init".into())
-            .expect("echarts.init not found")
-            .unchecked_into();
-        let result = init
-            .call1(&JsValue::UNDEFINED, dom)
-            .expect("echarts.init failed");
-        Chart(result)
+            .ok()?
+            .dyn_into()
+            .ok()?;
+        Some(Chart(init.call1(&JsValue::UNDEFINED, dom).ok()?))
+    }
+
+    /// Best effort, matching `init`: a chart object that lacks the method (a
+    /// mismatched ECharts build) skips the call instead of panicking inside an
+    /// `Effect`, which would leave the component tree half-rendered.
+    fn call_method(&self, name: &str, args: &[JsValue]) {
+        let Ok(method) = js_sys::Reflect::get(&self.0, &name.into()) else {
+            return;
+        };
+        let Ok(method) = method.dyn_into::<js_sys::Function>() else {
+            return;
+        };
+        let args = js_sys::Array::from_iter(args.iter().cloned());
+        let _ = method.apply(&self.0, &args);
     }
 
     pub fn set_option(&self, option: &JsValue) {
-        let set_option: js_sys::Function = js_sys::Reflect::get(&self.0, &"setOption".into())
-            .expect("chart.setOption not found")
-            .unchecked_into();
-        let _ = set_option.call1(&self.0, option);
+        self.call_method("setOption", std::slice::from_ref(option));
     }
 
     pub fn dispose(&self) {
-        let dispose: js_sys::Function = js_sys::Reflect::get(&self.0, &"dispose".into())
-            .expect("chart.dispose not found")
-            .unchecked_into();
-        let _ = dispose.call0(&self.0);
+        self.call_method("dispose", &[]);
     }
 
     pub fn resize(&self) {
-        let resize: js_sys::Function = js_sys::Reflect::get(&self.0, &"resize".into())
-            .expect("chart.resize not found")
-            .unchecked_into();
-        let _ = resize.call0(&self.0);
+        self.call_method("resize", &[]);
     }
 }
 
@@ -110,7 +116,11 @@ async fn ensure_echarts_loaded() -> bool {
 
     let ok = JsFuture::from(promise).await.is_ok();
     if !ok {
-        ECHARTS_READY.with(|cell| *cell.borrow_mut() = None);
+        // Keep the settled promise cached instead of resetting the cell: the
+        // ResizeObserver retries on every resize event, and a reset would
+        // inject another <script> (leaking two Closures) per attempt. A failed
+        // load is final for this page — re-awaiting just reports it again.
+        leptos::logging::warn!("echarts failed to load; charts stay unrendered");
     }
     ok
 }
@@ -162,10 +172,10 @@ pub fn use_chart(node: NodeRef<leptos::html::Div>) -> RwSignal<Option<Chart>> {
                                 let loaded = ensure_echarts_loaded().await;
                                 if loaded {
                                     if alive_cb.load(Ordering::Relaxed) {
-                                        let c = Chart::new(&cb_el);
-                                        chart_cb.set(Some(c));
-                                    } else {
-                                        let c = Chart::new(&cb_el);
+                                        if let Some(c) = Chart::init(&cb_el) {
+                                            chart_cb.set(Some(c));
+                                        }
+                                    } else if let Some(c) = Chart::init(&cb_el) {
                                         c.dispose();
                                     }
                                 } else {
@@ -196,10 +206,10 @@ pub fn use_chart(node: NodeRef<leptos::html::Div>) -> RwSignal<Option<Chart>> {
                     let loaded = ensure_echarts_loaded().await;
                     if loaded {
                         if alive.load(Ordering::Relaxed) {
-                            let c = Chart::new(&el_init);
-                            chart.set(Some(c));
-                        } else {
-                            let c = Chart::new(&el_init);
+                            if let Some(c) = Chart::init(&el_init) {
+                                chart.set(Some(c));
+                            }
+                        } else if let Some(c) = Chart::init(&el_init) {
                             c.dispose();
                         }
                     } else {

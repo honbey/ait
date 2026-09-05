@@ -7,4 +7,3 @@ pub mod models;
 pub mod not_found;
 pub mod overview;
 pub mod providers;
-pub mod text_gen;

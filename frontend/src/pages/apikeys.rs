@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use reactive_graph::traits::{Get, Read, ReadUntracked, Set, Write};
+use reactive_graph::traits::{Get, IsDisposed, Read, ReadUntracked, Set, Write};
 use reactive_stores::{Field, Patch, Store};
 
 use crate::api;
@@ -49,14 +49,12 @@ fn expires_at_display(expires_at: Option<i64>) -> String {
 
 #[component]
 pub fn ApiKeysPage() -> impl IntoView {
-    use_page_title(move || format!("Ait - {}", t!(ApiKey)()));
+    use_page_title(move || format!("{} - Ait", t!(ApiKey)()));
     let modal = RwSignal::new(ApiKeyModal::Closed);
     let state = Store::new(ApiKeysStore::default());
     let created_raw_key = RwSignal::new(Option::<(String, String)>::None);
 
-    let api_keys_rsc = LocalResource::new(move || async move {
-        api::fetch_api_keys().await.map_err(|e| e.to_string())
-    });
+    let api_keys_rsc = LocalResource::new(move || async move { api::fetch_api_keys().await });
 
     let _sync_store = Effect::new(move |_| match api_keys_rsc.get() {
         Some(Ok(items)) => {
@@ -119,11 +117,11 @@ pub fn ApiKeysPage() -> impl IntoView {
                                             key=|row| row.clone().id().read_untracked().to_owned()
                                             let:key
                                         >
-                                            <tr class="odd:bg-gray-50 dark:odd:bg-gray-800/50">
+                                            <tr class="odd:bg-gray-50 dark:odd:bg-ink-900/50">
                                                 {
                                                     let k: Field<ApiKey> = key.into();
                                                     view! {
-                                                        <td class="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">
+                                                        <td class="px-6 py-4 font-medium text-gray-800 dark:text-ink-200">
                                                             {move || k.name().get()}
                                                         </td>
                                                         <td class="px-6 py-4">
@@ -132,13 +130,13 @@ pub fn ApiKeysPage() -> impl IntoView {
                                                                 CLASS_TEXT_MUTED,
                                                             )>{k.display().read_untracked().to_owned()}</span>
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
+                                                        <td class="px-6 py-4 text-gray-400 dark:text-ink-500 text-sm">
                                                             {move || expires_at_display(k.expires_at().get())}
                                                         </td>
                                                         <td class="px-6 py-4">
                                                             {move || status_badge(k.enabled().get())}
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
+                                                        <td class="px-6 py-4 text-gray-400 dark:text-ink-500 text-sm">
                                                             {move || timestamp_str(k.updated_at().get())}
                                                         </td>
                                                         <td class="px-6 py-4 text-center whitespace-nowrap">
@@ -174,7 +172,13 @@ pub fn ApiKeysPage() -> impl IntoView {
                             .into_any()
                     }
                     Some(Err(ref e)) => {
-                        view! { <ErrorCard message=e.clone() on_retry=Box::new(do_refetch) /> }
+                        view! {
+                            <ErrorCard
+                                message=e.message.clone()
+                                request_id=e.request_id.clone()
+                                on_retry=Box::new(do_refetch)
+                            />
+                        }
                             .into_any()
                     }
                     None => ().into_any(),
@@ -229,7 +233,7 @@ pub fn ApiKeysPage() -> impl IntoView {
                                     "text-sm {}",
                                     CLASS_TEXT_MUTED,
                                 )>{t!(ApiKeyName)}</label>
-                                <p class="text-gray-900 dark:text-gray-100 font-medium mt-0.5">
+                                <p class="text-gray-900 dark:text-ink-100 font-medium mt-0.5">
                                     {raw_name.clone()}
                                 </p>
                             </div>
@@ -239,11 +243,11 @@ pub fn ApiKeysPage() -> impl IntoView {
                                     CLASS_TEXT_MUTED,
                                 )>{t!(ApiKeyKey)}</label>
                                 <div class="flex items-center gap-2 mt-0.5">
-                                    <div class="flex-1 bg-gray-100 dark:bg-gray-700 px-3 py-2 rounded-lg text-sm font-mono break-all text-gray-800 dark:text-gray-200 select-all">
+                                    <div class="flex-1 bg-gray-100 dark:bg-ink-800 px-3 py-2 rounded-lg text-sm font-mono break-all text-gray-800 dark:text-ink-200 select-all">
                                         {raw.clone()}
                                     </div>
                                     <button
-                                        class="shrink-0 px-3 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 border border-gray-300 dark:border-gray-600 rounded-lg transition-colors cursor-pointer active:scale-95"
+                                        class="shrink-0 px-3 py-2 text-sm text-gray-600 dark:text-ink-300 hover:text-gray-800 dark:hover:text-ink-100 border border-gray-300 dark:border-ink-600 rounded-lg transition-colors cursor-pointer active:scale-95"
                                         on:click=move |_| {
                                             copy_action.dispatch(raw.clone());
                                         }
@@ -407,8 +411,16 @@ fn ApiKeyFormModal(
         match save_action.value().get() {
             Some(Ok(api_key)) => {
                 consumed.set(true);
-                if let Some(field) = edit_model {
-                    field.patch(api_key);
+                if edit_model.is_some() {
+                    // A concurrent refetch re-patches the keyed store and can
+                    // dispose the Field the modal captured. Without the check
+                    // the patch is dropped silently while the toast below still
+                    // reports success, so fall back to a reload.
+                    if let Some(field) = edit_model.filter(|f| !f.is_disposed()) {
+                        field.patch(api_key);
+                    } else {
+                        on_refetch();
+                    }
                 } else {
                     created_raw_key.set(Some((api_key.display.clone(), api_key.name.clone())));
                     // Decision: refetch the list after create instead of masking

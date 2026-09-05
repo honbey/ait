@@ -1,0 +1,8 @@
+workspace:
+  launch:
+    button:
+      name: WebIDE
+      description: Launch WebIDE
+    cpus: 16
+    disabled: false
+    autoOpenWebIDE: true

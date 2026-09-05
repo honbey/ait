@@ -11,34 +11,37 @@ use axum::{
 use chrono::Utc;
 use tracing::{debug, trace};
 
-use crate::app::{AppState, ModelCacheEntry, NEGATIVE_CACHE_TTL};
-use crate::db::{ApiKeyContext, Model, Provider, ProxyEvent, RequestId};
-use crate::error::{AitError, internal_error, not_found};
-use crate::middleware::CACHE_TTL;
-use crate::providers::create_provider;
+use crate::app::AppState;
+use crate::db::{ApiKeyContext, ProxyEvent, RequestId};
+use crate::error::{AitError, internal_error};
 use crate::ssrf;
 use crate::utils::mask_sensitive_value;
 
-/// Insert into the model cache only while under the entry cap; beyond it the
-/// entry is not cached at all. `DashMap::len` is approximate under concurrency,
-/// so the map stays bounded within a small multiple of `cache_max_entries`.
-fn insert_model_cache(
-    map: &dashmap::DashMap<String, ModelCacheEntry>,
-    name: &str,
-    entry: ModelCacheEntry,
-    max_entries: usize,
-) {
-    if map.len() < max_entries {
-        map.insert(name.to_string(), entry);
-    }
-}
-
 mod exec;
 mod guard;
+mod resolve;
 mod sse;
 
 use exec::{proxy_non_streamed, proxy_streamed};
 use guard::{ProxyLogGuard, UsageTokens};
+use resolve::{cached_upstream, resolve_model_and_provider};
+
+/// Parse a request body and release the raw bytes immediately.
+///
+/// The `Bytes` holding the request is only needed while parsing, but a
+/// shadowed binding keeps it alive until the handler returns — that is the
+/// whole upstream round-trip, which for a stream can be minutes. Releasing it
+/// here keeps a copy of the body (up to `max_request_body_bytes`) out of
+/// memory for the duration, per in-flight request.
+fn parse_body(
+    body: bytes::Bytes,
+) -> Result<(serde_json::Value, usize), (StatusCode, Json<AitError>)> {
+    let body_len = body.len();
+    let parsed = serde_json::from_slice(&body)
+        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    drop(body);
+    Ok((parsed, body_len))
+}
 
 pub async fn chat_completions(
     State(state): State<AppState>,
@@ -47,9 +50,7 @@ pub async fn chat_completions(
     Extension(request_id): Extension<RequestId>,
     body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    let body_len = body.len();
-    let body = serde_json::from_slice(&body)
-        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    let (body, body_len) = parse_body(body)?;
     proxy_request(
         state,
         api_key,
@@ -69,9 +70,7 @@ pub async fn completions(
     Extension(request_id): Extension<RequestId>,
     body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    let body_len = body.len();
-    let body = serde_json::from_slice(&body)
-        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    let (body, body_len) = parse_body(body)?;
     proxy_request(
         state,
         api_key,
@@ -91,9 +90,7 @@ pub async fn embeddings(
     Extension(request_id): Extension<RequestId>,
     body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    let body_len = body.len();
-    let body = serde_json::from_slice(&body)
-        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    let (body, body_len) = parse_body(body)?;
     proxy_request(
         state,
         api_key,
@@ -113,9 +110,7 @@ pub async fn responses(
     Extension(request_id): Extension<RequestId>,
     body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    let body_len = body.len();
-    let body = serde_json::from_slice(&body)
-        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    let (body, body_len) = parse_body(body)?;
     proxy_request(
         state,
         api_key,
@@ -192,6 +187,54 @@ pub async fn list_models_proxy(
     })))
 }
 
+/// Record a DLP rejection and build the error the client sees.
+///
+/// A blocked request never reaches an upstream, so the record carries no
+/// provider or usage - it exists so the block appears in the logs beside the
+/// request that triggered it rather than only in the client's error.
+#[allow(clippy::too_many_arguments)]
+fn dlp_rejection(
+    state: &AppState,
+    matched: &str,
+    body: &serde_json::Value,
+    api_key: &ApiKeyContext,
+    client_ip: Option<IpAddr>,
+    request_id: &RequestId,
+    upstream_path: &str,
+    elapsed_ms: i64,
+) -> (StatusCode, Json<AitError>) {
+    let reason = format!(
+        "blocked by DLP: sensitive value '{}' matched",
+        mask_sensitive_value(matched, 3, 2)
+    );
+    state.log_manager.log_proxy(ProxyEvent {
+        timestamp: Utc::now(),
+        request_id: request_id.0.clone(),
+        api_key_name: api_key.name.clone(),
+        model_name: body
+            .get("model")
+            .and_then(|m| m.as_str())
+            .unwrap_or("blocked")
+            .to_string(),
+        provider_name: "unknown".to_string(),
+        prompt_tokens: None,
+        completion_tokens: None,
+        total_tokens: None,
+        cached_tokens: None,
+        latency_ms: elapsed_ms,
+        status: "400".to_string(),
+        endpoint: upstream_path.to_string(),
+        is_streaming: false,
+        time_to_first_token_ms: None,
+        upstream_model: "blocked".to_string(),
+        provider_type: "unknown".to_string(),
+        response_body_size: None,
+        error_message: Some(reason),
+        client_ip: client_ip.map(|ip| ip.to_string()),
+    });
+    AitError::bad_request("request blocked by sensitive data rule").into_response()
+}
+
 pub async fn proxy_request(
     state: AppState,
     api_key: ApiKeyContext,
@@ -203,45 +246,26 @@ pub async fn proxy_request(
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
     let start = Instant::now();
 
-    if body_len as u64 > state.config.proxy.max_request_body_bytes {
+    // Matches the transport layer: `0` disables the cap entirely rather than
+    // rejecting every non-empty body.
+    let max_request_body = state.config.proxy.max_request_body_bytes;
+    if max_request_body > 0 && body_len as u64 > max_request_body {
         return Err(AitError::bad_request("request body exceeds max allowed size").into_response());
     }
 
     if state.dlp.is_enabled()
-        && let Some(value) = state.dlp.scan(&body)
+        && let Some(matched) = state.dlp.scan(&body)
     {
-        let reason = format!(
-            "blocked by DLP: sensitive value '{}' matched",
-            mask_sensitive_value(value, 3, 2)
-        );
-        state.log_manager.log_proxy(ProxyEvent {
-            timestamp: Utc::now(),
-            request_id: request_id.0,
-            api_key_name: api_key.name.clone(),
-            model_name: body
-                .get("model")
-                .and_then(|m| m.as_str())
-                .unwrap_or("blocked")
-                .to_string(),
-            provider_name: "unknown".to_string(),
-            prompt_tokens: None,
-            completion_tokens: None,
-            total_tokens: None,
-            cached_tokens: None,
-            latency_ms: start.elapsed().as_millis() as i64,
-            status: "400".to_string(),
-            endpoint: upstream_path.to_string(),
-            is_streaming: false,
-            time_to_first_token_ms: None,
-            upstream_model: "blocked".to_string(),
-            provider_type: "unknown".to_string(),
-            response_body_size: None,
-            error_message: Some(reason),
-            client_ip: client_ip.map(|ip| ip.to_string()),
-        });
-        return Err(
-            AitError::bad_request("request blocked by sensitive data rule").into_response(),
-        );
+        return Err(dlp_rejection(
+            &state,
+            matched,
+            &body,
+            &api_key,
+            client_ip,
+            &request_id,
+            upstream_path,
+            start.elapsed().as_millis() as i64,
+        ));
     }
 
     let model_name = body.get("model").and_then(|m| m.as_str()).ok_or_else(|| {
@@ -250,72 +274,7 @@ pub async fn proxy_request(
 
     trace!(model_name, "proxy_request: start");
 
-    let (model, provider) = {
-        async fn resolve(
-            state: &AppState,
-            model_name: &str,
-        ) -> Result<(Model, Provider), (StatusCode, Json<AitError>)> {
-            let db = state.db.clone();
-            let name = model_name.to_string();
-            let max_entries = state.config.server.cache_max_entries as usize;
-            match crate::run_blocking(move || db.resolve_model(&name)).await {
-                Ok(Ok(Some((m, p)))) => {
-                    let upstream = create_provider(&p, state.http_client.clone());
-                    state
-                        .provider_cache
-                        .insert(p.id.clone(), (upstream, Instant::now()));
-                    insert_model_cache(
-                        &state.model_cache,
-                        model_name,
-                        (Some((m.clone(), p.clone())), Instant::now()),
-                        max_entries,
-                    );
-                    Ok((m, p))
-                }
-                Ok(Ok(None)) => {
-                    insert_model_cache(
-                        &state.model_cache,
-                        model_name,
-                        (None, Instant::now()),
-                        max_entries,
-                    );
-                    Err(not_found(format!(
-                        "Model '{}' not found or disabled",
-                        model_name
-                    )))
-                }
-                Ok(Err(e)) => Err(AitError::from_db_error(e).into_response()),
-                Err(join_err) => Err(internal_error(join_err)),
-            }
-        }
-
-        let cached = state.model_cache.get_mut(model_name).and_then(|mut entry| {
-            let ttl = if entry.0.is_none() {
-                NEGATIVE_CACHE_TTL
-            } else {
-                CACHE_TTL
-            };
-            if entry.1.elapsed() < ttl {
-                // slide only positive entries; negative ones expire for real
-                if entry.0.is_some() {
-                    entry.1 = Instant::now();
-                }
-                Some(entry.0.clone())
-            } else {
-                None
-            }
-        });
-        match cached {
-            Some(Some((m, p))) => (m, p),
-            Some(None) => {
-                return Err(not_found(format!(
-                    "Model '{}' not found or disabled",
-                    model_name
-                )));
-            }
-            None => resolve(&state, model_name).await?,
-        }
-    };
+    let (model, provider) = resolve_model_and_provider(&state, model_name).await?;
 
     trace!(
         model = model_name,
@@ -333,27 +292,7 @@ pub async fn proxy_request(
         .into_response());
     }
 
-    let cached_upstream = state
-        .provider_cache
-        .get_mut(&provider.id)
-        .and_then(|mut entry| {
-            if entry.1.elapsed() < CACHE_TTL {
-                entry.1 = Instant::now();
-                Some(entry.0.clone())
-            } else {
-                None
-            }
-        });
-    let upstream = match cached_upstream {
-        Some(upstream) => upstream,
-        None => {
-            let upstream = create_provider(&provider, state.http_client.clone());
-            state
-                .provider_cache
-                .insert(provider.id.clone(), (upstream.clone(), Instant::now()));
-            upstream
-        }
-    };
+    let upstream = cached_upstream(&state, &provider);
 
     let model_name = model.name.clone();
     let provider_name = provider.name.clone();
@@ -364,7 +303,7 @@ pub async fn proxy_request(
         .unwrap_or(false)
         && state.config.proxy.stream;
 
-    let prompt_tokens = count_prompt_tokens(body_len);
+    let prompt_tokens = count_prompt_tokens(body_len, state.config.proxy.prompt_token_divisor);
 
     let request = upstream
         .build_request(
@@ -377,13 +316,17 @@ pub async fn proxy_request(
         .await
         .map_err(|e| AitError::bad_request(e).into_response())?;
 
-    ssrf::check_ssrf(
+    let verified_ips = ssrf::check_ssrf(
         request.url(),
         &state.config.security.ssrf_allowed_cidrs,
         &state.ssrf_dns_cache,
         &provider_name,
     )
     .await?;
+    // Execute against a client whose DNS is pinned to the verified IPs, so
+    // the connection cannot be re-resolved to a different address between
+    // check and connect (DNS rebinding).
+    let pinned = ssrf::pinned_client(&state, request.url(), &verified_ips)?;
 
     debug!(
         "Proxying to provider '{}' for model '{}' -> upstream '{}', base_url: {}",
@@ -407,6 +350,7 @@ pub async fn proxy_request(
         );
         return proxy_streamed(
             state,
+            pinned,
             request,
             upstream,
             provider_name,
@@ -460,6 +404,7 @@ pub async fn proxy_request(
 
     let result = proxy_non_streamed(
         state.clone(),
+        pinned,
         request,
         upstream,
         &model_name,
@@ -503,11 +448,14 @@ pub async fn proxy_request(
 
 /// Normal paths will be overwritten by the upstream usage precise value;
 /// this fallback value is only used if the connection is interrupted.
-fn count_prompt_tokens(body_len: usize) -> Option<i64> {
+/// `body_len` covers the whole JSON request (field names, base64 images and
+/// all), so the divisor is configurable (`proxy.prompt_token_divisor`, 1-5)
+/// to trim the estimate toward observed usage.
+fn count_prompt_tokens(body_len: usize, divisor: u64) -> Option<i64> {
     if body_len == 0 {
         None
     } else {
-        Some(body_len as i64 / 3)
+        Some(body_len as i64 / divisor as i64)
     }
 }
 
@@ -516,31 +464,14 @@ mod tests {
     use super::*;
     use crate::db::{ApiKeyContext, RequestId};
     use crate::test_utils::{
-        create_test_state, create_test_state_dlp, mock_upstream_redirect, mock_upstream_server,
-        mock_upstream_sse_server, seed_provider_and_model, send_request, test_router,
+        create_test_provider, create_test_state, create_test_state_dlp, mock_upstream_hanging,
+        mock_upstream_redirect, mock_upstream_server, mock_upstream_sse_server,
+        mock_upstream_sse_silent, seed_provider_and_model, send_request, test_router,
     };
     use axum::Extension;
     use axum::http::Method;
     use bytes::Bytes;
-
-    #[test]
-    fn insert_model_cache_respects_cap() {
-        let map = dashmap::DashMap::new();
-        let entry = (None, Instant::now());
-        for i in 0..5 {
-            insert_model_cache(&map, &format!("m{i}"), entry.clone(), 5);
-        }
-        assert_eq!(map.len(), 5);
-        insert_model_cache(&map, "m6", entry.clone(), 5);
-        assert_eq!(map.len(), 5);
-    }
-
-    #[test]
-    fn insert_model_cache_zero_cap_caches_nothing() {
-        let map = dashmap::DashMap::new();
-        insert_model_cache(&map, "m0", (None, Instant::now()), 0);
-        assert!(map.is_empty());
-    }
+    use std::time::Duration;
 
     fn api_key() -> ApiKeyContext {
         ApiKeyContext {
@@ -666,6 +597,131 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bogus_model_names_do_not_evict_resolved_models() {
+        // Unknown names must land in `negative_model_cache` only: when they
+        // shared `model_cache`, filling the cap with bogus names stopped
+        // valid models from being cached at all.
+        let (mut state, _dir) = create_test_state();
+        let (base_url, _captured) = mock_upstream_server(
+            serde_json::json!({
+                "id": "chatcmpl-1",
+                "choices": [{"message": {"role": "assistant", "content": "hello"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+            }),
+            axum::http::StatusCode::OK,
+        );
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            &base_url,
+            "test-model",
+        );
+        state.config.server.cache_max_entries = 4;
+        let router = test_router(state.clone());
+
+        for i in 0..4 {
+            let resp = send_request(
+                &router,
+                Method::POST,
+                "/v1/chat/completions",
+                Some(&raw_key),
+                Some(serde_json::json!({
+                    "model": format!("bogus-{i}"),
+                    "messages": [{"role": "user", "content": "hi"}],
+                })),
+            )
+            .await;
+            assert_eq!(resp.status, axum::http::StatusCode::NOT_FOUND);
+        }
+
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::OK);
+
+        assert!(
+            state.model_cache.contains_key("test-model"),
+            "the resolved model must still be cached"
+        );
+        assert_eq!(state.model_cache.len(), 1);
+        assert_eq!(state.negative_model_cache.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn creating_a_model_clears_its_negative_cache_entry() {
+        // A name requested before it existed must not stay 404 after it is
+        // created; the negative entry would outlive it by up to its TTL.
+        let (state, _dir) = create_test_state();
+        let (base_url, _captured) = mock_upstream_server(
+            serde_json::json!({
+                "id": "chatcmpl-1",
+                "choices": [{"message": {"role": "assistant", "content": "hello"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+            }),
+            axum::http::StatusCode::OK,
+        );
+        // A UUID id: the create-model endpoint rejects anything else.
+        let provider = create_test_provider(
+            "550e8400-e29b-41d4-a716-446655440000",
+            crate::db::ProviderType::OpenAICompat,
+            &base_url,
+        );
+        state.db.insert_provider(provider).unwrap();
+        let (_stored, raw_key) = state.db.insert_api_key("test-key", None).unwrap();
+        let router = test_router(state.clone());
+
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "late-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::NOT_FOUND);
+        assert!(state.negative_model_cache.contains_key("late-model"));
+
+        let created = send_request(
+            &router,
+            Method::POST,
+            "/api/models",
+            None,
+            Some(serde_json::json!({
+                "name": "late-model",
+                "provider_id": "550e8400-e29b-41d4-a716-446655440000",
+                "upstream_model": "upstream-model",
+                "enabled": true,
+            })),
+        )
+        .await;
+        assert_eq!(created.status, axum::http::StatusCode::CREATED);
+
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "late-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn proxy_missing_model_field_returns_400() {
         let (state, _dir) = create_test_state();
         let raw_key = seed_provider_and_model(
@@ -712,6 +768,14 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status, axum::http::StatusCode::TOO_MANY_REQUESTS);
+        // The /v1 stack carries the id too: `upstream_error` goes through the
+        // same `AitError::into_response` funnel as the admin errors.
+        let header_id = resp
+            .headers
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        assert_eq!(resp.json["request_id"].as_str(), header_id.as_deref());
     }
 
     #[tokio::test]
@@ -761,6 +825,74 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status, axum::http::StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn proxy_returns_408_when_upstream_never_responds() {
+        let (mut state, _dir) = create_test_state();
+        state.config.proxy.timeout_secs = 1;
+        let base_url = mock_upstream_hanging();
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            &base_url,
+            "test-model",
+        );
+        let router = test_router(state);
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        assert_eq!(resp.status, axum::http::StatusCode::REQUEST_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn proxy_stream_is_cut_at_idle_timeout() {
+        let (mut state, _dir) = create_test_state();
+        state.config.proxy.sse_idle_timeout_secs = 1;
+        let base_url = mock_upstream_sse_silent(vec![
+            r#"data: {"choices":[{"delta":{"content":"hello"}}]}"#.to_string(),
+        ]);
+        let raw_key = seed_provider_and_model(
+            &state,
+            crate::db::ProviderType::OpenAICompat,
+            &base_url,
+            "test-model",
+        );
+        let router = test_router(state);
+
+        let started = Instant::now();
+        let resp = send_request(
+            &router,
+            Method::POST,
+            "/v1/chat/completions",
+            Some(&raw_key),
+            Some(serde_json::json!({
+                "model": "test-model",
+                "stream": true,
+                "messages": [{"role": "user", "content": "hi"}],
+            })),
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(resp.status, axum::http::StatusCode::OK);
+        assert_eq!(
+            resp.headers.get("content-type").unwrap(),
+            "text/event-stream"
+        );
+        // The upstream holds the socket open, so the response can only have
+        // finished because the idle deadline fired - not instantly, and not
+        // by waiting out the 30s connect timeout.
+        assert!(elapsed >= Duration::from_secs(1), "elapsed={elapsed:?}");
+        assert!(elapsed < Duration::from_secs(15), "elapsed={elapsed:?}");
     }
 
     #[tokio::test]
@@ -895,8 +1027,14 @@ mod tests {
 
     #[test]
     fn count_prompt_tokens_estimates_from_body_len() {
-        assert_eq!(count_prompt_tokens(0), None);
-        assert_eq!(count_prompt_tokens(99), Some(33));
-        assert_eq!(count_prompt_tokens(100), Some(33));
+        assert_eq!(count_prompt_tokens(0, 3), None);
+        assert_eq!(count_prompt_tokens(99, 3), Some(33));
+        assert_eq!(count_prompt_tokens(100, 3), Some(33));
+    }
+
+    #[test]
+    fn count_prompt_tokens_divisor_scales_estimate() {
+        assert_eq!(count_prompt_tokens(100, 1), Some(100));
+        assert_eq!(count_prompt_tokens(100, 5), Some(20));
     }
 }

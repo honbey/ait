@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use leptos::prelude::*;
 use reactive_graph::traits::{Get, Read, ReadUntracked, Set, Write};
 use reactive_stores::{Field, Patch, Store};
@@ -38,7 +40,7 @@ struct ProvidersStore {
 
 #[component]
 pub fn ProvidersPage() -> impl IntoView {
-    use_page_title(move || format!("Ait - {}", t!(Providers)()));
+    use_page_title(move || format!("{} - Ait", t!(Providers)()));
     let modal = RwSignal::new(ProviderModal::Closed);
     let state = Store::new(ProvidersStore::default());
 
@@ -70,10 +72,7 @@ pub fn ProvidersPage() -> impl IntoView {
         }
     });
 
-    let providers_rsc =
-        LocalResource::new(
-            || async move { api::fetch_providers().await.map_err(|e| e.to_string()) },
-        );
+    let providers_rsc = LocalResource::new(|| async move { api::fetch_providers().await });
 
     let _sync_store = Effect::new(move |_| match providers_rsc.get() {
         Some(Ok(items)) => {
@@ -85,6 +84,16 @@ pub fn ProvidersPage() -> impl IntoView {
     });
 
     let on_close = move || modal.set(ProviderModal::Closed);
+
+    // One type-id->name map instead of cloning and linearly scanning the type
+    // list in every row.
+    let type_names = Memo::new(move |_| {
+        provider_types_resource
+            .get()
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<HashMap<String, String>>()
+    });
 
     let do_refetch = move || providers_rsc.refetch();
 
@@ -136,31 +145,29 @@ pub fn ProvidersPage() -> impl IntoView {
                                             key=|row| row.clone().id().read_untracked().to_owned()
                                             let:provider
                                         >
-                                            <tr class="odd:bg-gray-50 dark:odd:bg-gray-800/50">
+                                            <tr class="odd:bg-gray-50 dark:odd:bg-ink-900/50">
                                                 {
                                                     let p: Field<Provider> = provider.into();
                                                     view! {
-                                                        <td class="px-6 py-4 font-medium text-gray-800 dark:text-gray-200">
+                                                        <td class="px-6 py-4 font-medium text-gray-800 dark:text-ink-200">
                                                             {move || p.name().get()}
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
+                                                        <td class="px-6 py-4 text-gray-600 dark:text-ink-400">
                                                             {move || {
-                                                                provider_types_resource
+                                                                type_names
                                                                     .get()
-                                                                    .map(|ref types| {
-                                                                        provider_display_name(&p.provider_type().get(), types)
-                                                                            .to_string()
-                                                                    })
+                                                                    .get(&p.provider_type().get())
+                                                                    .cloned()
                                                                     .unwrap_or_else(|| p.provider_type().get())
                                                             }}
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-xs font-mono">
+                                                        <td class="px-6 py-4 text-gray-400 dark:text-ink-500 text-xs font-mono">
                                                             {move || p.base_url().get()}
                                                         </td>
                                                         <td class="px-6 py-4">
                                                             {move || status_badge(p.enabled().get())}
                                                         </td>
-                                                        <td class="px-6 py-4 text-gray-400 dark:text-gray-500 text-sm">
+                                                        <td class="px-6 py-4 text-gray-400 dark:text-ink-500 text-sm">
                                                             {move || timestamp_str(p.updated_at().get())}
                                                         </td>
                                                         <td class="px-6 py-4 text-center whitespace-nowrap">
@@ -196,7 +203,13 @@ pub fn ProvidersPage() -> impl IntoView {
                             .into_any()
                     }
                     Some(Err(ref e)) => {
-                        view! { <ErrorCard message=e.clone() on_retry=Box::new(do_refetch) /> }
+                        view! {
+                            <ErrorCard
+                                message=e.message.clone()
+                                request_id=e.request_id.clone()
+                                on_retry=Box::new(do_refetch)
+                            />
+                        }
                             .into_any()
                     }
                     None => ().into_any(),
@@ -489,14 +502,15 @@ fn ProviderFormModal(
                 <label for="form-api-key" class=CLASS_LABEL>
                     {t!(ApiKey)}
                     <Show when=move || is_edit>
-                        <span class="text-xs text-gray-400 dark:text-gray-500 ml-1">
+                        <span class="text-xs text-gray-400 dark:text-ink-500 ml-1">
                             {t!(KeepKeyHint)}
                         </span>
                     </Show>
                 </label>
                 <input
                     id="form-api-key"
-                    type="text"
+                    type="password"
+                    autocomplete="off"
                     class=CLASS_INPUT
                     placeholder=ts!(ApiKey)
                     prop:value=api_key

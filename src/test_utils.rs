@@ -1,7 +1,7 @@
 use crate::app::AppState;
 use crate::config::{
     AuthConfig, ConfigApp, DatabaseConfig, DlpConfig, LogConfig, LokiConfig, ProxyConfig,
-    SecurityConfig, ServerConfig,
+    SecurityConfig, ServerConfig, TrustedProxy,
 };
 use crate::db::{
     AccessEvent, AuditEvent, Database, LogManager, Model, Provider, ProviderType, ProxyEvent,
@@ -15,6 +15,7 @@ use chrono::Utc;
 use dashmap::DashMap;
 use serde_json::Value;
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -23,7 +24,7 @@ use tower::ServiceExt;
 pub fn create_test_db() -> (Database, TempDir) {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("test.db");
-    let db = Database::new(path.to_str().unwrap()).unwrap();
+    let db = Database::new(path.to_str().unwrap(), 4).unwrap();
     (db, dir)
 }
 
@@ -83,11 +84,16 @@ pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
             cache_cleanup_interval_secs: 300,
             cache_max_entries: 1000,
             graceful_timeout_secs: 10,
-            trusted_proxies: vec!["127.0.0.1".parse().unwrap(), "::1".parse().unwrap()],
+            trusted_proxies: ["127.0.0.1", "::1"]
+                .iter()
+                .map(|e| TrustedProxy::parse(e).unwrap())
+                .collect(),
+            trusted_proxy_hops: 1,
         },
         auth: AuthConfig { enabled: true },
         database: DatabaseConfig {
             path: db_path.to_string(),
+            reader_pool_size: 4,
         },
         log: LogConfig {
             path: log_path.to_string(),
@@ -100,15 +106,21 @@ pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
             axum: "info".to_string(),
             tower_http_trace: "info".to_string(),
             analytics_timeout_secs: 10,
+            analytics_workers: 2,
+            duckdb_memory_limit_mb: 512,
+            duckdb_threads: 2,
+            duckdb_query_timeout_secs: 60,
             loki: LokiConfig::default(),
         },
         proxy: ProxyConfig {
             timeout_secs: 300,
             stream: true,
             sse_idle_timeout_secs: 60,
+            sse_max_duration_secs: 1800,
             connect_timeout_secs: 30,
             max_response_body_bytes: 8 * 1024 * 1024,
             max_request_body_bytes: 8 * 1024 * 1024,
+            prompt_token_divisor: 3,
         },
         security: SecurityConfig {
             ssrf_allowed_cidrs: vec!["127.0.0.1/8".to_string()],
@@ -132,7 +144,8 @@ pub(crate) fn test_config_fast_logs(db_path: &str, log_path: &str) -> ConfigApp 
 }
 
 fn build_state(config: ConfigApp, dir: TempDir) -> (AppState, TempDir) {
-    let db = Arc::new(Database::new(&config.database.path).unwrap());
+    let db =
+        Arc::new(Database::new(&config.database.path, config.database.reader_pool_size).unwrap());
     let log_manager = LogManager::new(&config.log).unwrap();
     let dlp = DlpScanner::new(&config.security.dlp);
     let http_client = reqwest::Client::builder()
@@ -147,9 +160,14 @@ fn build_state(config: ConfigApp, dir: TempDir) -> (AppState, TempDir) {
         start_time: Utc::now(),
         shutdown_token: CancellationToken::new(),
         api_key_cache: Arc::new(DashMap::new()),
+        negative_key_cache: Arc::new(DashMap::new()),
+        auth_lookup_permits: Arc::new(tokio::sync::Semaphore::new(64)),
         model_cache: Arc::new(DashMap::new()),
+        negative_model_cache: Arc::new(DashMap::new()),
         provider_cache: Arc::new(DashMap::new()),
         ssrf_dns_cache: Arc::new(DashMap::new()),
+        pinned_clients: Arc::new(DashMap::new()),
+        key_revision: Arc::new(AtomicU64::new(0)),
         dlp,
     };
     (state, dir)
@@ -251,15 +269,17 @@ pub struct TestResponse {
     pub headers: HeaderMap,
 }
 
-/// Send a request through the router. `bearer` is a raw API key sent as a
-/// Bearer token. A fake client IP is always injected because the client IP
-/// extraction requires `ConnectInfo`.
-pub async fn send_request(
+/// Shared request plumbing: builds a request with the given peer address and
+/// extra headers, sends it through the router, and parses the response.
+#[allow(clippy::too_many_arguments)]
+async fn send(
     router: &Router,
     method: Method,
     uri: &str,
     bearer: Option<&str>,
     body: Option<Value>,
+    peer: SocketAddr,
+    extra_headers: &[(HeaderName, &str)],
 ) -> TestResponse {
     let mut builder = Request::builder().method(method).uri(uri);
     if let Some(bearer) = bearer {
@@ -268,11 +288,12 @@ pub async fn send_request(
     if body.is_some() {
         builder = builder.header(header::CONTENT_TYPE, "application/json");
     }
+    for (name, value) in extra_headers {
+        builder = builder.header(name, *value);
+    }
     let body = body.map(|b| b.to_string()).unwrap_or_default();
     let mut request = builder.body(Body::from(body)).unwrap();
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+    request.extensions_mut().insert(ConnectInfo(peer));
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let headers = response.headers().clone();
@@ -291,6 +312,28 @@ pub async fn send_request(
     }
 }
 
+/// Send a request through the router. `bearer` is a raw API key sent as a
+/// Bearer token. A fake client IP is always injected because the client IP
+/// extraction requires `ConnectInfo`.
+pub async fn send_request(
+    router: &Router,
+    method: Method,
+    uri: &str,
+    bearer: Option<&str>,
+    body: Option<Value>,
+) -> TestResponse {
+    send(
+        router,
+        method,
+        uri,
+        bearer,
+        body,
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        &[],
+    )
+    .await
+}
+
 /// Like `send_request` but with extra custom headers (e.g. `x-forwarded-for`).
 pub async fn send_request_with_headers(
     router: &Router,
@@ -300,37 +343,28 @@ pub async fn send_request_with_headers(
     body: Option<Value>,
     extra_headers: &[(HeaderName, &str)],
 ) -> TestResponse {
-    let mut builder = Request::builder().method(method).uri(uri);
-    if let Some(bearer) = bearer {
-        builder = builder.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
-    }
-    if body.is_some() {
-        builder = builder.header(header::CONTENT_TYPE, "application/json");
-    }
-    for (name, value) in extra_headers {
-        builder = builder.header(name, *value);
-    }
-    let body = body.map(|b| b.to_string()).unwrap_or_default();
-    let mut request = builder.body(Body::from(body)).unwrap();
-    request
-        .extensions_mut()
-        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-    let response = router.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let headers = response.headers().clone();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json = if bytes.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
-    };
-    TestResponse {
-        status,
-        json,
-        headers,
-    }
+    send(
+        router,
+        method,
+        uri,
+        bearer,
+        body,
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        extra_headers,
+    )
+    .await
+}
+
+/// Like `send_request_with_headers` but with a caller-specified peer address,
+/// for tests exercising trusted-proxy vs. direct-peer client IP extraction.
+pub async fn send_request_from_peer(
+    router: &Router,
+    method: Method,
+    uri: &str,
+    peer: SocketAddr,
+    extra_headers: &[(HeaderName, &str)],
+) -> TestResponse {
+    send(router, method, uri, None, None, peer, extra_headers).await
 }
 
 /// Run a blocking closure on a separate thread and fail the test if it does
@@ -511,6 +545,86 @@ pub fn mock_upstream_sse_server(events: Vec<String>) -> String {
                         StatusCode::OK,
                         [("content-type", "text/event-stream")],
                         body,
+                    )
+                }
+            }));
+            axum::serve(listener, app).await.unwrap();
+        });
+    });
+
+    rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
+}
+
+/// Start a mock upstream server that reads the request and then never answers,
+/// holding the socket open. Exercises the proxy's response-header timeout.
+pub fn mock_upstream_hanging() -> String {
+    // Scoped to this function: at module level the name would also resolve
+    // for the stream combinators used by the SSE mock.
+    use tokio::io::AsyncReadExt;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            tx.send(format!("http://{}", listener.local_addr().unwrap()))
+                .unwrap();
+
+            // Drain each connection without ever replying, so the client is
+            // left waiting for headers until its own deadline fires.
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    while matches!(socket.read(&mut buf).await, Ok(n) if n > 0) {}
+                });
+            }
+        });
+    });
+
+    rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
+}
+
+/// Start a mock upstream SSE server that sends `events` and then goes silent
+/// without closing the connection, so only the proxy's idle deadline can end
+/// the response.
+pub fn mock_upstream_sse_silent(events: Vec<String>) -> String {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            tx.send(format!("http://{}", listener.local_addr().unwrap()))
+                .unwrap();
+
+            let app = Router::new().fallback(axum::routing::any(move || {
+                let events = events.clone();
+                async move {
+                    let mut body = events.join("\n\n");
+                    body.push_str("\n\n");
+                    // Yields the events, then pends forever with no waker: the
+                    // socket stays open and nothing more is ever read.
+                    let mut remaining = Some(body);
+                    let chunks = futures_util::stream::poll_fn(move |_cx| match remaining.take() {
+                        Some(body) => {
+                            std::task::Poll::Ready(Some(Ok::<String, std::io::Error>(body)))
+                        }
+                        None => std::task::Poll::Pending,
+                    });
+                    (
+                        StatusCode::OK,
+                        [("content-type", "text/event-stream")],
+                        Body::from_stream(chunks),
                     )
                 }
             }));

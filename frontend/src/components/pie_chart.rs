@@ -21,10 +21,11 @@ fn build_pie_option(data: &[PieData], dark: bool) -> JsValue {
         })
         .collect();
 
-    let label_color = if dark { "#d1d5db" } else { "#374151" };
-    let tooltip_bg = if dark { "#1f2937" } else { "#ffffff" };
-    let tooltip_border = if dark { "#374151" } else { "#e5e7eb" };
-    let tooltip_color = if dark { "#e5e7eb" } else { "#374151" };
+    // Dark values track the neutral `ink` ramp; see tailwind.css.
+    let label_color = if dark { "#d5d5d5" } else { "#374151" };
+    let tooltip_bg = if dark { "#282828" } else { "#ffffff" };
+    let tooltip_border = if dark { "#404040" } else { "#e5e7eb" };
+    let tooltip_color = if dark { "#e7e7e7" } else { "#374151" };
 
     let option = serde_json::json!({
         // Catppuccin Frappe (transposed: 4,4,3,3)
@@ -72,7 +73,7 @@ fn build_pie_option(data: &[PieData], dark: bool) -> JsValue {
 pub fn PieChart(id: &'static str, data: Signal<Vec<PieData>>) -> impl IntoView {
     let node = NodeRef::<leptos::html::Div>::new();
     let chart = echarts::use_chart(node);
-    let dark = use_context::<RwSignal<bool>>();
+    let dark = use_context::<Memo<bool>>();
 
     Effect::new(move || {
         let dark = dark.map(|d| d.get()).unwrap_or(false);

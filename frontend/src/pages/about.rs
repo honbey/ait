@@ -9,29 +9,29 @@ const PROJECT_LICENSE: &str = "MIT";
 
 #[component]
 pub fn AboutPage() -> impl IntoView {
-    use_page_title(move || format!("Ait - {}", t!(About)()));
+    use_page_title(move || format!("{} - Ait", t!(About)()));
     view! {
-        <div class="min-h-[calc(100vh-3.5rem)] bg-gray-50 dark:bg-gray-900">
+        <div class="min-h-[calc(100vh-3.5rem)] bg-gray-50 dark:bg-ink-950">
             <div class="max-w-2xl mx-auto px-6 py-8">
                 <h1 class=CLASS_PAGE_TITLE>{t!(About)}</h1>
-                <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm">
-                    <div class="flex items-center gap-4 p-6 border-b border-gray-100 dark:border-gray-700">
+                <div class="bg-white dark:bg-ink-900 rounded-xl shadow-sm">
+                    <div class="flex items-center gap-4 p-6 border-b border-gray-100 dark:border-ink-700">
                         <img src="/ait-logo.svg" alt="Ait" class="h-12 w-12" />
                         <div>
-                            <h2 class="text-xl font-bold text-gray-900 dark:text-gray-100">Ait</h2>
+                            <h2 class="text-xl font-bold text-gray-900 dark:text-ink-100">Ait</h2>
                             <p class=format!("text-sm {}", CLASS_TEXT_MUTED)>{t!(AboutDesc)}</p>
                         </div>
                     </div>
                     <div class="p-6 space-y-4">
                         <div class="flex items-center justify-between">
                             <span class=format!("text-sm {}", CLASS_TEXT_MUTED)>{t!(Version)}</span>
-                            <span class="text-sm font-medium text-gray-900 dark:text-gray-100 font-mono">
+                            <span class="text-sm font-medium text-gray-900 dark:text-ink-100 font-mono">
                                 {env!("CARGO_PKG_VERSION")}
                             </span>
                         </div>
                         <div class="flex items-center justify-between">
                             <span class=format!("text-sm {}", CLASS_TEXT_MUTED)>{t!(License)}</span>
-                            <span class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                            <span class="text-sm font-medium text-gray-900 dark:text-ink-100">
                                 {PROJECT_LICENSE}
                             </span>
                         </div>

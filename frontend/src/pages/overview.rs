@@ -47,6 +47,12 @@ fn next_local_midnight(cur: i64) -> i64 {
     (next.get_time() / 1000.0) as i64
 }
 
+/// Upper bound on filled day buckets. A start date typed far in the past
+/// (e.g. `0001-01-01`) would otherwise make the fill loop iterate hundreds of
+/// thousands of times and freeze the page; beyond the cap the raw daily data
+/// is returned un-filled.
+const MAX_FILLED_DAYS: usize = 1000;
+
 fn fill_daily_range(daily: &[BucketEntry], start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
     let sd = js_sys::Date::new(&((start_ts as f64) * 1000.0).into());
     let ed = js_sys::Date::new(&((end_ts as f64) * 1000.0).into());
@@ -62,6 +68,11 @@ fn fill_daily_range(daily: &[BucketEntry], start_ts: i64, end_ts: i64) -> Vec<Bu
     );
     let start_day_ts = (start_day.get_time() / 1000.0) as i64;
     let end_day_ts = (end_day.get_time() / 1000.0) as i64;
+
+    let span_days = ((end_day_ts - start_day_ts) / 86400).max(0) as usize + 1;
+    if span_days > MAX_FILLED_DAYS {
+        return daily.to_vec();
+    }
 
     let mut result = Vec::new();
     let mut i = 0;
@@ -81,23 +92,6 @@ fn fill_daily_range(daily: &[BucketEntry], start_ts: i64, end_ts: i64) -> Vec<Bu
     result
 }
 
-#[derive(Clone)]
-struct OverviewData {
-    start_ts: i64,
-    end_ts: i64,
-    provider_count: u64,
-    model_count: u64,
-    api_request_count: u64,
-    token_consumption: u64,
-    rpm: f64,
-    tpm: f64,
-    username: Option<String>,
-    request_buckets: Vec<BucketEntry>,
-    token_buckets: Vec<BucketEntry>,
-    model_dist: Vec<api::ModelDistEntry>,
-    token_dist: Vec<api::TokenDistEntry>,
-}
-
 #[component]
 fn StatCard(
     icon: &'static str,
@@ -106,7 +100,7 @@ fn StatCard(
     label: impl IntoView,
 ) -> impl IntoView {
     view! {
-        <div class="bg-white dark:bg-gray-800 rounded-xl p-6 flex items-center gap-4 shadow-sm">
+        <div class="bg-white dark:bg-ink-900 rounded-xl p-6 flex items-center gap-4 shadow-sm">
             <div class=format!(
                 "w-14 h-14 rounded-full flex items-center justify-center text-xl {}",
                 icon_bg,
@@ -114,7 +108,7 @@ fn StatCard(
                 <i class=format!("fas {}", icon)></i>
             </div>
             <div>
-                <div class="text-3xl font-bold text-gray-800 dark:text-gray-100">{value}</div>
+                <div class="text-3xl font-bold text-gray-800 dark:text-ink-100">{value}</div>
                 <div class=format!("text-sm {}", CLASS_TEXT_MUTED)>{label}</div>
             </div>
         </div>
@@ -135,9 +129,9 @@ fn TabButton(
                       bg-indigo-600 text-white shadow-sm cursor-pointer"
                 } else {
                     "px-4 py-1.5 text-sm font-medium rounded-lg \
-                      bg-gray-100 dark:bg-gray-700 \
-                      text-gray-600 dark:text-gray-300 \
-                      hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                      bg-gray-100 dark:bg-ink-800 \
+                      text-gray-600 dark:text-ink-300 \
+                      hover:bg-gray-200 dark:hover:bg-ink-700 cursor-pointer"
                 }
             }
             on:click=move |_| on_click()
@@ -149,7 +143,7 @@ fn TabButton(
 
 #[component]
 pub fn Overview() -> impl IntoView {
-    use_page_title(move || format!("Ait - {}", t!(Overview)()));
+    use_page_title(move || format!("{} - Ait", t!(Overview)()));
 
     let now = now_timestamp();
     let today = midnight_ts(now);
@@ -165,47 +159,24 @@ pub fn Overview() -> impl IntoView {
     let (left_tab, set_left_tab) = signal(0usize);
     let (right_tab, set_right_tab) = signal(0usize);
 
-    let overview_resource: LocalResource<Result<OverviewData, String>> = LocalResource::new({
-        move || {
+    let overview_resource: LocalResource<Result<api::OverviewStats, api::ApiError>> =
+        LocalResource::new(move || {
             let s = start_ts.get_untracked();
             let e = end_ts.get_untracked();
             let force = force_refresh.get_untracked();
             async move {
-                let (stats, req_b, tok_b, mdl, tok_d) = futures_util::join!(
-                    api::fetch_overview_stats(s, e, force),
-                    api::fetch_request_buckets(s, e, force),
-                    api::fetch_token_buckets(s, e, force),
-                    api::fetch_model_dist(s, e, force),
-                    api::fetch_token_dist(s, e, force),
-                );
-                match (stats, req_b, tok_b, mdl, tok_d) {
-                    (Ok(stats_val), Ok(r), Ok(t), Ok(md), Ok(td)) => Ok(OverviewData {
-                        start_ts: s,
-                        end_ts: e,
-                        provider_count: stats_val.provider_count,
-                        model_count: stats_val.model_count,
-                        api_request_count: stats_val.api_request_count,
-                        token_consumption: stats_val.token_consumption,
-                        rpm: stats_val.rpm,
-                        tpm: stats_val.tpm,
-                        username: stats_val.username,
-                        request_buckets: r,
-                        token_buckets: t,
-                        model_dist: md,
-                        token_dist: td,
-                    }),
-                    (Err(e), _, _, _, _)
-                    | (_, Err(e), _, _, _)
-                    | (_, _, Err(e), _, _)
-                    | (_, _, _, Err(e), _)
-                    | (_, _, _, _, Err(e)) => Err(e.to_string()),
-                }
+                let result = api::fetch_overview_stats(s, e, force).await;
+                // One-shot flag: later refetches go through the response cache
+                // again unless the user asks for a fresh pull.
+                set_force_refresh.set(false);
+                result
             }
-        }
-    });
+        });
 
     let try_refetch = move || {
-        if start_dirty.get_untracked() && end_dirty.get_untracked() {
+        // Either boundary alone is enough to refresh; requiring both would
+        // silently drop the change when only one date input is edited.
+        if start_dirty.get_untracked() || end_dirty.get_untracked() {
             let now = now_timestamp();
             let (start, end) = clamp_range(start_ts.get_untracked(), end_ts.get_untracked(), now);
             set_start_ts.set(start);
@@ -257,80 +228,74 @@ pub fn Overview() -> impl IntoView {
         }
     };
 
-    // Chart data signals memoized from overview_resource
-    let req_x_data: Signal<Vec<String>> = Memo::new(move |_| {
+    // Daily buckets are computed once each and shared by the axis/line memos
+    // below; `fill_daily_range` walks every day (one JS Date per bucket), so
+    // doing it four times doubled that cost for no benefit.
+    let daily_requests: Signal<Vec<BucketEntry>> = Memo::new(move |_| {
         overview_resource
             .get()
             .and_then(|r| r.ok())
             .map(|data| {
-                let req_filled = fill_daily_range(
+                fill_daily_range(
                     &aggregate_daily(&data.request_buckets),
-                    data.start_ts,
-                    data.end_ts,
-                );
-                req_filled
-                    .iter()
-                    .map(|r| ts_to_date_str(r.timestamp))
-                    .collect::<Vec<_>>()
+                    data.range_start,
+                    data.range_end,
+                )
             })
             .unwrap_or_default()
+    })
+    .into();
+
+    let daily_tokens: Signal<Vec<BucketEntry>> = Memo::new(move |_| {
+        overview_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|data| {
+                fill_daily_range(
+                    &aggregate_daily(&data.token_buckets),
+                    data.range_start,
+                    data.range_end,
+                )
+            })
+            .unwrap_or_default()
+    })
+    .into();
+
+    let req_x_data: Signal<Vec<String>> = Memo::new(move |_| {
+        daily_requests
+            .get()
+            .iter()
+            .map(|r| ts_to_date_str(r.timestamp))
+            .collect::<Vec<_>>()
     })
     .into();
 
     let req_series: Signal<Vec<ChartSeries>> = Memo::new(move |_| {
-        overview_resource
-            .get()
-            .and_then(|r| r.ok())
-            .map(|data| {
-                let req_filled = fill_daily_range(
-                    &aggregate_daily(&data.request_buckets),
-                    data.start_ts,
-                    data.end_ts,
-                );
-                vec![ChartSeries {
-                    name: "Requests".to_string(),
-                    data: req_filled.iter().map(|r| r.count as f64).collect(),
-                }]
-            })
-            .unwrap_or_default()
+        vec![ChartSeries {
+            name: "Requests".to_string(),
+            data: daily_requests
+                .get()
+                .iter()
+                .map(|r| r.count as f64)
+                .collect(),
+        }]
     })
     .into();
 
     let tok_x_data: Signal<Vec<String>> = Memo::new(move |_| {
-        overview_resource
+        daily_tokens
             .get()
-            .and_then(|r| r.ok())
-            .map(|data| {
-                let tok_filled = fill_daily_range(
-                    &aggregate_daily(&data.token_buckets),
-                    data.start_ts,
-                    data.end_ts,
-                );
-                tok_filled
-                    .iter()
-                    .map(|r| ts_to_date_str(r.timestamp))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
+            .iter()
+            .map(|r| ts_to_date_str(r.timestamp))
+            .collect::<Vec<_>>()
     })
     .into();
 
     let tok_series: Signal<Vec<ChartSeries>> = Memo::new(move |_| {
-        overview_resource
-            .get()
-            .and_then(|r| r.ok())
-            .map(|data| {
-                let tok_filled = fill_daily_range(
-                    &aggregate_daily(&data.token_buckets),
-                    data.start_ts,
-                    data.end_ts,
-                );
-                vec![ChartSeries {
-                    name: "Tokens".to_string(),
-                    data: tok_filled.iter().map(|r| r.count as f64).collect(),
-                }]
-            })
-            .unwrap_or_default()
+        vec![ChartSeries {
+            name: "Tokens".to_string(),
+            data: daily_tokens.get().iter().map(|r| r.count as f64).collect(),
+        }]
     })
     .into();
 
@@ -370,9 +335,19 @@ pub fn Overview() -> impl IntoView {
 
     let has_chart_data = Memo::new(move |_| matches!(overview_resource.get(), Some(Ok(_))));
 
-    let content = move || match overview_resource.get() {
-        None => overview_skeleton().into_any(),
-        Some(Err(e)) => view! { <ErrorCard message=e.clone() /> }.into_any(),
+    let content = move || {
+        match overview_resource.get() {
+            None => overview_skeleton().into_any(),
+            Some(Err(e)) => {
+                view! {
+                    <ErrorCard
+                        message=e.message.clone()
+                        request_id=e.request_id.clone()
+                        on_retry=Box::new(move || overview_resource.refetch())
+                    />
+                }
+            }
+            .into_any(),
         Some(Ok(data)) => view! {
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
                 <StatCard
@@ -420,6 +395,7 @@ pub fn Overview() -> impl IntoView {
             </div>
         }
         .into_any(),
+        }
     };
 
     let greeting = move || {
@@ -451,12 +427,12 @@ pub fn Overview() -> impl IntoView {
     view! {
         <div class="space-y-6 sm:space-y-8">
             <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <h2 class="text-xl font-semibold text-gray-800 dark:text-gray-200">{greeting}</h2>
+                <h2 class="text-xl font-semibold text-gray-800 dark:text-ink-200">{greeting}</h2>
                 <div class="flex flex-wrap items-center gap-2">
                     <button
-                        class="px-3 py-1.5 text-sm font-medium rounded-lg bg-gray-100 dark:bg-gray-700 \
-                        text-gray-600 dark:text-gray-300 \
-                        hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                        class="px-3 py-1.5 text-sm font-medium rounded-lg bg-gray-100 dark:bg-ink-800 \
+                        text-gray-600 dark:text-ink-300 \
+                        hover:bg-gray-200 dark:hover:bg-ink-700 cursor-pointer"
                         on:click=move |_| {
                             let now = now_timestamp();
                             let today = midnight_ts(now);
@@ -466,9 +442,9 @@ pub fn Overview() -> impl IntoView {
                         {t!(Last7Days)}
                     </button>
                     <button
-                        class="px-3 py-1.5 text-sm font-medium rounded-lg bg-gray-100 dark:bg-gray-700 \
-                        text-gray-600 dark:text-gray-300 \
-                        hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                        class="px-3 py-1.5 text-sm font-medium rounded-lg bg-gray-100 dark:bg-ink-800 \
+                        text-gray-600 dark:text-ink-300 \
+                        hover:bg-gray-200 dark:hover:bg-ink-700 cursor-pointer"
                         on:click=move |_| {
                             let now = now_timestamp();
                             let today = midnight_ts(now);
@@ -477,8 +453,8 @@ pub fn Overview() -> impl IntoView {
                     >
                         {t!(Last30Days)}
                     </button>
-                    <div class="flex items-center border rounded-lg bg-white dark:bg-gray-700 \
-                    border-gray-300 dark:border-gray-600 overflow-hidden">
+                    <div class="flex items-center border rounded-lg bg-white dark:bg-ink-800 \
+                    border-gray-300 dark:border-ink-600 overflow-hidden">
                         <input
                             type="date"
                             id="filter-start-date"
@@ -486,11 +462,11 @@ pub fn Overview() -> impl IntoView {
                             aria-label=t!(StartDate)
                             prop:value=move || start_str.get()
                             class="px-2 py-1.5 text-sm border-0 bg-transparent \
-                            text-gray-700 dark:text-gray-200 cursor-pointer \
+                            text-gray-700 dark:text-ink-200 cursor-pointer \
                             focus:ring-0 focus:outline-none"
                             on:change=on_start_date
                         />
-                        <span class="px-1 text-gray-400 dark:text-gray-500 select-none">-</span>
+                        <span class="px-1 text-gray-400 dark:text-ink-500 select-none">-</span>
                         <input
                             type="date"
                             id="filter-end-date"
@@ -498,15 +474,15 @@ pub fn Overview() -> impl IntoView {
                             aria-label=t!(EndDate)
                             prop:value=move || end_str.get()
                             class="px-2 py-1.5 text-sm border-0 bg-transparent \
-                            text-gray-700 dark:text-gray-200 cursor-pointer \
+                            text-gray-700 dark:text-ink-200 cursor-pointer \
                             focus:ring-0 focus:outline-none"
                             on:change=on_end_date
                         />
                     </div>
                     <button
-                        class="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 \
-                        text-gray-600 dark:text-gray-300 \
-                        hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer"
+                        class="p-2 rounded-lg bg-gray-100 dark:bg-ink-800 \
+                        text-gray-600 dark:text-ink-300 \
+                        hover:bg-gray-200 dark:hover:bg-ink-700 cursor-pointer"
                         on:click=move |_| refresh()
                     >
                         <i class="fas fa-sync-alt"></i>

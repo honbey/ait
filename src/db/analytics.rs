@@ -1,5 +1,4 @@
-use chrono::DateTime;
-use duckdb::{Connection, params, params_from_iter};
+use duckdb::Connection;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -8,58 +7,115 @@ use tokio::time::timeout;
 use tracing::{error, warn};
 
 use super::models::{
-    BucketEntry, ModelDistEntry, ProxyLogEntryResponse, ProxyLogQueryParams, ProxyLogQueryResult,
+    BucketEntry, ModelDistEntry, OverviewMetrics, ProxyLogQueryParams, ProxyLogQueryResult,
     TokenDistEntry,
 };
+use super::watchdog::QueryWatchdog;
+
+mod queries;
+
+use queries::{
+    model_dist_impl, overview_impl, query_proxy_logs_impl, requests_impl, token_dist_impl,
+    tokens_impl,
+};
+
+/// Failure surfaced to callers instead of a silently empty (HTTP 200) result,
+/// so the frontend can distinguish "no data" from "query failed".
+#[derive(Debug, Clone, Copy)]
+pub enum AnalyticsError {
+    /// The query exceeded `analytics_timeout_secs`.
+    Timeout,
+    /// The worker is gone (channel closed) or the waiter was dropped.
+    Unavailable,
+    /// DuckDB rejected the query. The detail is logged by the worker and is
+    /// deliberately not carried here: the admin API is unauthenticated, so
+    /// driver error text must not reach a response body.
+    Failed,
+}
+
+impl std::fmt::Display for AnalyticsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AnalyticsError::Timeout => write!(f, "analytics query timed out"),
+            AnalyticsError::Unavailable => write!(f, "analytics service unavailable"),
+            AnalyticsError::Failed => write!(f, "analytics query failed"),
+        }
+    }
+}
+
+impl std::error::Error for AnalyticsError {}
+
+impl AnalyticsError {
+    pub fn into_response(self) -> (axum::http::StatusCode, axum::Json<crate::error::AitError>) {
+        (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(crate::error::AitError {
+                message: self.to_string(),
+                code: 503,
+                r#type: "service_unavailable".to_string(),
+                detail: None,
+                request_id: None,
+            }),
+        )
+    }
+}
+
+/// Upper bound on analytics workers: past this, concurrent scans fight over
+/// the configured memory ceiling instead of finishing sooner.
+const MAX_ANALYTICS_WORKERS: usize = 8;
+
+/// LRU bound for cached prepared statements. The static aggregate queries
+/// occupy three slots; the rest absorbs the `query_proxy_logs` variants,
+/// whose SQL text varies with the active filters.
+const STATEMENT_CACHE_CAPACITY: usize = 32;
 
 #[derive(Clone)]
 pub struct Analytics {
     tx: mpsc::Sender<AnalyticsRequest>,
-    handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     timeout: Duration,
 }
 
+/// What a worker sends back: the query result, or the reason there is none.
+/// Carrying the error keeps a failed query from looking like an empty table.
+type WorkerResult<T> = Result<T, AnalyticsError>;
+
 enum AnalyticsRequest {
-    TotalRequests {
-        start_ts: i64,
-        end_ts: i64,
-        resp: oneshot::Sender<u64>,
-    },
-    TotalTokens {
-        start_ts: i64,
-        end_ts: i64,
-        resp: oneshot::Sender<u64>,
-    },
     Requests {
         start_ts: i64,
         end_ts: i64,
-        resp: oneshot::Sender<Vec<BucketEntry>>,
+        resp: oneshot::Sender<WorkerResult<Vec<BucketEntry>>>,
     },
     Tokens {
         start_ts: i64,
         end_ts: i64,
-        resp: oneshot::Sender<Vec<BucketEntry>>,
+        resp: oneshot::Sender<WorkerResult<Vec<BucketEntry>>>,
     },
     ModelDist {
         start_ts: i64,
         end_ts: i64,
-        resp: oneshot::Sender<Vec<ModelDistEntry>>,
+        resp: oneshot::Sender<WorkerResult<Vec<ModelDistEntry>>>,
     },
     TokenDist {
         start_ts: i64,
         end_ts: i64,
-        resp: oneshot::Sender<Vec<TokenDistEntry>>,
+        resp: oneshot::Sender<WorkerResult<Vec<TokenDistEntry>>>,
     },
     QueryProxyLogs {
         params: Box<ProxyLogQueryParams>,
-        resp: oneshot::Sender<ProxyLogQueryResult>,
+        resp: oneshot::Sender<WorkerResult<ProxyLogQueryResult>>,
+    },
+    Overview {
+        start_ts: i64,
+        end_ts: i64,
+        resp: oneshot::Sender<WorkerResult<OverviewMetrics>>,
     },
     Shutdown,
 }
 
 macro_rules! analytics_method {
     ($name:ident, $variant:ident, $ret:ty) => {
-        pub async fn $name(&self, start_ts: i64, end_ts: i64) -> $ret {
+        pub async fn $name(&self, start_ts: i64, end_ts: i64) -> Result<$ret, AnalyticsError> {
             let (resp, rx) = oneshot::channel();
             if self
                 .tx
@@ -71,95 +127,257 @@ macro_rules! analytics_method {
                 .is_err()
             {
                 error!("[analytics] {} channel send failed", stringify!($name));
-                return Default::default();
+                return Err(AnalyticsError::Unavailable);
             }
             match timeout(self.timeout, rx).await {
-                Ok(inner) => inner.unwrap_or_else(|_| {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) => {
                     warn!("[analytics] {} oneshot cancelled", stringify!($name));
-                    Default::default()
-                }),
+                    Err(AnalyticsError::Unavailable)
+                }
                 Err(_) => {
                     warn!("[analytics] {} timed out", stringify!($name));
-                    Default::default()
+                    Err(AnalyticsError::Timeout)
                 }
             }
         }
     };
 }
 
+/// Run a query, containing any panic.
+///
+/// The worker thread owns the DuckDB connection, so a panic would unwind past
+/// the receive loop and permanently fail every subsequent analytics query.
+/// `None` means the query panicked; the caller then drops the response sender,
+/// which the public methods report as [`AnalyticsError::Unavailable`].
+fn run_guarded<T>(label: &str, query: impl FnOnce() -> T) -> Option<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(query)) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            error!("[analytics] {label} panicked");
+            None
+        }
+    }
+}
+
+/// Run a query under the worker's deadline, if the watchdog is armed.
+fn run_query<T>(
+    watchdog: &Option<QueryWatchdog>,
+    resp: oneshot::Sender<WorkerResult<T>>,
+    label: &str,
+    query: impl FnOnce() -> Result<T, duckdb::Error>,
+) {
+    match watchdog {
+        Some(watchdog) => watchdog.run(|| send_result(resp, label, query)),
+        None => send_result(resp, label, query),
+    }
+}
+
+/// Reply with the query outcome.
+///
+/// A DuckDB failure becomes [`AnalyticsError::Failed`] so the caller can tell
+/// "query broken" from "no rows": returning an empty result instead used to
+/// render as a dashboard full of zeros.
+fn send_result<T>(
+    resp: oneshot::Sender<WorkerResult<T>>,
+    label: &str,
+    query: impl FnOnce() -> Result<T, duckdb::Error>,
+) {
+    let result = match run_guarded(label, query) {
+        Some(Ok(value)) => Ok(value),
+        Some(Err(e)) => {
+            warn!("[analytics] {label} failed: {e}");
+            Err(AnalyticsError::Failed)
+        }
+        // Panic: drop the sender so the caller reports the worker as gone.
+        None => return,
+    };
+    let _ = resp.send(result);
+}
+
 impl Analytics {
-    pub fn new(conn: Connection, timeout_secs: u64) -> Self {
+    /// Workers each own a DuckDB connection, so they never conflict with the
+    /// log worker's writes and a heavy `query_proxy_logs` no longer blocks a
+    /// concurrent `/api/stats`.
+    ///
+    /// `workers` is expected to have been clamped by config validation.
+    pub fn new(
+        conn: Connection,
+        timeout_secs: u64,
+        workers: usize,
+        query_timeout: Duration,
+    ) -> Self {
         let (tx, rx) = mpsc::channel::<AnalyticsRequest>();
-        let handle = std::thread::spawn(move || {
-            for req in rx {
-                match req {
-                    AnalyticsRequest::TotalRequests {
-                        start_ts,
-                        end_ts,
-                        resp,
-                    } => {
-                        let _ = resp.send(total_requests_impl(&conn, start_ts, end_ts));
-                    }
-                    AnalyticsRequest::TotalTokens {
-                        start_ts,
-                        end_ts,
-                        resp,
-                    } => {
-                        let _ = resp.send(total_tokens_impl(&conn, start_ts, end_ts));
-                    }
-                    AnalyticsRequest::Requests {
-                        start_ts,
-                        end_ts,
-                        resp,
-                    } => {
-                        let _ = resp.send(requests_impl(&conn, start_ts, end_ts));
-                    }
-                    AnalyticsRequest::Tokens {
-                        start_ts,
-                        end_ts,
-                        resp,
-                    } => {
-                        let _ = resp.send(tokens_impl(&conn, start_ts, end_ts));
-                    }
-                    AnalyticsRequest::ModelDist {
-                        start_ts,
-                        end_ts,
-                        resp,
-                    } => {
-                        let _ = resp.send(model_dist_impl(&conn, start_ts, end_ts));
-                    }
-                    AnalyticsRequest::TokenDist {
-                        start_ts,
-                        end_ts,
-                        resp,
-                    } => {
-                        let _ = resp.send(token_dist_impl(&conn, start_ts, end_ts));
-                    }
-                    AnalyticsRequest::QueryProxyLogs { params, resp } => {
-                        let _ = resp.send(query_proxy_logs_impl(&conn, *params));
-                    }
-                    AnalyticsRequest::Shutdown => {
-                        let _ = conn.execute_batch("CHECKPOINT");
-                        break;
-                    }
+        let rx = Arc::new(Mutex::new(rx));
+        let workers = workers.clamp(1, MAX_ANALYTICS_WORKERS);
+
+        // One DuckDB connection per worker. Cloning can only fail on resource
+        // exhaustion; degrade to fewer workers rather than refusing to start.
+        let mut connections = Vec::with_capacity(workers);
+        for _ in 1..workers {
+            match conn.try_clone() {
+                Ok(clone) => connections.push(clone),
+                Err(e) => {
+                    warn!(
+                        "[analytics] connection clone failed, degrading to {} worker(s): {e}",
+                        connections.len() + 1
+                    );
+                    break;
                 }
             }
-        });
+        }
+        connections.push(conn);
+
+        let mut handles = Vec::with_capacity(connections.len());
+        for worker_conn in connections {
+            worker_conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
+            let rx = Arc::clone(&rx);
+            handles.push(std::thread::spawn(move || {
+                worker_loop(worker_conn, rx, query_timeout);
+            }));
+        }
+
         Self {
             tx,
-            handle: Arc::new(Mutex::new(Some(handle))),
+            handles: Arc::new(Mutex::new(handles)),
             timeout: Duration::from_secs(timeout_secs),
         }
     }
+}
 
-    analytics_method!(total_requests, TotalRequests, u64);
-    analytics_method!(total_tokens, TotalTokens, u64);
+/// Pull requests from the shared queue until a Shutdown arrives or the
+/// channel closes.
+///
+/// The queue guard is held across `recv()`, so only one worker waits at a
+/// time; the rest park on the mutex until it is free. It is released before
+/// the query runs, which is what lets another worker pick up the next request
+/// while this one is still scanning. The wait being exclusive costs nothing
+/// here - `recv()` returns as soon as a request lands - but it does mean the
+/// mutex serialises the hand-off rather than the queue doing it.
+fn worker_loop(
+    conn: Connection,
+    rx: Arc<Mutex<mpsc::Receiver<AnalyticsRequest>>>,
+    query_timeout: Duration,
+) {
+    // Bounds a single operation so this thread can always be joined. `conn`
+    // itself is not Sync, hence the interrupt handle.
+    let watchdog = (query_timeout > Duration::ZERO).then(|| {
+        let interrupt = conn.interrupt_handle();
+        QueryWatchdog::spawn(interrupt, "analytics", query_timeout)
+    });
+
+    loop {
+        let req = {
+            let guard = rx.lock().unwrap_or_else(|e| e.into_inner());
+            guard.recv()
+        };
+        let req = match req {
+            Ok(req) => req,
+            Err(_) => break,
+        };
+        match req {
+            AnalyticsRequest::Requests {
+                start_ts,
+                end_ts,
+                resp,
+            } => run_query(&watchdog, resp, "requests", || {
+                requests_impl(&conn, start_ts, end_ts)
+            }),
+            AnalyticsRequest::Tokens {
+                start_ts,
+                end_ts,
+                resp,
+            } => run_query(&watchdog, resp, "tokens", || {
+                tokens_impl(&conn, start_ts, end_ts)
+            }),
+            AnalyticsRequest::ModelDist {
+                start_ts,
+                end_ts,
+                resp,
+            } => run_query(&watchdog, resp, "model_dist", || {
+                model_dist_impl(&conn, start_ts, end_ts)
+            }),
+            AnalyticsRequest::TokenDist {
+                start_ts,
+                end_ts,
+                resp,
+            } => run_query(&watchdog, resp, "token_dist", || {
+                token_dist_impl(&conn, start_ts, end_ts)
+            }),
+            AnalyticsRequest::QueryProxyLogs { params, resp } => {
+                run_query(&watchdog, resp, "query_proxy_logs", || {
+                    query_proxy_logs_impl(&conn, *params)
+                })
+            }
+            AnalyticsRequest::Overview {
+                start_ts,
+                end_ts,
+                resp,
+            } => run_query(&watchdog, resp, "overview", || {
+                overview_impl(&conn, start_ts, end_ts)
+            }),
+            AnalyticsRequest::Shutdown => {
+                if let Some(watchdog) = &watchdog {
+                    watchdog.run(|| {
+                        let _ = conn.execute_batch("CHECKPOINT");
+                    });
+                } else {
+                    let _ = conn.execute_batch("CHECKPOINT");
+                }
+                break;
+            }
+        }
+    }
+
+    if let Some(watchdog) = watchdog {
+        watchdog.stop();
+    }
+}
+
+impl Analytics {
     analytics_method!(requests, Requests, Vec<BucketEntry>);
     analytics_method!(tokens, Tokens, Vec<BucketEntry>);
     analytics_method!(model_dist, ModelDist, Vec<ModelDistEntry>);
     analytics_method!(token_dist, TokenDist, Vec<TokenDistEntry>);
 
-    pub async fn query_proxy_logs(&self, params: ProxyLogQueryParams) -> ProxyLogQueryResult {
+    /// All overview aggregates in one worker round trip. Individual queries
+    /// still run sequentially inside the worker, but the caller pays one
+    /// channel hop and one HTTP request instead of six.
+    pub async fn overview(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<OverviewMetrics, AnalyticsError> {
+        let (resp, rx) = oneshot::channel();
+        if self
+            .tx
+            .send(AnalyticsRequest::Overview {
+                start_ts,
+                end_ts,
+                resp,
+            })
+            .is_err()
+        {
+            error!("[analytics] overview channel send failed");
+            return Err(AnalyticsError::Unavailable);
+        }
+        match timeout(self.timeout, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => {
+                warn!("[analytics] overview oneshot cancelled");
+                Err(AnalyticsError::Unavailable)
+            }
+            Err(_) => {
+                warn!("[analytics] overview timed out");
+                Err(AnalyticsError::Timeout)
+            }
+        }
+    }
+
+    pub async fn query_proxy_logs(
+        &self,
+        params: ProxyLogQueryParams,
+    ) -> Result<ProxyLogQueryResult, AnalyticsError> {
         let (resp, rx) = oneshot::channel();
         if self
             .tx
@@ -170,374 +388,50 @@ impl Analytics {
             .is_err()
         {
             error!("[analytics] query_proxy_logs channel send failed");
-            return ProxyLogQueryResult {
-                items: Vec::new(),
-                total: 0,
-            };
+            return Err(AnalyticsError::Unavailable);
         }
         match timeout(self.timeout, rx).await {
-            Ok(inner) => inner.unwrap_or_else(|_| {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => {
                 warn!("[analytics] query_proxy_logs oneshot cancelled");
-                ProxyLogQueryResult {
-                    items: Vec::new(),
-                    total: 0,
-                }
-            }),
+                Err(AnalyticsError::Unavailable)
+            }
             Err(_) => {
                 warn!("[analytics] query_proxy_logs timed out");
-                ProxyLogQueryResult {
-                    items: Vec::new(),
-                    total: 0,
-                }
+                Err(AnalyticsError::Timeout)
             }
         }
     }
 
     pub fn shutdown(&self) {
-        let _ = self.tx.send(AnalyticsRequest::Shutdown);
-        if let Ok(mut guard) = self.handle.lock()
-            && let Some(handle) = guard.take()
-        {
-            let _ = handle.join();
+        // One Shutdown per worker: each worker drains queued requests until it
+        // consumes one, so every thread exits exactly once.
+        let worker_count = self.handles.lock().map(|h| h.len()).unwrap_or(0);
+        for _ in 0..worker_count {
+            let _ = self.tx.send(AnalyticsRequest::Shutdown);
+        }
+        if let Ok(mut guard) = self.handles.lock() {
+            for handle in guard.drain(..) {
+                let _ = handle.join();
+            }
         }
     }
-}
-
-fn ts_range(start_ts: i64, end_ts: i64) -> (chrono::NaiveDateTime, chrono::NaiveDateTime) {
-    let start = DateTime::from_timestamp(start_ts, 0)
-        .unwrap_or(DateTime::UNIX_EPOCH)
-        .naive_utc();
-    let end = DateTime::from_timestamp(end_ts, 0)
-        .unwrap_or(DateTime::UNIX_EPOCH)
-        .naive_utc();
-    (start, end)
-}
-
-fn total_requests_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> u64 {
-    let (start, end) = ts_range(start_ts, end_ts);
-    conn.query_row(
-        "SELECT COUNT(*) FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2",
-        params![start, end],
-        |row| row.get::<_, u64>(0),
-    )
-    .unwrap_or_else(|e| {
-        warn!("[analytics] total_requests failed: {e}");
-        0
-    })
-}
-
-fn total_tokens_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> u64 {
-    let (start, end) = ts_range(start_ts, end_ts);
-    conn.query_row(
-        "SELECT COALESCE(SUM(total_tokens), 0) FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2",
-        params![start, end],
-        |row| row.get::<_, u64>(0),
-    )
-    .unwrap_or_else(|e| {
-        warn!("[analytics] total_tokens failed: {e}");
-        0
-    })
-}
-
-fn requests_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
-    let (start, end) = ts_range(start_ts, end_ts);
-    let mut stmt = match conn.prepare(
-        "SELECT epoch(DATE_TRUNC('hour', timestamp)) AS bucket_ts, COUNT(*) AS count \
-         FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2 \
-         GROUP BY bucket_ts ORDER BY bucket_ts",
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("[analytics] requests prepare failed: {e}");
-            return Vec::new();
-        }
-    };
-    let rows = match stmt.query_map(params![start, end], |row| {
-        Ok(BucketEntry {
-            timestamp: row.get::<_, f64>(0)? as i64,
-            count: row.get::<_, i64>(1)? as u64,
-        })
-    }) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("[analytics] requests query failed: {e}");
-            return Vec::new();
-        }
-    };
-    let mut out = Vec::new();
-    for r in rows.flatten() {
-        out.push(r);
-    }
-    out
-}
-
-fn tokens_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> Vec<BucketEntry> {
-    let (start, end) = ts_range(start_ts, end_ts);
-    let mut stmt = match conn.prepare(
-        "SELECT epoch(DATE_TRUNC('hour', timestamp)) AS bucket_ts, \
-                COALESCE(SUM(total_tokens), 0) AS count \
-         FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2 \
-         GROUP BY bucket_ts ORDER BY bucket_ts",
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("[analytics] tokens prepare failed: {e}");
-            return Vec::new();
-        }
-    };
-    let rows = match stmt.query_map(params![start, end], |row| {
-        Ok(BucketEntry {
-            timestamp: row.get::<_, f64>(0)? as i64,
-            count: row.get::<_, i64>(1)? as u64,
-        })
-    }) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("[analytics] tokens query failed: {e}");
-            return Vec::new();
-        }
-    };
-    let mut out = Vec::new();
-    for r in rows.flatten() {
-        out.push(r);
-    }
-    out
-}
-
-fn model_dist_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> Vec<ModelDistEntry> {
-    let (start, end) = ts_range(start_ts, end_ts);
-    let mut stmt = match conn.prepare(
-        "SELECT model_name, COUNT(*) AS count \
-         FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2 \
-         GROUP BY model_name ORDER BY count DESC",
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("[analytics] model_dist prepare failed: {e}");
-            return Vec::new();
-        }
-    };
-    let rows = match stmt.query_map(params![start, end], |row| {
-        Ok(ModelDistEntry {
-            model: row.get(0)?,
-            count: row.get::<_, i64>(1)? as u64,
-        })
-    }) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("[analytics] model_dist query failed: {e}");
-            return Vec::new();
-        }
-    };
-    let mut out = Vec::new();
-    for r in rows.flatten() {
-        out.push(r);
-    }
-    out
-}
-
-fn token_dist_impl(conn: &Connection, start_ts: i64, end_ts: i64) -> Vec<TokenDistEntry> {
-    let (start, end) = ts_range(start_ts, end_ts);
-    let (prompt, completion, cached): (i64, i64, i64) = match conn.query_row(
-        "SELECT COALESCE(SUM(prompt_tokens), 0), \
-                COALESCE(SUM(completion_tokens), 0), \
-                COALESCE(SUM(cached_tokens), 0) \
-         FROM proxy_log WHERE timestamp >= ?1 AND timestamp < ?2",
-        params![start, end],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("[analytics] token_dist query failed: {e}");
-            return Vec::new();
-        }
-    };
-
-    let prompt = prompt.max(0) as u64;
-    let completion = completion.max(0) as u64;
-    let cached = cached.max(0) as u64;
-    let uncached_input = prompt - cached.min(prompt);
-
-    vec![
-        TokenDistEntry {
-            category: "uncached_input".into(),
-            count: uncached_input,
-        },
-        TokenDistEntry {
-            category: "cached_input".into(),
-            count: cached.min(prompt),
-        },
-        TokenDistEntry {
-            category: "output".into(),
-            count: completion,
-        },
-    ]
-}
-
-fn query_proxy_logs_impl(conn: &Connection, params: ProxyLogQueryParams) -> ProxyLogQueryResult {
-    use duckdb::types::ToSql;
-
-    let mut conditions: Vec<String> = Vec::new();
-    let mut values: Vec<Box<dyn ToSql>> = Vec::new();
-
-    let push_naive = |values: &mut Vec<Box<dyn ToSql>>, ts: i64| {
-        let naive = DateTime::from_timestamp(ts, 0)
-            .unwrap_or(DateTime::UNIX_EPOCH)
-            .naive_utc();
-        values.push(Box::new(naive));
-    };
-
-    if let Some(start) = params.start_ts {
-        conditions.push("timestamp >= ?".into());
-        push_naive(&mut values, start);
-    }
-    if let Some(end) = params.end_ts {
-        conditions.push("timestamp < ?".into());
-        push_naive(&mut values, end);
-    }
-    if let Some(ref model_name) = params.model_name
-        && !model_name.is_empty()
-    {
-        conditions.push("model_name = ?".into());
-        values.push(Box::new(model_name.clone()));
-    }
-    if let Some(ref provider_name) = params.provider_name
-        && !provider_name.is_empty()
-    {
-        conditions.push("provider_name = ?".into());
-        values.push(Box::new(provider_name.clone()));
-    }
-    if let Some(ref status) = params.status
-        && !status.is_empty()
-    {
-        conditions.push("status = ?".into());
-        values.push(Box::new(status.clone()));
-    }
-    if let Some(ref api_key_name) = params.api_key_name
-        && !api_key_name.is_empty()
-    {
-        conditions.push("api_key_name = ?".into());
-        values.push(Box::new(api_key_name.clone()));
-    }
-    if let Some(ref endpoint) = params.endpoint
-        && !endpoint.is_empty()
-    {
-        conditions.push("endpoint = ?".into());
-        values.push(Box::new(endpoint.clone()));
-    }
-    if let Some(is_streaming) = params.is_streaming {
-        conditions.push("is_streaming = ?".into());
-        values.push(Box::new(is_streaming));
-    }
-    if let Some(ref upstream_model) = params.upstream_model
-        && !upstream_model.is_empty()
-    {
-        conditions.push("upstream_model = ?".into());
-        values.push(Box::new(upstream_model.clone()));
-    }
-    if let Some(ref provider_type) = params.provider_type
-        && !provider_type.is_empty()
-    {
-        conditions.push("provider_type = ?".into());
-        values.push(Box::new(provider_type.clone()));
-    }
-    if let Some(ref client_ip) = params.client_ip
-        && !client_ip.is_empty()
-    {
-        conditions.push("client_ip = ?".into());
-        values.push(Box::new(client_ip.clone()));
-    }
-
-    let where_clause = if conditions.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", conditions.join(" AND "))
-    };
-
-    let values_ref: Vec<&dyn ToSql> = values.iter().map(|v| v.as_ref()).collect();
-
-    // Count query
-    let count_sql = format!("SELECT COUNT(*) FROM proxy_log{where_clause}");
-    let total: u64 = match conn.query_row(&count_sql, params_from_iter(values_ref.clone()), |row| {
-        row.get::<_, u64>(0)
-    }) {
-        Ok(n) => n,
-        Err(e) => {
-            warn!("[analytics] query_proxy_logs count failed: {e}");
-            0
-        }
-    };
-
-    // Data query
-    let offset = (params.page.saturating_sub(1)) * params.per_page;
-    let data_sql = format!(
-        "SELECT timestamp, api_key_name, model_name, provider_name, \
-         prompt_tokens, completion_tokens, total_tokens, cached_tokens, latency_ms, status, \
-         endpoint, is_streaming, time_to_first_token_ms, upstream_model, provider_type, \
-         response_body_size, error_message, client_ip \
-         FROM proxy_log{where_clause} ORDER BY timestamp DESC LIMIT ? OFFSET ?"
-    );
-
-    let mut data_params: Vec<&dyn ToSql> = values_ref;
-    let limit_val: i64 = params.per_page as i64;
-    let offset_val: i64 = offset as i64;
-    data_params.push(&limit_val);
-    data_params.push(&offset_val);
-
-    let items: Vec<ProxyLogEntryResponse> = match conn.prepare(&data_sql).and_then(|mut stmt| {
-        let rows = stmt.query_map(params_from_iter(data_params), |row| {
-            Ok(ProxyLogEntryResponse {
-                timestamp: row
-                    .get::<_, chrono::NaiveDateTime>(0)?
-                    .and_utc()
-                    .timestamp(),
-                api_key_name: row.get(1)?,
-                model_name: row.get(2)?,
-                provider_name: row.get(3)?,
-                prompt_tokens: row.get(4)?,
-                completion_tokens: row.get(5)?,
-                total_tokens: row.get(6)?,
-                cached_tokens: row.get(7)?,
-                latency_ms: row.get(8)?,
-                status: row.get(9)?,
-                endpoint: row.get(10)?,
-                is_streaming: row.get(11)?,
-                time_to_first_token_ms: row.get(12)?,
-                upstream_model: row.get(13)?,
-                provider_type: row.get(14)?,
-                response_body_size: row.get(15)?,
-                error_message: row.get(16)?,
-                client_ip: row.get(17)?,
-            })
-        })?;
-        let mut out = Vec::new();
-        for item in rows.flatten() {
-            out.push(item);
-        }
-        Ok(out)
-    }) {
-        Ok(items) => items,
-        Err(e) => {
-            warn!("[analytics] query_proxy_logs data query failed: {e}");
-            Vec::new()
-        }
-    };
-
-    ProxyLogQueryResult { items, total }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::LogManager;
     use crate::db::logger::create_schema;
     use chrono::{DateTime, Utc};
+    use duckdb::params;
 
     fn setup() -> (tempfile::TempDir, Connection, Analytics) {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("analytics.duckdb");
         let conn = Connection::open(&path).unwrap();
         create_schema(&conn).unwrap();
-        let analytics = Analytics::new(conn.try_clone().unwrap(), 5);
+        let analytics = Analytics::new(conn.try_clone().unwrap(), 5, 2, Duration::ZERO);
         (dir, conn, analytics)
     }
 
@@ -584,36 +478,129 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn total_requests_and_tokens_filter_by_range() {
+    async fn saturating_workers_and_shutting_down_concurrently_completes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut config = crate::test_utils::test_config_fast_logs(
+            dir.path().join("t.db").to_str().unwrap(),
+            dir.path().join("t.duckdb").to_str().unwrap(),
+        );
+        config.log.analytics_workers = 4;
+        let manager = LogManager::new(&config.log).unwrap();
+
+        // Keep every worker busy, then shut down underneath them. A worker
+        // stuck in a query would make `join()` never return.
+        let queries: Vec<_> = (0..16)
+            .map(|_| {
+                let m = manager.clone();
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap();
+                    rt.block_on(async {
+                        for _ in 0..20 {
+                            let _ = m.overview(0, 4_000_000_000).await;
+                        }
+                    })
+                })
+            })
+            .collect();
+
+        let start = std::time::Instant::now();
+        manager.shutdown();
+        let elapsed = start.elapsed();
+        for query in queries {
+            let _ = query.join();
+        }
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "shutdown waited {elapsed:?} on busy workers"
+        );
+    }
+
+    #[test]
+    fn concurrent_shutdown_calls_both_return() {
+        // `shutdown` joins while holding the handles lock, so a second caller
+        // parks on that lock. It must still come back rather than deadlocking.
+        let dir = tempfile::TempDir::new().unwrap();
+        let config = crate::test_utils::test_config_fast_logs(
+            dir.path().join("t.db").to_str().unwrap(),
+            dir.path().join("t.duckdb").to_str().unwrap(),
+        );
+        let manager = LogManager::new(&config.log).unwrap();
+
+        let second = manager.clone();
+        crate::test_utils::assert_no_deadlock(Duration::from_secs(15), move || {
+            let other = std::thread::spawn(move || second.shutdown());
+            manager.shutdown();
+            other.join().expect("concurrent shutdown must not deadlock");
+        });
+    }
+
+    #[tokio::test]
+    async fn overview_totals_filter_by_range() {
         let (_dir, conn, analytics) = setup();
         insert_proxy(&conn, hour_floor() + 100, "gpt-4", "success", 10, 20, 5);
         insert_proxy(&conn, hour_floor() - 3000, "llama", "success", 30, 40, 0);
 
-        let requests = analytics
-            .total_requests(hour_floor() - 7200, hour_floor() + 7200)
-            .await;
-        assert_eq!(requests, 2);
-        let tokens = analytics
-            .total_tokens(hour_floor() - 7200, hour_floor() + 7200)
-            .await;
-        assert_eq!(tokens, 100);
+        let wide = analytics
+            .overview(hour_floor() - 7200, hour_floor() + 7200)
+            .await
+            .unwrap();
+        assert_eq!(wide.total_requests, 2);
+        assert_eq!(wide.total_tokens, 100);
 
         // Narrow range excludes the second event.
-        let requests = analytics
-            .total_requests(hour_floor() - 1800, hour_floor() + 1800)
-            .await;
-        assert_eq!(requests, 1);
+        let narrow = analytics
+            .overview(hour_floor() - 1800, hour_floor() + 1800)
+            .await
+            .unwrap();
+        assert_eq!(narrow.total_requests, 1);
     }
 
     #[tokio::test]
     async fn empty_range_returns_zero() {
         let (_dir, _conn, analytics) = setup();
-        assert_eq!(analytics.total_requests(0, 1).await, 0);
-        assert_eq!(analytics.total_tokens(0, 1).await, 0);
-        assert!(analytics.requests(0, 1).await.is_empty());
-        assert!(analytics.model_dist(0, 1).await.is_empty());
-        let dist = analytics.token_dist(0, 1).await;
+        let m = analytics.overview(0, 1).await.unwrap();
+        assert_eq!(m.total_requests, 0);
+        assert_eq!(m.total_tokens, 0);
+        assert!(analytics.requests(0, 1).await.unwrap().is_empty());
+        assert!(analytics.model_dist(0, 1).await.unwrap().is_empty());
+        let dist = analytics.token_dist(0, 1).await.unwrap();
         assert!(dist.iter().all(|e| e.count == 0));
+    }
+
+    #[tokio::test]
+    async fn failing_query_surfaces_error_instead_of_empty_result() {
+        let (_dir, conn, analytics) = setup();
+        insert_proxy(&conn, hour_floor() + 10, "gpt-4", "success", 1, 1, 0);
+        // Take the table away so every query fails. Callers must see that
+        // rather than a successful response full of zeros.
+        conn.execute_batch("DROP TABLE proxy_log").unwrap();
+
+        assert!(
+            matches!(
+                analytics.overview(0, hour_floor() + 3600).await,
+                Err(AnalyticsError::Failed)
+            ),
+            "overview must report the failure"
+        );
+        assert!(
+            matches!(
+                analytics.requests(0, hour_floor() + 3600).await,
+                Err(AnalyticsError::Failed)
+            ),
+            "requests must report the failure"
+        );
+        assert!(
+            matches!(
+                analytics
+                    .query_proxy_logs(ProxyLogQueryParams::default())
+                    .await,
+                Err(AnalyticsError::Failed)
+            ),
+            "query_proxy_logs must report the failure"
+        );
     }
 
     #[tokio::test]
@@ -624,14 +611,14 @@ mod tests {
         insert_proxy(&conn, h + 1800, "llama", "success", 1, 1, 0);
         insert_proxy(&conn, h - 3600 + 900, "gpt-4", "success", 1, 1, 0);
 
-        let buckets = analytics.requests(h - 7200, h + 7200).await;
+        let buckets = analytics.requests(h - 7200, h + 7200).await.unwrap();
         assert_eq!(buckets.len(), 2);
         assert_eq!(buckets[0].timestamp, h - 3600);
         assert_eq!(buckets[0].count, 1);
         assert_eq!(buckets[1].timestamp, h);
         assert_eq!(buckets[1].count, 2);
 
-        let tokens = analytics.tokens(h - 7200, h + 7200).await;
+        let tokens = analytics.tokens(h - 7200, h + 7200).await.unwrap();
         assert_eq!(tokens[1].count, 4);
     }
 
@@ -643,7 +630,7 @@ mod tests {
         insert_proxy(&conn, h + 20, "gpt-4", "success", 1, 1, 0);
         insert_proxy(&conn, h + 30, "llama", "success", 1, 1, 0);
 
-        let dist = analytics.model_dist(h - 3600, h + 3600).await;
+        let dist = analytics.model_dist(h - 3600, h + 3600).await.unwrap();
         assert_eq!(dist.len(), 2);
         assert_eq!(dist[0].model, "gpt-4");
         assert_eq!(dist[0].count, 2);
@@ -657,7 +644,7 @@ mod tests {
         let h = hour_floor();
         insert_proxy(&conn, h + 10, "gpt-4", "success", 100, 30, 20);
 
-        let dist = analytics.token_dist(h - 3600, h + 3600).await;
+        let dist = analytics.token_dist(h - 3600, h + 3600).await.unwrap();
         let get = |cat: &str| {
             dist.iter()
                 .find(|e| e.category == cat)
@@ -671,7 +658,7 @@ mod tests {
         // cached > prompt is clamped to prompt. Aggregation sums columns
         // first, then splits: prompt=150, completion=35, cached=120.
         insert_proxy(&conn, h + 20, "llama", "success", 50, 5, 100);
-        let dist = analytics.token_dist(h - 3600, h + 3600).await;
+        let dist = analytics.token_dist(h - 3600, h + 3600).await.unwrap();
         let get = |cat: &str| {
             dist.iter()
                 .find(|e| e.category == cat)
@@ -680,6 +667,33 @@ mod tests {
         };
         assert_eq!(get("uncached_input"), 30);
         assert_eq!(get("cached_input"), 120);
+        assert_eq!(get("output"), 35);
+    }
+
+    #[tokio::test]
+    async fn overview_returns_all_aggregates() {
+        let (_dir, conn, analytics) = setup();
+        let h = hour_floor();
+        insert_proxy(&conn, h + 10, "gpt-4", "success", 100, 30, 20);
+        insert_proxy(&conn, h + 20, "llama", "success", 10, 5, 0);
+
+        let m = analytics.overview(h - 3600, h + 3600).await.unwrap();
+        assert_eq!(m.total_requests, 2);
+        assert_eq!(m.total_tokens, 145);
+        assert_eq!(m.request_buckets.len(), 1);
+        assert_eq!(m.request_buckets[0].count, 2);
+        assert_eq!(m.token_buckets.len(), 1);
+        assert_eq!(m.token_buckets[0].count, 145);
+        assert_eq!(m.model_dist.len(), 2);
+        let get = |cat: &str| {
+            m.token_dist
+                .iter()
+                .find(|e| e.category == cat)
+                .map(|e| e.count)
+                .unwrap_or(0)
+        };
+        assert_eq!(get("uncached_input"), 90);
+        assert_eq!(get("cached_input"), 20);
         assert_eq!(get("output"), 35);
     }
 
@@ -704,7 +718,7 @@ mod tests {
             model_name: Some("gpt-4".to_string()),
             ..Default::default()
         };
-        let result = analytics.query_proxy_logs(params).await;
+        let result = analytics.query_proxy_logs(params).await.unwrap();
         assert_eq!(result.total, 3);
         assert_eq!(result.items.len(), 3);
         assert!(result.items.iter().all(|e| e.model_name == "gpt-4"));
@@ -717,7 +731,7 @@ mod tests {
             end_ts: Some(h + 3600),
             ..Default::default()
         };
-        let result = analytics.query_proxy_logs(params).await;
+        let result = analytics.query_proxy_logs(params).await.unwrap();
         assert_eq!(result.total, 5);
         assert_eq!(result.items.len(), 2);
         // Ordered by timestamp DESC: items are at h+240, h+180.
@@ -733,7 +747,7 @@ mod tests {
             status: Some("error".to_string()),
             ..Default::default()
         };
-        let result = analytics.query_proxy_logs(params).await;
+        let result = analytics.query_proxy_logs(params).await.unwrap();
         assert_eq!(result.total, 2);
     }
 }

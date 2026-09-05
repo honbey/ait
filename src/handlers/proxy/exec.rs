@@ -10,6 +10,7 @@ use axum::{
 use chrono::Utc;
 use futures_util::StreamExt;
 use reqwest::Request;
+use tokio::time::sleep;
 use tracing::{trace, warn};
 
 use crate::app::AppState;
@@ -20,12 +21,39 @@ use crate::providers::UpstreamProvider;
 use super::guard::{ProxyLogGuard, UsageTokens, parse_usage};
 use super::sse::SseTransformStream;
 
-/// Collect `x-*` and `retry-after` headers from an upstream response.
+/// Upper bound on the buffer pre-sized from `Content-Length`.
+const MAX_BODY_HINT_BYTES: usize = 1024 * 1024;
+
+/// Whether an upstream response header may be relayed to the client.
+///
+/// Only `x-*` and `retry-after` are forwarded at all, and two groups of `x-*`
+/// headers are dropped on top of that:
+///
+/// - `x-forwarded-*` and `x-real-ip` describe the path a request took through
+///   the network. An upstream has no business setting them, and a reverse
+///   proxy sitting behind Ait would trust them.
+/// - Credential-ish headers, because the upstream request carries the
+///   provider's key: an upstream that echoes it must not have it relayed.
+fn is_forwardable_upstream_header(name: &HeaderName) -> bool {
+    let lower = name.as_str().to_ascii_lowercase();
+    if !lower.starts_with("x-") {
+        // The one non-`x-` header worth relaying: upstreams use it on 429s.
+        return lower == "retry-after";
+    }
+    // A prefix rather than a fixed list for the forwarded family: vendors keep
+    // adding variants, and every one of them describes the client's own path.
+    !lower.starts_with("x-forwarded-")
+        && !matches!(
+            lower.as_str(),
+            "x-real-ip" | "x-api-key" | "x-api-token" | "x-auth-token" | "x-authorization"
+        )
+}
+
+/// Collect the relayed headers from an upstream response.
 fn collect_x_headers(headers: &HeaderMap) -> Vec<(HeaderName, HeaderValue)> {
     let mut filtered = Vec::new();
     for (name, value) in headers {
-        let lower = name.as_str().to_ascii_lowercase();
-        if lower.starts_with("x-") || lower == "retry-after" {
+        if is_forwardable_upstream_header(name) {
             filtered.push((name.clone(), value.clone()));
         }
     }
@@ -48,6 +76,7 @@ fn redirect_error(status: StatusCode, provider_name: &str) -> (StatusCode, Json<
 
 pub(crate) async fn proxy_non_streamed(
     state: AppState,
+    client: reqwest::Client,
     request: Request,
     upstream: Arc<dyn UpstreamProvider>,
     model_name: &str,
@@ -59,10 +88,26 @@ pub(crate) async fn proxy_non_streamed(
         "proxy_non_streamed: execute start, elapsed={}ms",
         start.elapsed().as_millis()
     );
-    let response = state.http_client.execute(request).await.map_err(|e| {
-        tracing::warn!("Failed to connect to provider '{}': {}", provider.name, e);
-        AitError::upstream_error(502, "upstream request failed").into_response()
-    })?;
+    let timeout = Duration::from_secs(state.config.proxy.timeout_secs);
+    // The pinned client carries no overall request timeout, so waiting for the
+    // response headers is bounded here. Without it an upstream that trickles
+    // headers holds the connection and its request slot open indefinitely;
+    // the body read is bounded by the same cap below.
+    let response = match tokio::time::timeout(timeout, client.execute(request)).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => {
+            tracing::warn!("Failed to connect to provider '{}': {}", provider.name, e);
+            return Err(AitError::upstream_error(502, "upstream request failed").into_response());
+        }
+        Err(_) => {
+            tracing::warn!(
+                "Upstream '{}' sent no response headers within {}s",
+                provider.name,
+                state.config.proxy.timeout_secs
+            );
+            return Err(AitError::upstream_error(408, "upstream request timed out").into_response());
+        }
+    };
     trace!(
         model = model_name,
         "proxy_non_streamed: response received, elapsed={}ms",
@@ -90,16 +135,25 @@ pub(crate) async fn proxy_non_streamed(
         "proxy_non_streamed: fetching body, elapsed={}ms",
         start.elapsed().as_millis()
     );
-    let timeout = Duration::from_secs(state.config.proxy.timeout_secs);
-    let max_body = state.config.proxy.max_response_body_bytes as usize;
-    let mut body = Vec::new();
+    let max_body = match state.config.proxy.max_response_body_bytes {
+        0 => usize::MAX,
+        bytes => bytes as usize,
+    };
+    // Pre-size from Content-Length so a sizable body does not walk the buffer
+    // through repeated reallocations. The header is upstream-controlled, so it
+    // is trusted only up to MAX_BODY_HINT_BYTES.
+    let hint = response
+        .content_length()
+        .unwrap_or(0)
+        .min(max_body.min(MAX_BODY_HINT_BYTES) as u64) as usize;
+    let mut body = Vec::with_capacity(hint);
     tokio::time::timeout(timeout, async {
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| {
                 tracing::warn!("Upstream body read error: {}", e);
             })?;
-            if body.len() + chunk.len() > max_body {
+            if body.len().saturating_add(chunk.len()) > max_body {
                 return Err(());
             }
             body.extend_from_slice(&chunk);
@@ -145,6 +199,7 @@ pub(crate) async fn proxy_non_streamed(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn proxy_streamed(
     state: AppState,
+    client: reqwest::Client,
     request: Request,
     upstream: Arc<dyn UpstreamProvider>,
     provider_name: String,
@@ -195,12 +250,28 @@ pub(crate) async fn proxy_streamed(
         model = base_event.model_name,
         "proxy_streamed: execute start"
     );
-    let response = state.http_client.execute(request).await.map_err(|e| {
-        tracing::warn!("Failed to connect to provider: {}", e);
-        guard.event.error_message = Some(e.to_string());
-        guard.finalize(&UsageTokens::default(), "502");
-        AitError::upstream_error(502, "upstream request failed").into_response()
-    })?;
+    let timeout = Duration::from_secs(state.config.proxy.timeout_secs);
+    // Same bound as the non-streamed path below: the idle timeout only starts
+    // once the headers arrive, so an upstream that never answers would hold
+    // this request open indefinitely.
+    let response = match tokio::time::timeout(timeout, client.execute(request)).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => {
+            tracing::warn!("Failed to connect to provider: {}", e);
+            guard.event.error_message = Some(e.to_string());
+            guard.finalize(&UsageTokens::default(), "502");
+            return Err(AitError::upstream_error(502, "upstream request failed").into_response());
+        }
+        Err(_) => {
+            tracing::warn!(
+                "Upstream sent no response headers within {}s",
+                state.config.proxy.timeout_secs
+            );
+            guard.event.error_message = Some("upstream request timed out".to_string());
+            guard.finalize(&UsageTokens::default(), "408");
+            return Err(AitError::upstream_error(408, "upstream request timed out").into_response());
+        }
+    };
     trace!(
         model = base_event.model_name,
         "proxy_streamed: response received"
@@ -215,7 +286,6 @@ pub(crate) async fn proxy_streamed(
     }
 
     if !status.is_success() {
-        let timeout = Duration::from_secs(state.config.proxy.timeout_secs);
         let body = tokio::time::timeout(timeout, response.text())
             .await
             .map_err(|_| AitError::upstream_error(408, "upstream read timeout").into_response())?
@@ -256,9 +326,22 @@ pub(crate) async fn proxy_streamed(
         })
     });
 
+    let idle_timeout = Duration::from_secs(state.config.proxy.sse_idle_timeout_secs);
+    // Zero disables the cap for the two new guards; `sse_idle_timeout_secs`
+    // keeps its literal meaning so existing configs behave unchanged.
+    let max_duration = match state.config.proxy.sse_max_duration_secs {
+        0 => Duration::MAX,
+        secs => Duration::from_secs(secs),
+    };
+    let max_bytes = match state.config.proxy.max_response_body_bytes {
+        0 => usize::MAX,
+        bytes => bytes as usize,
+    };
+
     let sse_stream = SseTransformStream {
         inner: raw_stream,
         buf: bytes::BytesMut::new(),
+        scanned: 0,
         upstream,
         model_name: model_name_for_transform,
         user_tokens: None,
@@ -267,8 +350,11 @@ pub(crate) async fn proxy_streamed(
         start,
         done: false,
         shutdown_fut: Box::pin(state.shutdown_token.clone().cancelled_owned()),
-        idle_timeout: Duration::from_secs(state.config.proxy.sse_idle_timeout_secs),
-        last_data_time: Instant::now(),
+        idle_timeout,
+        idle_timer: Box::pin(sleep(idle_timeout)),
+        max_duration,
+        total_bytes: 0,
+        max_bytes,
     };
 
     let body = Body::from_stream(sse_stream);
@@ -301,6 +387,37 @@ mod tests {
         assert!(names.contains(&"x-request-id".to_string()));
         assert!(names.contains(&"x-ratelimit-remaining".to_string()));
         assert!(names.contains(&"retry-after".to_string()));
+    }
+
+    #[test]
+    fn collect_x_headers_drops_proxy_chain_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+        headers.insert("x-forwarded-host", "evil.example.com".parse().unwrap());
+        headers.insert("x-forwarded-proto", "http".parse().unwrap());
+        headers.insert("x-real-ip", "1.2.3.4".parse().unwrap());
+        headers.insert("x-ratelimit-remaining", "100".parse().unwrap());
+
+        // Only the rate-limit header survives: the rest describe a path the
+        // upstream never saw.
+        let collected = collect_x_headers(&headers);
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].0, "x-ratelimit-remaining");
+    }
+
+    #[test]
+    fn collect_x_headers_drops_credential_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key", "sk-upstream-secret".parse().unwrap());
+        headers.insert("x-auth-token", "t".parse().unwrap());
+        headers.insert("x-authorization", "Bearer t".parse().unwrap());
+        headers.insert("x-request-id", "abc".parse().unwrap());
+
+        let names: Vec<String> = collect_x_headers(&headers)
+            .iter()
+            .map(|(n, _)| n.as_str().to_string())
+            .collect();
+        assert_eq!(names, vec!["x-request-id".to_string()]);
     }
 
     #[test]

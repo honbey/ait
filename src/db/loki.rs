@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -33,6 +33,8 @@ pub enum LokiInitError {
     InvalidUrl(String),
     /// reqwest blocking client failed to build.
     Client(reqwest::Error),
+    /// Only one half of the basic-auth pair was configured.
+    IncompleteBasicAuth,
 }
 
 impl std::fmt::Display for LokiInitError {
@@ -40,6 +42,10 @@ impl std::fmt::Display for LokiInitError {
         match self {
             Self::InvalidUrl(url) => write!(f, "invalid Loki url: {url}"),
             Self::Client(e) => write!(f, "HTTP client init failed: {e}"),
+            Self::IncompleteBasicAuth => write!(
+                f,
+                "basic_auth_user and basic_auth_password must be set together (or neither)"
+            ),
         }
     }
 }
@@ -75,8 +81,12 @@ impl LokiSink {
             _ => return Err(LokiInitError::InvalidUrl(push_url)),
         }
 
-        if config.basic_auth_user.is_some() != config.basic_auth_password.is_some() {
-            warn!("[loki] basic_auth requires both user and password; auth disabled");
+        // Refuse a half-configured pair: sending events with no auth header on
+        // a typo is worse than not sending them. Config load rejects this too;
+        // this keeps the invariant for any other caller.
+        match (&config.basic_auth_user, &config.basic_auth_password) {
+            (Some(_), Some(_)) | (None, None) => {}
+            _ => return Err(LokiInitError::IncompleteBasicAuth),
         }
 
         let client = reqwest::blocking::Client::builder()
@@ -113,14 +123,34 @@ impl LokiSink {
     }
 
     pub fn shutdown(&self) {
-        let sender = self.sender.clone();
-        thread::spawn(move || {
-            let _ = sender.send(LogEvent::Shutdown);
-        });
-        if let Ok(mut guard) = self.worker_handle.lock()
+        let signaled = self.signal_shutdown();
+        // Only join when the worker actually received the signal; joining one
+        // that never did would hang.
+        if signaled
+            && let Ok(mut guard) = self.worker_handle.lock()
             && let Some(handle) = guard.take()
         {
             let _ = handle.join();
+        }
+    }
+
+    /// Hand the worker a shutdown event, retrying while the channel is full.
+    /// `send` would block indefinitely on a full channel, so the wait is
+    /// bounded; returns false when the signal could not be delivered.
+    fn signal_shutdown(&self) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match self.sender.try_send(LogEvent::Shutdown) {
+                Ok(()) => return true,
+                Err(mpsc::TrySendError::Disconnected(_)) => return false,
+                Err(mpsc::TrySendError::Full(_)) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(mpsc::TrySendError::Full(_)) => {
+                    warn!("[loki] shutdown signal not delivered; worker left running");
+                    return false;
+                }
+            }
         }
     }
 }

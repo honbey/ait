@@ -17,7 +17,6 @@ use crate::pages::models::ModelsPage;
 use crate::pages::not_found::NotFoundPage;
 use crate::pages::overview::Overview;
 use crate::pages::providers::ProvidersPage;
-use crate::pages::text_gen::TextGenPage;
 use crate::storage;
 
 fn prefers_dark_scheme() -> bool {
@@ -77,7 +76,10 @@ pub fn App() -> impl IntoView {
     });
 
     view! {
-        <div class=move || if dark.get() { "dark" } else { "" }>
+        // The `.dark` class lives on <html> (set by the effect below) and the
+        // Tailwind dark variant matches its descendants, so this wrapper needs
+        // no class of its own.
+        <div>
             <Router>
                 <Topbar dark=dark theme=theme />
                 <main class="min-h-[calc(100vh-3.5rem)]">
@@ -92,7 +94,6 @@ pub fn App() -> impl IntoView {
                             <Route path=StaticSegment("apikeys") view=ApiKeysPage />
                             <Route path=StaticSegment("logs") view=LogsPage />
                             <Route path=StaticSegment("models") view=ModelsPage />
-                            <Route path=StaticSegment("text-generation") view=TextGenPage />
                         </ParentRoute>
                     </Routes>
                 </main>
