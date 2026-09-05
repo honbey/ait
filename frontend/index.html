@@ -13,9 +13,13 @@
     <link data-trunk rel="tailwind-css" href="tailwind.css" />
     <base data-trunk-public-url />
   </head>
-  <body
-    class="bg-gray-50 dark:bg-ink-950 text-gray-900 dark:text-ink-100 m-0"
-  >
-    <link data-trunk rel="rust" data-wasm-opt="z" data-bin="ait-frontend" />
+  <body class="bg-gray-50 dark:bg-ink-950 text-gray-900 dark:text-ink-100 m-0">
+    <link
+      data-trunk
+      rel="rust"
+      data-wasm-opt="z"
+      data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int"
+      data-bin="ait-frontend"
+    />
   </body>
 </html>
