@@ -89,8 +89,9 @@ pub(crate) async fn check_ssrf_config(
 /// [`check_ssrf`] validates the IPs the host resolves to, but reqwest would
 /// resolve DNS again when actually connecting — a window an attacker with DNS
 /// control can abuse (DNS rebinding). Pinning the client to the verified set
-/// closes that window. Clients are cached per `host:port` and rebuilt once the
-/// cache entry ages past `CACHE_TTL`, mirroring the DNS cache lifetime.
+/// closes that window. Clients are cached per `host:port` plus the verified
+/// address set, and rebuilt once the cache entry ages past `CACHE_TTL`,
+/// mirroring the DNS cache lifetime.
 pub(crate) fn pinned_client(
     state: &AppState,
     url: &Url,
@@ -103,7 +104,18 @@ pub(crate) fn pinned_client(
     // Url::host_str renders IPv6 hosts with brackets; reqwest's resolve
     // matches the bare address form.
     let host = host.trim_start_matches('[').trim_end_matches(']');
-    let cache_key = format!("{host}:{port}");
+    // The key carries the verified address set: a client built for the
+    // addresses an earlier request checked would connect to hosts this one
+    // never validated, so a DNS change must miss. Sorted, because lookup
+    // order varies between resolutions of the same name.
+    let mut pinned_ips = verified_ips.to_vec();
+    pinned_ips.sort_unstable();
+    let pinned_ips = pinned_ips
+        .iter()
+        .map(IpAddr::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let cache_key = format!("{host}:{port}:{pinned_ips}");
 
     // Reuse while fresh; drop the guard before any later insert on the same
     // map (parking_lot RwLock is not reentrant).
@@ -267,10 +279,24 @@ pub(crate) fn ip_in_cidr(ip: &IpAddr, cidr_str: &str) -> bool {
         None => family_max,
     };
 
-    match (ip, cidr_addr) {
-        (IpAddr::V4(ip), IpAddr::V4(cidr)) => ipv4_in_prefix(ip, &cidr, prefix_len.min(32)),
-        (IpAddr::V6(ip), IpAddr::V6(cidr)) => ipv6_in_prefix(ip, &cidr, prefix_len.min(128)),
-        _ => false,
+    ip_in_prefix(ip, &cidr_addr, prefix_len)
+}
+
+/// Whether `ip` falls inside `prefix/len`.
+///
+/// Address families are compared as written and only canonicalized when they
+/// disagree (see [`normalize_ip`]), so an IPv4-mapped peer still matches a
+/// plain IPv4 prefix. Canonicalizing up front would collapse a `::` prefix to
+/// `0.0.0.0` and stop matching IPv6 entirely, including `::/0`.
+pub(crate) fn ip_in_prefix(ip: &IpAddr, prefix: &IpAddr, len: u8) -> bool {
+    match (ip, prefix) {
+        (IpAddr::V4(ip), IpAddr::V4(prefix)) => ipv4_in_prefix(ip, prefix, len.min(32)),
+        (IpAddr::V6(ip), IpAddr::V6(prefix)) => ipv6_in_prefix(ip, prefix, len.min(128)),
+        _ => match (normalize_ip(ip), normalize_ip(prefix)) {
+            (IpAddr::V4(ip), IpAddr::V4(prefix)) => ipv4_in_prefix(&ip, &prefix, len.min(32)),
+            (IpAddr::V6(ip), IpAddr::V6(prefix)) => ipv6_in_prefix(&ip, &prefix, len.min(128)),
+            _ => false,
+        },
     }
 }
 
@@ -591,6 +617,27 @@ mod tests {
             2,
             "different port gets its own entry"
         );
+    }
+
+    #[test]
+    fn pinned_client_rebuilds_when_verified_ips_change() {
+        let (state, _dir) = crate::test_utils::create_test_state();
+        let url = reqwest::Url::parse("http://upstream.test/api").unwrap();
+        let first: Vec<IpAddr> = vec!["192.0.2.1".parse().unwrap()];
+        let second: Vec<IpAddr> = vec!["192.0.2.2".parse().unwrap()];
+
+        let _ = pinned_client(&state, &url, &first).unwrap();
+        assert_eq!(state.pinned_clients.len(), 1);
+
+        // Same host:port, different verified set: reusing the old client would
+        // connect to addresses this request never checked.
+        let _ = pinned_client(&state, &url, &second).unwrap();
+        assert_eq!(state.pinned_clients.len(), 2);
+
+        // An earlier set is still a hit, so a single host does not leak one
+        // client per request.
+        let _ = pinned_client(&state, &url, &first).unwrap();
+        assert_eq!(state.pinned_clients.len(), 2);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use crate::app::{AppState, NEGATIVE_CACHE_TTL};
+use crate::config::TrustedProxy;
 use crate::db::{AccessEvent, ApiKeyContext, ApiKeyInfo, RequestId, hash_key};
 use crate::error::{AitError, db_error, internal_error, unauthorized};
 use axum::{
@@ -127,11 +128,11 @@ pub async fn auth_middleware(
     Ok(next.run(req).await)
 }
 
-fn is_trusted_proxy(ip: IpAddr, trusted: &[IpAddr]) -> bool {
-    trusted.contains(&ip)
+fn is_trusted_proxy(ip: IpAddr, trusted: &[TrustedProxy]) -> bool {
+    trusted.iter().any(|t| t.contains(ip))
 }
 
-fn get_client_ip(req: &Request, trusted_proxies: &[IpAddr], hops: usize) -> Option<IpAddr> {
+fn get_client_ip(req: &Request, trusted_proxies: &[TrustedProxy], hops: usize) -> Option<IpAddr> {
     let direct_ip = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
@@ -264,6 +265,7 @@ async fn attach_request_id_to_body(response: Response, request_id: &str) -> Resp
 #[cfg(test)]
 mod tests {
     use super::{ConnectInfo, Request, forwarded_client_ip, get_client_ip};
+    use crate::config::TrustedProxy;
     use crate::test_utils::{
         create_test_state, send_request, send_request_with_headers, test_router,
     };
@@ -408,10 +410,10 @@ mod tests {
         req
     }
 
-    fn trusted() -> Vec<IpAddr> {
+    fn trusted() -> Vec<TrustedProxy> {
         vec![
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            IpAddr::V6(Ipv6Addr::LOCALHOST),
+            TrustedProxy::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            TrustedProxy::Ip(IpAddr::V6(Ipv6Addr::LOCALHOST)),
         ]
     }
 
@@ -447,6 +449,20 @@ mod tests {
         let req = request_with_peer("10.9.9.9".parse().unwrap(), Some("6.6.6.6"));
         let expected = "10.9.9.9".parse().unwrap();
         assert_eq!(get_client_ip(&req, &trusted(), 1), Some(expected));
+    }
+
+    #[test]
+    fn cidr_trusted_proxy_enables_xff() {
+        // An ingress inside a subnet cannot be listed by address; the whole
+        // block has to be trusted for XFF to apply.
+        let req = request_with_peer("10.0.0.7".parse().unwrap(), Some("203.0.113.9"));
+        let trusted = vec![TrustedProxy::Cidr("10.0.0.0".parse().unwrap(), 8)];
+        let expected = "203.0.113.9".parse().unwrap();
+        assert_eq!(get_client_ip(&req, &trusted, 1), Some(expected));
+
+        let outside = request_with_peer("11.0.0.7".parse().unwrap(), Some("203.0.113.9"));
+        let expected = "11.0.0.7".parse().unwrap();
+        assert_eq!(get_client_ip(&outside, &trusted, 1), Some(expected));
     }
 
     #[test]

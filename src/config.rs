@@ -3,6 +3,69 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::net::IpAddr;
 
+/// A trusted reverse proxy: an exact address or a CIDR block.
+///
+/// A bare address is not enough in practice: an ingress on another host, or
+/// one rescheduled inside a subnet, cannot be listed without a CIDR or a
+/// config change on every move.
+#[derive(Debug, Clone)]
+pub enum TrustedProxy {
+    Ip(IpAddr),
+    Cidr(IpAddr, u8),
+}
+
+impl TrustedProxy {
+    /// Parse `addr` or `addr/prefix`.
+    ///
+    /// Used by [`Config`] deserialization, so an unusable entry fails at
+    /// startup instead of silently never matching anything.
+    pub(crate) fn parse(entry: &str) -> Result<Self, String> {
+        let Some((addr, prefix)) = entry.split_once('/') else {
+            return entry
+                .parse()
+                .map(TrustedProxy::Ip)
+                .map_err(|_| format!("'{entry}' is not an IP address or CIDR block"));
+        };
+        let addr: IpAddr = addr
+            .parse()
+            .map_err(|_| format!("'{entry}' is not an IP address or CIDR block"))?;
+        // The bound follows the entry's own address family, matching
+        // `ssrf::ip_in_cidr`; a wider default would over-match.
+        let family_max = match addr {
+            IpAddr::V4(_) => 32u8,
+            IpAddr::V6(_) => 128u8,
+        };
+        let len: u8 = prefix
+            .parse()
+            .map_err(|_| format!("'{entry}' has a prefix that is not a number"))?;
+        if len > family_max {
+            return Err(format!("'{entry}' prefix must be <= {family_max}"));
+        }
+        Ok(TrustedProxy::Cidr(addr, len))
+    }
+
+    /// Whether `ip` comes from this proxy.
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        let (prefix, len) = match *self {
+            TrustedProxy::Ip(addr) => (addr, if addr.is_ipv4() { 32 } else { 128 }),
+            TrustedProxy::Cidr(addr, len) => (addr, len),
+        };
+        // Canonicalize both sides, so an IPv4-mapped peer matches an IPv4
+        // entry; a full-length prefix is then an exact match.
+        crate::ssrf::ip_in_prefix(&ip, &prefix, len)
+    }
+}
+
+impl<'de> Deserialize<'de> for TrustedProxy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let entry = String::deserialize(deserializer)?;
+        TrustedProxy::parse(&entry).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ConfigApp {
     pub server: ServerConfig,
@@ -21,7 +84,10 @@ pub struct ServerConfig {
     pub cache_cleanup_interval_secs: u64,
     pub cache_max_entries: u64,
     pub graceful_timeout_secs: u64,
-    pub trusted_proxies: Vec<IpAddr>,
+    /// Reverse proxies allowed to set `X-Forwarded-For` / `Remote-User`.
+    /// Each entry is an IP address or a CIDR block; an unusable entry is
+    /// rejected at startup. Empty means no header is trusted.
+    pub trusted_proxies: Vec<TrustedProxy>,
     /// Number of trusted reverse proxies in front of Ait. X-Forwarded-For is
     /// read `hops` entries from the right: the nearest trusted proxy appends
     /// the peer it saw, so leftmost entries are client-controlled and can be
@@ -493,6 +559,57 @@ trusted_proxy_hops = 3
         );
         let config = ConfigApp::new(Some(&path)).unwrap();
         assert_eq!(config.server.trusted_proxy_hops, 3);
+    }
+
+    #[test]
+    fn trusted_proxy_entries_accept_ip_and_cidr() {
+        let (_dir, path) = write_toml(
+            r#"
+[server]
+trusted_proxies = ["127.0.0.1", "::1", "10.0.0.0/8", "2001:db8::/32"]
+"#,
+        );
+        let config = ConfigApp::new(Some(&path)).unwrap();
+        let trusted = &config.server.trusted_proxies;
+        assert_eq!(trusted.len(), 4);
+
+        // Exact addresses stay exact.
+        assert!(trusted[0].contains("127.0.0.1".parse().unwrap()));
+        assert!(!trusted[0].contains("127.0.0.2".parse().unwrap()));
+        // CIDR blocks cover their range and nothing outside it.
+        assert!(trusted[2].contains("10.9.9.9".parse().unwrap()));
+        assert!(!trusted[2].contains("11.0.0.1".parse().unwrap()));
+        assert!(trusted[3].contains("2001:db8::1".parse().unwrap()));
+        assert!(!trusted[3].contains("2001:db9::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn trusted_proxy_matches_ipv4_mapped_peer() {
+        let (_dir, path) = write_toml(
+            r#"
+[server]
+trusted_proxies = ["127.0.0.1"]
+"#,
+        );
+        let config = ConfigApp::new(Some(&path)).unwrap();
+        // A peer seen over IPv6 as an IPv4-mapped address is the same host.
+        assert!(config.server.trusted_proxies[0].contains("::ffff:127.0.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn invalid_trusted_proxy_entry_rejected() {
+        for bad in ["not-an-ip", "10.0.0.0/33", "10.0.0.0/abc", "10.0.0.0/"] {
+            let (_dir, path) = write_toml(&format!(
+                r#"
+[server]
+trusted_proxies = ["{bad}"]
+"#
+            ));
+            assert!(
+                ConfigApp::new(Some(&path)).is_err(),
+                "'{bad}' must be rejected"
+            );
+        }
     }
 
     #[test]

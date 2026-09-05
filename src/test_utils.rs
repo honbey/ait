@@ -1,7 +1,7 @@
 use crate::app::AppState;
 use crate::config::{
     AuthConfig, ConfigApp, DatabaseConfig, DlpConfig, LogConfig, LokiConfig, ProxyConfig,
-    SecurityConfig, ServerConfig,
+    SecurityConfig, ServerConfig, TrustedProxy,
 };
 use crate::db::{
     AccessEvent, AuditEvent, Database, LogManager, Model, Provider, ProviderType, ProxyEvent,
@@ -83,7 +83,10 @@ pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
             cache_cleanup_interval_secs: 300,
             cache_max_entries: 1000,
             graceful_timeout_secs: 10,
-            trusted_proxies: vec!["127.0.0.1".parse().unwrap(), "::1".parse().unwrap()],
+            trusted_proxies: ["127.0.0.1", "::1"]
+                .iter()
+                .map(|e| TrustedProxy::parse(e).unwrap())
+                .collect(),
             trusted_proxy_hops: 1,
         },
         auth: AuthConfig { enabled: true },

@@ -12,7 +12,8 @@ cache_cleanup_interval_secs = 300
 cache_max_entries = 1000
 # Ctrl-C 后等待 in-flight 请求完成的最大时间（秒），超时后强制退出
 graceful_timeout_secs = 10
-# 允许设置 X-Forwarded-For 的可信代理 IP，空数组则不信任任何 XFF
+# 允许设置 X-Forwarded-For 的可信代理，空数组则不信任任何 XFF
+# 每项可以是 IP 地址，也可以是 CIDR 网段，例如 "10.0.0.0/8"
 trusted_proxies = ["127.0.0.1", "::1"]
 # X-Forwarded-For 链中位于 Ait 前面的可信代理层数。
 # 客户端 IP 取 XFF 倒数第 N 项：最近一层可信代理追加的是它实际看到的

@@ -8,6 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
+use crate::config::TrustedProxy;
 use crate::db::models::{BucketEntry, ModelDistEntry, TokenDistEntry};
 
 use crate::db::analytics::AnalyticsError;
@@ -44,18 +45,14 @@ pub struct OverviewStats {
     pub token_dist: Vec<TokenDistEntry>,
 }
 
-fn is_trusted_proxy(ip: IpAddr, trusted: &[IpAddr]) -> bool {
-    trusted.contains(&ip)
-}
-
 /// Only trust the identity header when the direct peer is a known reverse
 /// proxy; a client that reaches Ait directly can forge `Remote-User`.
 fn remote_user_from_headers(
     headers: &HeaderMap,
     direct_ip: IpAddr,
-    trusted_proxies: &[IpAddr],
+    trusted_proxies: &[TrustedProxy],
 ) -> Option<String> {
-    if !is_trusted_proxy(direct_ip, trusted_proxies) {
+    if !trusted_proxies.iter().any(|t| t.contains(direct_ip)) {
         return None;
     }
     headers
