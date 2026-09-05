@@ -109,6 +109,7 @@ pub(crate) fn test_config(db_path: &str, log_path: &str) -> ConfigApp {
             analytics_workers: 2,
             duckdb_memory_limit_mb: 512,
             duckdb_threads: 2,
+            duckdb_query_timeout_secs: 60,
             loki: LokiConfig::default(),
         },
         proxy: ProxyConfig {

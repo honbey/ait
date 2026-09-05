@@ -10,6 +10,7 @@ use super::models::{
     AccessEvent, AuditEvent, BucketEntry, LogEvent, ModelDistEntry, OverviewMetrics, ProxyEvent,
     ProxyLogQueryParams, ProxyLogQueryResult, TokenDistEntry,
 };
+use super::watchdog::QueryWatchdog;
 
 mod writes;
 
@@ -98,10 +99,12 @@ impl LogManager {
         let retention_every = config.retention_every;
         let retention_days = config.retention_days;
         let (sender, receiver) = mpsc::sync_channel(config.channel_cap as usize);
+        let query_timeout = Duration::from_secs(config.duckdb_query_timeout_secs);
         let analytics = Analytics::new(
             conn.try_clone()?,
             config.analytics_timeout_secs,
             config.analytics_workers,
+            query_timeout,
         );
 
         let worker_conn = conn.try_clone()?;
@@ -113,6 +116,7 @@ impl LogManager {
                 flush_interval,
                 retention_every,
                 retention_days,
+                query_timeout,
             ) {
                 error!("[logs] worker exited with error: {e}");
             }
@@ -260,7 +264,14 @@ fn worker_loop(
     flush_interval: Duration,
     retention_every: u64,
     retention_days: u64,
+    query_timeout: Duration,
 ) -> Result<()> {
+    // Same backstop as the analytics workers: a flush or a retention DELETE
+    // that runs forever would keep this thread unjoinable.
+    let watchdog = (query_timeout > Duration::ZERO).then(|| {
+        let interrupt = conn.interrupt_handle();
+        QueryWatchdog::spawn(interrupt, "logs", query_timeout)
+    });
     let mut buffer: Vec<LogEvent> = Vec::with_capacity(flush_batch as usize);
     let mut flush_count = 0u64;
 
@@ -272,7 +283,8 @@ fn worker_loop(
             Ok(event) => buffer.push(event),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if !buffer.is_empty() {
-                    flush_buffer(
+                    flush(
+                        &watchdog,
                         &conn,
                         &mut buffer,
                         &mut flush_count,
@@ -283,9 +295,16 @@ fn worker_loop(
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 if !buffer.is_empty() {
-                    flush_events(&conn, &buffer);
+                    run(&watchdog, || {
+                        let _ = flush_events(&conn, &buffer);
+                    });
                 }
-                let _ = conn.execute_batch("CHECKPOINT");
+                run(&watchdog, || {
+                    let _ = conn.execute_batch("CHECKPOINT");
+                });
+                if let Some(watchdog) = watchdog {
+                    watchdog.stop();
+                }
                 return Ok(());
             }
         }
@@ -298,7 +317,8 @@ fn worker_loop(
         }
 
         if (buffer.len() as u64) >= flush_batch {
-            flush_buffer(
+            flush(
+                &watchdog,
                 &conn,
                 &mut buffer,
                 &mut flush_count,
@@ -309,12 +329,40 @@ fn worker_loop(
 
         if shutdown {
             if !buffer.is_empty() {
-                flush_events(&conn, &buffer);
+                run(&watchdog, || {
+                    let _ = flush_events(&conn, &buffer);
+                });
             }
-            let _ = conn.execute_batch("CHECKPOINT");
+            run(&watchdog, || {
+                let _ = conn.execute_batch("CHECKPOINT");
+            });
+            if let Some(watchdog) = watchdog {
+                watchdog.stop();
+            }
             return Ok(());
         }
     }
+}
+
+/// Run a DuckDB operation under the worker's deadline, if the watchdog is armed.
+fn run<T>(watchdog: &Option<QueryWatchdog>, f: impl FnOnce() -> T) -> T {
+    match watchdog {
+        Some(watchdog) => watchdog.run(f),
+        None => f(),
+    }
+}
+
+fn flush(
+    watchdog: &Option<QueryWatchdog>,
+    conn: &Connection,
+    buffer: &mut Vec<LogEvent>,
+    flush_count: &mut u64,
+    retention_every: u64,
+    retention_days: u64,
+) {
+    run(watchdog, || {
+        flush_buffer(conn, buffer, flush_count, retention_every, retention_days);
+    });
 }
 
 #[cfg(test)]

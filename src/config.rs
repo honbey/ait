@@ -134,6 +134,13 @@ pub struct LogConfig {
     pub duckdb_memory_limit_mb: u64,
     /// DuckDB threads per query.
     pub duckdb_threads: u64,
+    /// Wall-clock ceiling for a single DuckDB operation on a log or analytics
+    /// worker, in seconds; past it the query is interrupted. `0` disables the
+    /// watchdog. Measured costs are tiny (aggregates over 2M rows ~10ms, a
+    /// retention DELETE ~90ms), so this only ever fires on a pathological
+    /// scan - where it is the difference between a slow request and a worker
+    /// that can never be joined at shutdown.
+    pub duckdb_query_timeout_secs: u64,
     #[serde(default)]
     pub loki: LokiConfig,
 }
@@ -278,6 +285,7 @@ impl ConfigApp {
             .set_default("log.analytics_workers", 2u64)?
             .set_default("log.duckdb_memory_limit_mb", 512u64)?
             .set_default("log.duckdb_threads", 2u64)?
+            .set_default("log.duckdb_query_timeout_secs", 60u64)?
             .set_default("proxy.timeout_secs", 300u64)?
             .set_default("proxy.stream", true)?
             .set_default("proxy.sse_idle_timeout_secs", 60u64)?
@@ -672,6 +680,7 @@ trusted_proxies = ["{bad}"]
         assert_eq!(config.log.analytics_workers, 2);
         assert_eq!(config.log.duckdb_memory_limit_mb, 512);
         assert_eq!(config.log.duckdb_threads, 2);
+        assert_eq!(config.log.duckdb_query_timeout_secs, 60);
     }
 
     #[test]

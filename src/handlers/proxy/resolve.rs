@@ -183,6 +183,22 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    struct MockProvider;
+
+    #[async_trait::async_trait]
+    impl UpstreamProvider for MockProvider {
+        async fn build_request(
+            &self,
+            _client: &reqwest::Client,
+            _body: serde_json::Value,
+            _stream: bool,
+            _upstream_model: &str,
+            _upstream_path: &str,
+        ) -> Result<reqwest::Request, String> {
+            Err("mock provider is not usable".to_string())
+        }
+    }
+
     #[test]
     fn insert_capped_respects_cap() {
         let map: dashmap::DashMap<String, Instant> = dashmap::DashMap::new();
@@ -215,6 +231,98 @@ mod tests {
         assert_eq!(map.len(), 3);
         assert!(!map.contains_key("m0"), "oldest entry is evicted");
         assert!(map.contains_key("m3"), "newest entry is kept");
+    }
+
+    #[test]
+    fn insert_capped_eviction_survives_concurrency() {
+        // Eviction scans for the oldest entry, then removes it - the shape
+        // AGENTS.md warns about. It has to stay correct with other threads
+        // inserting and evicting at the same time.
+        let map: dashmap::DashMap<String, Instant> = dashmap::DashMap::new();
+        const CAP: usize = 8;
+
+        crate::test_utils::assert_no_deadlock(std::time::Duration::from_secs(10), {
+            let map = map.clone();
+            move || {
+                let writers: Vec<_> = (0..4)
+                    .map(|thread| {
+                        let map = map.clone();
+                        std::thread::spawn(move || {
+                            for i in 0..200 {
+                                insert_capped(&map, &format!("k{thread}-{i}"), Instant::now(), CAP);
+                            }
+                        })
+                    })
+                    .collect();
+                for writer in writers {
+                    writer.join().unwrap();
+                }
+            }
+        });
+
+        // DashMap's len is approximate under concurrency, so allow slack -
+        // what matters is that the cap held.
+        assert!(
+            map.len() <= CAP * 2,
+            "cache grew past its cap: {} entries",
+            map.len()
+        );
+    }
+
+    #[test]
+    fn capped_eviction_and_cache_cleanup_do_not_deadlock() {
+        // Two different guard patterns on the same maps at once: the periodic
+        // cleanup's `retain`, and `insert_capped`'s scan-then-remove. Neither
+        // may hold a guard across the other's insert/retain/remove.
+        let api_key_cache: dashmap::DashMap<String, (crate::db::ApiKeyInfo, Instant)> =
+            dashmap::DashMap::new();
+        let model_cache: dashmap::DashMap<String, crate::app::ModelCacheEntry> =
+            dashmap::DashMap::new();
+        let provider_cache: dashmap::DashMap<String, (Arc<dyn UpstreamProvider>, Instant)> =
+            dashmap::DashMap::new();
+        let ssrf_cache: dashmap::DashMap<String, (Vec<std::net::IpAddr>, Instant)> =
+            dashmap::DashMap::new();
+        const MAX: usize = 20;
+
+        let entry = || {
+            (
+                (
+                    crate::test_utils::create_test_model("m", "p"),
+                    crate::test_utils::create_test_provider(
+                        "p",
+                        crate::db::ProviderType::OpenAICompat,
+                        "http://127.0.0.1:1",
+                    ),
+                ),
+                Instant::now(),
+            )
+        };
+
+        let evict_model = model_cache.clone();
+        let evict_provider = provider_cache.clone();
+        crate::test_utils::assert_no_deadlock(std::time::Duration::from_secs(10), move || {
+            let evictor = std::thread::spawn(move || {
+                for i in 0..200 {
+                    insert_capped(&evict_model, &format!("mx{i}"), entry(), MAX);
+                    insert_capped(
+                        &evict_provider,
+                        &format!("px{i}"),
+                        (Arc::new(MockProvider), Instant::now()),
+                        MAX,
+                    );
+                }
+            });
+            for _ in 0..200 {
+                crate::app::cleanup_caches(
+                    &api_key_cache,
+                    &model_cache,
+                    &provider_cache,
+                    &ssrf_cache,
+                    MAX,
+                );
+            }
+            evictor.join().unwrap();
+        });
     }
 
     #[test]

@@ -10,6 +10,7 @@ use super::models::{
     BucketEntry, ModelDistEntry, OverviewMetrics, ProxyLogQueryParams, ProxyLogQueryResult,
     TokenDistEntry,
 };
+use super::watchdog::QueryWatchdog;
 
 mod queries;
 
@@ -159,6 +160,19 @@ fn run_guarded<T>(label: &str, query: impl FnOnce() -> T) -> Option<T> {
     }
 }
 
+/// Run a query under the worker's deadline, if the watchdog is armed.
+fn run_query<T>(
+    watchdog: &Option<QueryWatchdog>,
+    resp: oneshot::Sender<WorkerResult<T>>,
+    label: &str,
+    query: impl FnOnce() -> Result<T, duckdb::Error>,
+) {
+    match watchdog {
+        Some(watchdog) => watchdog.run(|| send_result(resp, label, query)),
+        None => send_result(resp, label, query),
+    }
+}
+
 /// Reply with the query outcome.
 ///
 /// A DuckDB failure becomes [`AnalyticsError::Failed`] so the caller can tell
@@ -187,7 +201,12 @@ impl Analytics {
     /// concurrent `/api/stats`.
     ///
     /// `workers` is expected to have been clamped by config validation.
-    pub fn new(conn: Connection, timeout_secs: u64, workers: usize) -> Self {
+    pub fn new(
+        conn: Connection,
+        timeout_secs: u64,
+        workers: usize,
+        query_timeout: Duration,
+    ) -> Self {
         let (tx, rx) = mpsc::channel::<AnalyticsRequest>();
         let rx = Arc::new(Mutex::new(rx));
         let workers = workers.clamp(1, MAX_ANALYTICS_WORKERS);
@@ -214,7 +233,7 @@ impl Analytics {
             worker_conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
             let rx = Arc::clone(&rx);
             handles.push(std::thread::spawn(move || {
-                worker_loop(worker_conn, rx);
+                worker_loop(worker_conn, rx, query_timeout);
             }));
         }
 
@@ -227,9 +246,26 @@ impl Analytics {
 }
 
 /// Pull requests from the shared queue until a Shutdown arrives or the
-/// channel closes. The queue guard is released before the query runs, so
-/// other workers can receive while this one scans.
-fn worker_loop(conn: Connection, rx: Arc<Mutex<mpsc::Receiver<AnalyticsRequest>>>) {
+/// channel closes.
+///
+/// The queue guard is held across `recv()`, so only one worker waits at a
+/// time; the rest park on the mutex until it is free. It is released before
+/// the query runs, which is what lets another worker pick up the next request
+/// while this one is still scanning. The wait being exclusive costs nothing
+/// here - `recv()` returns as soon as a request lands - but it does mean the
+/// mutex serialises the hand-off rather than the queue doing it.
+fn worker_loop(
+    conn: Connection,
+    rx: Arc<Mutex<mpsc::Receiver<AnalyticsRequest>>>,
+    query_timeout: Duration,
+) {
+    // Bounds a single operation so this thread can always be joined. `conn`
+    // itself is not Sync, hence the interrupt handle.
+    let watchdog = (query_timeout > Duration::ZERO).then(|| {
+        let interrupt = conn.interrupt_handle();
+        QueryWatchdog::spawn(interrupt, "analytics", query_timeout)
+    });
+
     loop {
         let req = {
             let guard = rx.lock().unwrap_or_else(|e| e.into_inner());
@@ -244,28 +280,32 @@ fn worker_loop(conn: Connection, rx: Arc<Mutex<mpsc::Receiver<AnalyticsRequest>>
                 start_ts,
                 end_ts,
                 resp,
-            } => send_result(resp, "requests", || requests_impl(&conn, start_ts, end_ts)),
+            } => run_query(&watchdog, resp, "requests", || {
+                requests_impl(&conn, start_ts, end_ts)
+            }),
             AnalyticsRequest::Tokens {
                 start_ts,
                 end_ts,
                 resp,
-            } => send_result(resp, "tokens", || tokens_impl(&conn, start_ts, end_ts)),
+            } => run_query(&watchdog, resp, "tokens", || {
+                tokens_impl(&conn, start_ts, end_ts)
+            }),
             AnalyticsRequest::ModelDist {
                 start_ts,
                 end_ts,
                 resp,
-            } => send_result(resp, "model_dist", || {
+            } => run_query(&watchdog, resp, "model_dist", || {
                 model_dist_impl(&conn, start_ts, end_ts)
             }),
             AnalyticsRequest::TokenDist {
                 start_ts,
                 end_ts,
                 resp,
-            } => send_result(resp, "token_dist", || {
+            } => run_query(&watchdog, resp, "token_dist", || {
                 token_dist_impl(&conn, start_ts, end_ts)
             }),
             AnalyticsRequest::QueryProxyLogs { params, resp } => {
-                send_result(resp, "query_proxy_logs", || {
+                run_query(&watchdog, resp, "query_proxy_logs", || {
                     query_proxy_logs_impl(&conn, *params)
                 })
             }
@@ -273,12 +313,24 @@ fn worker_loop(conn: Connection, rx: Arc<Mutex<mpsc::Receiver<AnalyticsRequest>>
                 start_ts,
                 end_ts,
                 resp,
-            } => send_result(resp, "overview", || overview_impl(&conn, start_ts, end_ts)),
+            } => run_query(&watchdog, resp, "overview", || {
+                overview_impl(&conn, start_ts, end_ts)
+            }),
             AnalyticsRequest::Shutdown => {
-                let _ = conn.execute_batch("CHECKPOINT");
+                if let Some(watchdog) = &watchdog {
+                    watchdog.run(|| {
+                        let _ = conn.execute_batch("CHECKPOINT");
+                    });
+                } else {
+                    let _ = conn.execute_batch("CHECKPOINT");
+                }
                 break;
             }
         }
+    }
+
+    if let Some(watchdog) = watchdog {
+        watchdog.stop();
     }
 }
 
@@ -369,6 +421,7 @@ impl Analytics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::LogManager;
     use crate::db::logger::create_schema;
     use chrono::{DateTime, Utc};
     use duckdb::params;
@@ -378,7 +431,7 @@ mod tests {
         let path = dir.path().join("analytics.duckdb");
         let conn = Connection::open(&path).unwrap();
         create_schema(&conn).unwrap();
-        let analytics = Analytics::new(conn.try_clone().unwrap(), 5, 2);
+        let analytics = Analytics::new(conn.try_clone().unwrap(), 5, 2, Duration::ZERO);
         (dir, conn, analytics)
     }
 
@@ -422,6 +475,66 @@ mod tests {
 
     fn hour_floor() -> i64 {
         Utc::now().timestamp() / 3600 * 3600
+    }
+
+    #[tokio::test]
+    async fn saturating_workers_and_shutting_down_concurrently_completes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut config = crate::test_utils::test_config_fast_logs(
+            dir.path().join("t.db").to_str().unwrap(),
+            dir.path().join("t.duckdb").to_str().unwrap(),
+        );
+        config.log.analytics_workers = 4;
+        let manager = LogManager::new(&config.log).unwrap();
+
+        // Keep every worker busy, then shut down underneath them. A worker
+        // stuck in a query would make `join()` never return.
+        let queries: Vec<_> = (0..16)
+            .map(|_| {
+                let m = manager.clone();
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap();
+                    rt.block_on(async {
+                        for _ in 0..20 {
+                            let _ = m.overview(0, 4_000_000_000).await;
+                        }
+                    })
+                })
+            })
+            .collect();
+
+        let start = std::time::Instant::now();
+        manager.shutdown();
+        let elapsed = start.elapsed();
+        for query in queries {
+            let _ = query.join();
+        }
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "shutdown waited {elapsed:?} on busy workers"
+        );
+    }
+
+    #[test]
+    fn concurrent_shutdown_calls_both_return() {
+        // `shutdown` joins while holding the handles lock, so a second caller
+        // parks on that lock. It must still come back rather than deadlocking.
+        let dir = tempfile::TempDir::new().unwrap();
+        let config = crate::test_utils::test_config_fast_logs(
+            dir.path().join("t.db").to_str().unwrap(),
+            dir.path().join("t.duckdb").to_str().unwrap(),
+        );
+        let manager = LogManager::new(&config.log).unwrap();
+
+        let second = manager.clone();
+        crate::test_utils::assert_no_deadlock(Duration::from_secs(15), move || {
+            let other = std::thread::spawn(move || second.shutdown());
+            manager.shutdown();
+            other.join().expect("concurrent shutdown must not deadlock");
+        });
     }
 
     #[tokio::test]

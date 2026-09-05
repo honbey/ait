@@ -57,6 +57,11 @@ analytics_workers = 2
 duckdb_memory_limit_mb = 512
 # DuckDB 单查询线程数
 duckdb_threads = 2
+# 单个 DuckDB 操作（日志刷盘、过期清理、分析查询）的墙钟时间上限（秒）。
+# 超时会被中断。这是兜底而非常规路径：2M 行的聚合约 10ms、过期清理约 90ms，
+# 只有病态扫描才可能触发——而一旦触发，它就是"请求慢"和"worker 永远 join
+# 不掉、进程退不了"之间的区别。设为 0 关闭看门狗。
+duckdb_query_timeout_secs = 60
 
 # 日志级别（trace / debug / info / warn / error）
 level = "info"
