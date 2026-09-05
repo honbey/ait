@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use axum::{
     Extension, Json,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
 };
 use chrono::serde::ts_seconds;
@@ -196,59 +196,6 @@ pub async fn get_provider(
         .ok_or_else(|| not_found(format!("Provider '{}' not found", id)))?;
 
     Ok(Json(ProviderResponse::from(provider)))
-}
-
-#[derive(Deserialize)]
-pub struct RevealQuery {
-    pub reveal: Option<bool>,
-}
-
-/// Return a provider's upstream API key.
-///
-/// The key is masked unless `?reveal=true` is passed, so listing providers or
-/// opening a detail view no longer exposes credentials by side effect.
-pub async fn get_provider_api_key(
-    State(state): State<AppState>,
-    Extension(request_id): Extension<RequestId>,
-    Path(id): Path<String>,
-    Query(query): Query<RevealQuery>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<AitError>)> {
-    let db = state.db.clone();
-    let id_clone = id.clone();
-    let provider = crate::run_blocking(move || db.get_provider(&id_clone))
-        .await
-        .map_err(internal_error)?
-        .map_err(|e| AitError::from_db_error(e).into_response())?
-        .ok_or_else(|| not_found(format!("Provider '{}' not found", id)))?;
-
-    let reveal = query.reveal.unwrap_or(false);
-
-    state.log_manager.log_audit(AuditEvent {
-        timestamp: Utc::now(),
-        request_id: request_id.0,
-        action: if reveal {
-            "view_api_key"
-        } else {
-            "view_api_key_masked"
-        }
-        .into(),
-        resource: "provider".into(),
-        resource_id: provider.id.clone(),
-        detail: None,
-    });
-
-    Ok(Json(serde_json::json!({
-        "id": provider.id,
-        "name": provider.name,
-        "api_key": if reveal {
-            provider.api_key
-        } else {
-            provider
-                .api_key
-                .as_ref()
-                .map(|k| crate::db::models::mask_api_key(k))
-        },
-    })))
 }
 
 pub async fn update_provider(
@@ -541,83 +488,70 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_provider_api_key_is_masked_without_reveal() {
-        let (router, _dir) = setup().await;
+    async fn provider_api_key_is_only_returned_masked() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state);
+        const SECRET: &str = "sk-upstream-secret-value";
+
         let resp = send_request(
             &router,
             Method::POST,
             "/api/providers",
             None,
             Some(serde_json::json!({
-                "name": "masked-provider",
+                "name": "secret-provider",
                 "type": "openai_compat",
                 "base_url": BASE_URL,
-                "api_key": "sk-test-secret",
+                "api_key": SECRET,
                 "enabled": true,
             })),
         )
         .await;
         assert_eq!(resp.status, StatusCode::CREATED);
-        let id = resp.json["id"].as_str().unwrap();
+        let id = resp.json["id"].as_str().unwrap().to_string();
 
-        let resp = send_request(
+        // Every remaining read path has to hand back the masked form.
+        for uri in ["/api/providers".to_string(), format!("/api/providers/{id}")] {
+            let resp = send_request(&router, Method::GET, &uri, None, None).await;
+            assert_eq!(resp.status, StatusCode::OK);
+            assert!(
+                !resp.json.to_string().contains(SECRET),
+                "plaintext key leaked via {uri}"
+            );
+        }
+
+        // The masked form is still shown, so the UI can tell a key is set.
+        let masked = send_request(
             &router,
             Method::GET,
-            &format!("/api/providers/{id}/api-key"),
+            &format!("/api/providers/{id}"),
             None,
             None,
         )
-        .await;
-        assert_eq!(resp.status, StatusCode::OK);
-        let masked = resp.json["api_key"].as_str().unwrap();
-        assert_ne!(masked, "sk-test-secret");
-        assert!(!masked.contains("test-secret"));
+        .await
+        .json["api_key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(masked.contains('*'), "expected a masked key, got {masked}");
     }
 
     #[tokio::test]
-    async fn get_provider_api_key_returns_stored_key() {
+    async fn removed_reveal_endpoint_returns_404() {
         let (router, _dir) = setup().await;
-        let resp = send_request(
-            &router,
-            Method::POST,
-            "/api/providers",
-            None,
-            Some(serde_json::json!({
-                "name": "keyed-provider",
-                "type": "openai_compat",
-                "base_url": BASE_URL,
-                "api_key": "sk-test-secret",
-                "enabled": true,
-            })),
-        )
-        .await;
-        assert_eq!(resp.status, StatusCode::CREATED);
-        let id = resp.json["id"].as_str().unwrap();
+        let json = create_provider(&router, "test-provider").await;
+        let id = json["id"].as_str().unwrap();
 
-        let resp = send_request(
-            &router,
-            Method::GET,
-            &format!("/api/providers/{id}/api-key?reveal=true"),
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(resp.status, StatusCode::OK);
-        assert_eq!(resp.json["api_key"], "sk-test-secret");
-    }
-
-    #[tokio::test]
-    async fn get_provider_api_key_not_found() {
-        let (router, _dir) = setup().await;
-        let resp = send_request(
-            &router,
-            Method::GET,
-            "/api/providers/nonexistent/api-key",
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(resp.status, StatusCode::NOT_FOUND);
+        // The plaintext-revealing route is gone, including its ?reveal=true
+        // form: no endpoint may hand a live upstream credential to a client.
+        for uri in [
+            format!("/api/providers/{id}/api-key"),
+            format!("/api/providers/{id}/api-key?reveal=true"),
+        ] {
+            let resp = send_request(&router, Method::GET, &uri, None, None).await;
+            assert_eq!(resp.status, StatusCode::NOT_FOUND, "unexpected for {uri}");
+            assert!(!resp.json.to_string().contains("sk-"));
+        }
     }
 
     #[tokio::test]
@@ -688,9 +622,11 @@ mod tests {
 
     #[tokio::test]
     async fn update_provider_with_api_key_succeeds() {
-        let (router, _dir) = setup().await;
+        let (state, _dir) = create_test_state();
+        let router = test_router(state.clone());
         let json = create_provider(&router, "test-provider").await;
         let id = json["id"].as_str().unwrap();
+
         let resp = send_request(
             &router,
             Method::PUT,
@@ -700,15 +636,17 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status, StatusCode::OK);
-        let resp = send_request(
-            &router,
-            Method::GET,
-            &format!("/api/providers/{id}/api-key?reveal=true"),
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(resp.json["api_key"], "sk-new-key");
+
+        // The stored key really changed...
+        let stored = state.db.get_provider(id).unwrap().unwrap();
+        assert_eq!(stored.api_key.as_deref(), Some("sk-new-key"));
+        // ...but nothing hands it back, so this reads the row directly
+        // instead of going through an endpoint that would.
+        let listed = send_request(&router, Method::GET, "/api/providers", None, None).await;
+        assert!(
+            !listed.json.to_string().contains("sk-new-key"),
+            "plaintext key leaked after update"
+        );
     }
 
     #[test]

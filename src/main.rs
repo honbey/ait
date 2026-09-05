@@ -34,8 +34,8 @@ use handlers::apikeys::{create_api_key, delete_api_key, list_api_keys, update_ap
 use handlers::logs::list_proxy_logs;
 use handlers::models::{create_model, delete_model, get_model, list_models, update_model};
 use handlers::providers::{
-    create_provider, delete_provider, get_provider, get_provider_api_key, list_provider_types,
-    list_providers, update_provider,
+    create_provider, delete_provider, get_provider, list_provider_types, list_providers,
+    update_provider,
 };
 use handlers::proxy::{
     chat_completions, completions, embeddings, health, list_models_proxy, responses,
@@ -273,7 +273,6 @@ fn build_app(state: app::AppState) -> Router {
         .route("/providers/{id}", get(get_provider))
         .route("/providers/{id}", put(update_provider))
         .route("/providers/{id}", delete(delete_provider))
-        .route("/providers/{id}/api-key", get(get_provider_api_key))
         .route("/provider-types", get(list_provider_types))
         // Model management
         .route("/models", post(create_model))
