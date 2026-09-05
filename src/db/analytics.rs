@@ -53,6 +53,7 @@ impl AnalyticsError {
                 code: 503,
                 r#type: "service_unavailable".to_string(),
                 detail: None,
+                request_id: None,
             }),
         )
     }

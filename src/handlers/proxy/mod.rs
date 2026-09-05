@@ -768,6 +768,14 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status, axum::http::StatusCode::TOO_MANY_REQUESTS);
+        // The /v1 stack carries the id too: `upstream_error` goes through the
+        // same `AitError::into_response` funnel as the admin errors.
+        let header_id = resp
+            .headers
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        assert_eq!(resp.json["request_id"].as_str(), header_id.as_deref());
     }
 
     #[tokio::test]

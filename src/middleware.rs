@@ -1,10 +1,9 @@
 use crate::app::{AppState, NEGATIVE_CACHE_TTL};
 use crate::config::TrustedProxy;
 use crate::db::{AccessEvent, ApiKeyContext, ApiKeyInfo, RequestId, hash_key};
-use crate::error::{AitError, db_error, internal_error, unauthorized};
+use crate::error::{AitError, REQUEST_ID, db_error, internal_error, unauthorized};
 use axum::{
     Json,
-    body::Body,
     extract::{ConnectInfo, Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     middleware::Next,
@@ -191,16 +190,14 @@ pub async fn access_log_middleware(
     )
     .map(|ip| ip.to_string());
     req.extensions_mut().insert(RequestId(request_id.clone()));
-    let mut response = next.run(req).await;
+    // Scope the id around the rest of the request so `AitError::into_response`
+    // can stamp it into error bodies as they are built - no body rewriting.
+    let mut response = REQUEST_ID.scope(request_id.clone(), next.run(req)).await;
 
     response.headers_mut().insert(
         HeaderName::from_static("x-request-id"),
         HeaderValue::from_str(&request_id).expect("UUID is valid ASCII"),
     );
-
-    if response.status().is_client_error() || response.status().is_server_error() {
-        response = attach_request_id_to_body(response, &request_id).await;
-    }
 
     let latency = start.elapsed();
     let status = response.status().as_u16() as i32;
@@ -216,50 +213,6 @@ pub async fn access_log_middleware(
     });
 
     response
-}
-
-/// Upper bound for re-reading an error body before injecting the request id.
-/// Error bodies are produced by Ait itself and are far smaller than this.
-const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
-
-/// Inject `request_id` into a JSON error body so clients can correlate a
-/// failed request with server-side logs without reading headers. Non-JSON and
-/// unparseable bodies pass through untouched.
-async fn attach_request_id_to_body(response: Response, request_id: &str) -> Response {
-    let is_json = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.starts_with("application/json"));
-    if !is_json {
-        return response;
-    }
-
-    let (mut parts, body) = response.into_parts();
-    let bytes = match axum::body::to_bytes(body, MAX_ERROR_BODY_BYTES).await {
-        Ok(bytes) => bytes,
-        // Unreadable body: emit a minimal error carrying the id rather than
-        // dropping the failure entirely.
-        Err(_) => {
-            let fallback = format!(r#"{{"message":"internal error","request_id":"{request_id}"}}"#);
-            return Response::from_parts(parts, Body::from(fallback));
-        }
-    };
-
-    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return Response::from_parts(parts, Body::from(bytes));
-    };
-    let Some(obj) = value.as_object_mut() else {
-        return Response::from_parts(parts, Body::from(bytes));
-    };
-    obj.insert(
-        "request_id".to_string(),
-        serde_json::Value::String(request_id.to_string()),
-    );
-    let new_body = serde_json::to_vec(&value).unwrap_or_else(|_| bytes.to_vec());
-    // The body length changed; hyper recomputes Content-Length when absent.
-    parts.headers.remove(header::CONTENT_LENGTH);
-    Response::from_parts(parts, Body::from(new_body))
 }
 
 #[cfg(test)]
