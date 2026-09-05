@@ -10,7 +10,7 @@
 
 - **多提供商支持** — [llama.cpp](https://llama.app/)、[Ollama](https://ollama.com)、[DeepSeek](https://www.deepseek.com/)、[Zhipu](https://bigmodel.cn/) 等提供了 OpenAI Compatible 接口的
 - **Web 管理界面** — 基于 Leptos 0.8 CSR 的 WASM 前端（ECharts 图表）
-  - **Admin 管理** — 添加/更新/删除提供商和模型
+  - **Admin 管理** — 添加/更新/删除提供商和模型，注意：**Admin API 接口不鉴权**，鉴权完全交由前方反代服务
   - **API Key 管理** — 创建/启用/禁用/删除 API Key
   - **Docs / About** — 文档中心与关于页面
   - **骨架屏加载** — 页面切换时显示占位骨架屏，减少布局抖动
@@ -137,7 +137,7 @@ ait -c /path/to/config.toml
 ## OpenAI Compatible 接口
 
 认证方式：`Authorization: Bearer <token>` ，
-可以通过配置文件 `auth.enabled: false` 关闭认证。
+可以通过配置文件 `auth.enabled: false` 关闭认证，注意：关闭后**整个项目内部会完全没鉴权**。
 
 | 方法 | 路径 | 说明 |
 | ------ | ------ | ------ |
