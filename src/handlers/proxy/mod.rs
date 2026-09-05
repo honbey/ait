@@ -39,6 +39,23 @@ mod sse;
 use exec::{proxy_non_streamed, proxy_streamed};
 use guard::{ProxyLogGuard, UsageTokens};
 
+/// Parse a request body and release the raw bytes immediately.
+///
+/// The `Bytes` holding the request is only needed while parsing, but a
+/// shadowed binding keeps it alive until the handler returns — that is the
+/// whole upstream round-trip, which for a stream can be minutes. Releasing it
+/// here keeps a copy of the body (up to `max_request_body_bytes`) out of
+/// memory for the duration, per in-flight request.
+fn parse_body(
+    body: bytes::Bytes,
+) -> Result<(serde_json::Value, usize), (StatusCode, Json<AitError>)> {
+    let body_len = body.len();
+    let parsed = serde_json::from_slice(&body)
+        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    drop(body);
+    Ok((parsed, body_len))
+}
+
 pub async fn chat_completions(
     State(state): State<AppState>,
     Extension(api_key): Extension<ApiKeyContext>,
@@ -46,9 +63,7 @@ pub async fn chat_completions(
     Extension(request_id): Extension<RequestId>,
     body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    let body_len = body.len();
-    let body = serde_json::from_slice(&body)
-        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    let (body, body_len) = parse_body(body)?;
     proxy_request(
         state,
         api_key,
@@ -68,9 +83,7 @@ pub async fn completions(
     Extension(request_id): Extension<RequestId>,
     body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    let body_len = body.len();
-    let body = serde_json::from_slice(&body)
-        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    let (body, body_len) = parse_body(body)?;
     proxy_request(
         state,
         api_key,
@@ -90,9 +103,7 @@ pub async fn embeddings(
     Extension(request_id): Extension<RequestId>,
     body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    let body_len = body.len();
-    let body = serde_json::from_slice(&body)
-        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    let (body, body_len) = parse_body(body)?;
     proxy_request(
         state,
         api_key,
@@ -112,9 +123,7 @@ pub async fn responses(
     Extension(request_id): Extension<RequestId>,
     body: bytes::Bytes,
 ) -> Result<Response, (StatusCode, Json<AitError>)> {
-    let body_len = body.len();
-    let body = serde_json::from_slice(&body)
-        .map_err(|_| AitError::bad_request("invalid request body").into_response())?;
+    let (body, body_len) = parse_body(body)?;
     proxy_request(
         state,
         api_key,
