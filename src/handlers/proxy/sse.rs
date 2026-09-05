@@ -175,7 +175,12 @@ impl<S> SseTransformStream<S> {
         // so this avoids a utf8 round trip and a final whole-buffer copy.
         let mut out = Vec::with_capacity(event.len() + 64);
         for line in text.lines() {
-            if let Some(payload) = line.strip_prefix("data: ") {
+            // SSE allows `data:` with or without one separating space; the
+            // space is not part of the payload, and upstreams emit both forms.
+            let payload = line
+                .strip_prefix("data:")
+                .map(|rest| rest.strip_prefix(' ').unwrap_or(rest));
+            if let Some(payload) = payload {
                 self.try_extract_usage_from(payload.as_bytes());
                 let transformed = self
                     .upstream
@@ -460,6 +465,25 @@ mod tests {
         assert!(text.contains("data: "));
         assert!(text.contains("model"));
         assert!(text.contains("ait-proxy"));
+    }
+
+    #[tokio::test]
+    async fn transform_event_rewrites_data_lines_without_space() {
+        let (state, _dir) = create_test_state_fast_logs();
+        let s = make_stream(
+            stream::iter(Vec::<Result<bytes::Bytes, _>>::new()),
+            state.log_manager,
+        );
+        let mut s = s;
+        // SSE permits `data:` with no separating space; upstreams emit both
+        // forms and both carry a payload that must be transformed.
+        let event = b"data:{\"choices\":[]}\n\n";
+        let transformed = s.transform_event(event);
+        let text = std::str::from_utf8(&transformed).unwrap();
+        assert!(
+            text.contains("ait-proxy"),
+            "payload must be transformed: {text}"
+        );
     }
 
     #[tokio::test]

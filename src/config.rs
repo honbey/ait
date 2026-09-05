@@ -148,6 +148,17 @@ pub struct SecurityConfig {
 /// anything larger would wrap or panic inside `Duration::days`.
 const MAX_RETENTION_DAYS: u64 = 36_500;
 
+/// Reject a duration whose zero form means "no wait" at every consumer:
+/// `Duration::from_secs(0)` is accepted everywhere but makes
+/// `tokio::time::interval` panic, the log worker's `recv_timeout` spin on an
+/// empty channel, and a proxied request fail the moment it is issued.
+fn require_positive_secs(secs: u64, key: &str) -> Result<(), ConfigError> {
+    if secs == 0 {
+        return Err(ConfigError::Message(format!("{key} must be >= 1")));
+    }
+    Ok(())
+}
+
 impl ConfigApp {
     /// Load configuration. `config_path` specifies the config file path (without extension),
     /// defaults to `config/ait` when `None`.
@@ -205,6 +216,34 @@ impl ConfigApp {
         if !(1..=5).contains(&app.proxy.prompt_token_divisor) {
             return Err(ConfigError::Message(
                 "proxy.prompt_token_divisor must be between 1 and 5".to_string(),
+            ));
+        }
+
+        // Every consumer treats 0 as "do not wait", which is never the intent:
+        // the cache cleanup task panics on `interval(0)`, the log worker spins
+        // on `recv_timeout(0)`, and a zero HTTP timeout fails each request as
+        // soon as it is applied.
+        for (secs, key) in [
+            (
+                app.server.cache_cleanup_interval_secs,
+                "server.cache_cleanup_interval_secs",
+            ),
+            (app.log.flush_interval_secs, "log.flush_interval_secs"),
+            (app.proxy.timeout_secs, "proxy.timeout_secs"),
+            (
+                app.proxy.sse_idle_timeout_secs,
+                "proxy.sse_idle_timeout_secs",
+            ),
+            (app.proxy.connect_timeout_secs, "proxy.connect_timeout_secs"),
+        ] {
+            require_positive_secs(secs, key)?;
+        }
+
+        // A zero-capacity sync channel is a rendezvous channel: every event is
+        // dropped whenever the worker is busy flushing.
+        if app.log.channel_cap == 0 {
+            return Err(ConfigError::Message(
+                "log.channel_cap must be >= 1".to_string(),
             ));
         }
 
@@ -416,6 +455,25 @@ prompt_token_divisor = {bad}
                 err.to_string().contains("prompt_token_divisor"),
                 "unexpected error: {err}"
             );
+        }
+    }
+
+    #[test]
+    fn zero_durations_and_channel_cap_rejected() {
+        // Each of these silently breaks a loop or the proxy path: interval(0)
+        // panics, recv_timeout(0) spins, a zero HTTP timeout fails every
+        // request on arrival, and channel_cap 0 drops every log event.
+        for (section, key) in [
+            ("server", "cache_cleanup_interval_secs"),
+            ("log", "flush_interval_secs"),
+            ("log", "channel_cap"),
+            ("proxy", "timeout_secs"),
+            ("proxy", "sse_idle_timeout_secs"),
+            ("proxy", "connect_timeout_secs"),
+        ] {
+            let (_dir, path) = write_toml(&format!("[{section}]\n{key} = 0\n"));
+            let err = ConfigApp::new(Some(&path)).unwrap_err();
+            assert!(err.to_string().contains(key), "unexpected error: {err}");
         }
     }
 

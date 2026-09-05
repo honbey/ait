@@ -64,10 +64,26 @@ pub(crate) async fn proxy_non_streamed(
         "proxy_non_streamed: execute start, elapsed={}ms",
         start.elapsed().as_millis()
     );
-    let response = client.execute(request).await.map_err(|e| {
-        tracing::warn!("Failed to connect to provider '{}': {}", provider.name, e);
-        AitError::upstream_error(502, "upstream request failed").into_response()
-    })?;
+    let timeout = Duration::from_secs(state.config.proxy.timeout_secs);
+    // The pinned client carries no overall request timeout, so waiting for the
+    // response headers is bounded here. Without it an upstream that trickles
+    // headers holds the connection and its request slot open indefinitely;
+    // the body read is bounded by the same cap below.
+    let response = match tokio::time::timeout(timeout, client.execute(request)).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => {
+            tracing::warn!("Failed to connect to provider '{}': {}", provider.name, e);
+            return Err(AitError::upstream_error(502, "upstream request failed").into_response());
+        }
+        Err(_) => {
+            tracing::warn!(
+                "Upstream '{}' sent no response headers within {}s",
+                provider.name,
+                state.config.proxy.timeout_secs
+            );
+            return Err(AitError::upstream_error(408, "upstream request timed out").into_response());
+        }
+    };
     trace!(
         model = model_name,
         "proxy_non_streamed: response received, elapsed={}ms",
@@ -95,9 +111,6 @@ pub(crate) async fn proxy_non_streamed(
         "proxy_non_streamed: fetching body, elapsed={}ms",
         start.elapsed().as_millis()
     );
-    let timeout = Duration::from_secs(state.config.proxy.timeout_secs);
-    // 0 means unlimited, matching the streaming path in sse.rs; without this
-    // a zero cap would reject every non-streamed response.
     let max_body = match state.config.proxy.max_response_body_bytes {
         0 => usize::MAX,
         bytes => bytes as usize,
@@ -213,12 +226,28 @@ pub(crate) async fn proxy_streamed(
         model = base_event.model_name,
         "proxy_streamed: execute start"
     );
-    let response = client.execute(request).await.map_err(|e| {
-        tracing::warn!("Failed to connect to provider: {}", e);
-        guard.event.error_message = Some(e.to_string());
-        guard.finalize(&UsageTokens::default(), "502");
-        AitError::upstream_error(502, "upstream request failed").into_response()
-    })?;
+    let timeout = Duration::from_secs(state.config.proxy.timeout_secs);
+    // Same bound as the non-streamed path below: the idle timeout only starts
+    // once the headers arrive, so an upstream that never answers would hold
+    // this request open indefinitely.
+    let response = match tokio::time::timeout(timeout, client.execute(request)).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => {
+            tracing::warn!("Failed to connect to provider: {}", e);
+            guard.event.error_message = Some(e.to_string());
+            guard.finalize(&UsageTokens::default(), "502");
+            return Err(AitError::upstream_error(502, "upstream request failed").into_response());
+        }
+        Err(_) => {
+            tracing::warn!(
+                "Upstream sent no response headers within {}s",
+                state.config.proxy.timeout_secs
+            );
+            guard.event.error_message = Some("upstream request timed out".to_string());
+            guard.finalize(&UsageTokens::default(), "408");
+            return Err(AitError::upstream_error(408, "upstream request timed out").into_response());
+        }
+    };
     trace!(
         model = base_event.model_name,
         "proxy_streamed: response received"
@@ -233,7 +262,6 @@ pub(crate) async fn proxy_streamed(
     }
 
     if !status.is_success() {
-        let timeout = Duration::from_secs(state.config.proxy.timeout_secs);
         let body = tokio::time::timeout(timeout, response.text())
             .await
             .map_err(|_| AitError::upstream_error(408, "upstream read timeout").into_response())?

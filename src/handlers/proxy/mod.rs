@@ -19,17 +19,64 @@ use crate::providers::create_provider;
 use crate::ssrf;
 use crate::utils::mask_sensitive_value;
 
-/// Insert into a cache only while under the entry cap; beyond it the entry is
-/// not cached at all. `DashMap::len` is approximate under concurrency, so a
-/// cache stays bounded within a small multiple of `cache_max_entries`.
+/// Cache entries that know when they were written.
+///
+/// `insert_capped` is generic over the value type, so it cannot reach a
+/// timestamp on its own; the caches that go through it expose theirs here.
+trait TimestampedEntry {
+    fn inserted_at(&self) -> Instant;
+}
+
+impl TimestampedEntry for Instant {
+    fn inserted_at(&self) -> Instant {
+        *self
+    }
+}
+
+impl<T> TimestampedEntry for (T, Instant) {
+    fn inserted_at(&self) -> Instant {
+        self.1
+    }
+}
+
+/// Insert into a cache, evicting the oldest entry once the cap is reached.
+///
+/// Dropping the new entry instead would stop caching altogether: hot entries
+/// slide their timestamp on every hit (see `proxy_request`), so they never age
+/// out during cleanup and the cache stays pinned at the cap forever.
+///
+/// `DashMap::len` is approximate under concurrency, so a cache stays bounded
+/// within a small multiple of `cache_max_entries`.
 ///
 /// Shared by the model cache and the negative model cache (keys come from
 /// request bodies and are therefore attacker-controlled) and the provider
 /// cache, so all three enforce the cap.
-fn insert_capped<V>(map: &dashmap::DashMap<String, V>, key: &str, entry: V, max_entries: usize) {
-    if map.len() < max_entries {
-        map.insert(key.to_string(), entry);
+fn insert_capped<V: TimestampedEntry>(
+    map: &dashmap::DashMap<String, V>,
+    key: &str,
+    entry: V,
+    max_entries: usize,
+) {
+    if max_entries == 0 {
+        return;
     }
+    // Refreshing an existing key must not count against the cap.
+    if map.contains_key(key) {
+        map.insert(key.to_string(), entry);
+        return;
+    }
+    if map.len() >= max_entries {
+        // Clone the key and let the iterator (and the shard read lock it
+        // holds) go before removing; parking_lot's RwLock is not reentrant.
+        let oldest = map
+            .iter()
+            .min_by_key(|e| e.value().inserted_at())
+            .map(|e| e.key().clone());
+        if let Some(oldest) = oldest {
+            map.remove(&oldest);
+        }
+    }
+    map.insert(key.to_string(), entry);
 }
 
 mod exec;
@@ -573,6 +620,23 @@ mod tests {
         let map: dashmap::DashMap<String, Instant> = dashmap::DashMap::new();
         insert_capped(&map, "m0", Instant::now(), 0);
         assert!(map.is_empty());
+    }
+
+    #[test]
+    fn insert_capped_evicts_oldest_when_full() {
+        use std::time::Duration;
+
+        let map: dashmap::DashMap<String, Instant> = dashmap::DashMap::new();
+        let start = Instant::now();
+        for i in 0..3 {
+            insert_capped(&map, &format!("m{i}"), start + Duration::from_secs(i), 3);
+        }
+        // A full cache must keep caching: the new entry replaces the oldest
+        // instead of being dropped, which is what kept caching off entirely.
+        insert_capped(&map, "m3", start + Duration::from_secs(3), 3);
+        assert_eq!(map.len(), 3);
+        assert!(!map.contains_key("m0"), "oldest entry is evicted");
+        assert!(map.contains_key("m3"), "newest entry is kept");
     }
 
     #[test]
