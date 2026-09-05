@@ -5,7 +5,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use std::time::Instant;
+use std::sync::atomic::Ordering;
 
 use crate::app::AppState;
 use crate::db::{ApiKeyUpdate, AuditEvent, RequestId};
@@ -109,15 +109,11 @@ pub async fn delete_api_key(
         .map_err(internal_error)?
         .map_err(|e| AitError::from_db_error(e).into_response())?;
     state.api_key_cache.remove(&hash);
-    // Pin the hash as rejected so an in-flight cache-miss lookup that read the
-    // row before the delete cannot re-populate the positive cache with a key
-    // that no longer exists. Deleted keys never come back: the raw value is
-    // generated once and never reissued.
-    if state.negative_key_cache.len() < state.config.server.cache_max_entries as usize {
-        state
-            .negative_key_cache
-            .insert(hash.clone(), Instant::now());
-    }
+    // Invalidate every lookup already in flight: those read the row before the
+    // delete and would otherwise cache a key that no longer exists, keeping it
+    // usable for a full CACHE_TTL. A negative-cache pin cannot cover that
+    // window - its TTL is far shorter than the entry it has to outlive.
+    state.key_revision.fetch_add(1, Ordering::AcqRel);
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),
@@ -179,6 +175,9 @@ pub async fn update_api_key(
     // Re-enabling a key that was rejected while disabled must also drop the
     // negative entry, or it stays locked out until NEGATIVE_CACHE_TTL expires.
     state.negative_key_cache.remove(&hash);
+    // Toggling `enabled` or extending `expires_at` changes what the cached
+    // entry must say, so drop any in-flight lookup that read the old row.
+    state.key_revision.fetch_add(1, Ordering::AcqRel);
 
     state.log_manager.log_audit(AuditEvent {
         timestamp: Utc::now(),

@@ -33,6 +33,8 @@ pub enum LokiInitError {
     InvalidUrl(String),
     /// reqwest blocking client failed to build.
     Client(reqwest::Error),
+    /// Only one half of the basic-auth pair was configured.
+    IncompleteBasicAuth,
 }
 
 impl std::fmt::Display for LokiInitError {
@@ -40,6 +42,10 @@ impl std::fmt::Display for LokiInitError {
         match self {
             Self::InvalidUrl(url) => write!(f, "invalid Loki url: {url}"),
             Self::Client(e) => write!(f, "HTTP client init failed: {e}"),
+            Self::IncompleteBasicAuth => write!(
+                f,
+                "basic_auth_user and basic_auth_password must be set together (or neither)"
+            ),
         }
     }
 }
@@ -75,8 +81,12 @@ impl LokiSink {
             _ => return Err(LokiInitError::InvalidUrl(push_url)),
         }
 
-        if config.basic_auth_user.is_some() != config.basic_auth_password.is_some() {
-            warn!("[loki] basic_auth requires both user and password; auth disabled");
+        // Refuse a half-configured pair: sending events with no auth header on
+        // a typo is worse than not sending them. Config load rejects this too;
+        // this keeps the invariant for any other caller.
+        match (&config.basic_auth_user, &config.basic_auth_password) {
+            (Some(_), Some(_)) | (None, None) => {}
+            _ => return Err(LokiInitError::IncompleteBasicAuth),
         }
 
         let client = reqwest::blocking::Client::builder()

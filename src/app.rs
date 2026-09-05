@@ -11,6 +11,7 @@ use crate::providers::UpstreamProvider;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
@@ -57,6 +58,10 @@ pub struct AppState {
     /// Per `host:port` clients whose DNS is pinned to SSRF-verified IPs
     /// (see `ssrf::pinned_client`). Bounded by the configured provider hosts.
     pub pinned_clients: Arc<DashMap<String, (reqwest::Client, Instant)>>,
+    /// Bumped every time an API key row changes. An auth lookup that began
+    /// before the bump read a row that may no longer be current, so it must
+    /// not cache what it found - see `auth_middleware`.
+    pub key_revision: Arc<AtomicU64>,
     pub dlp: DlpScanner,
 }
 
@@ -133,6 +138,7 @@ impl AppState {
             provider_cache,
             ssrf_dns_cache,
             pinned_clients,
+            key_revision: Arc::new(AtomicU64::new(0)),
             dlp,
         })
     }

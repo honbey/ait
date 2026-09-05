@@ -354,6 +354,17 @@ impl ConfigApp {
                 "log.analytics_workers must be between 1 and 8".to_string(),
             ));
         }
+        // Half a credential pair would ship logs with no auth header at all,
+        // which is worse than refusing to start: treat it like the wildcard
+        // CORS rule above rather than downgrading silently.
+        if app.log.loki.basic_auth_user.is_some() != app.log.loki.basic_auth_password.is_some() {
+            return Err(ConfigError::Message(
+                "log.loki.basic_auth_user and log.loki.basic_auth_password must be \
+                 set together (or neither)"
+                    .to_string(),
+            ));
+        }
+
         if app.log.duckdb_memory_limit_mb == 0 {
             return Err(ConfigError::Message(
                 "log.duckdb_memory_limit_mb must be >= 1".to_string(),
@@ -701,6 +712,42 @@ duckdb_threads = 4
                 "{key} = {value} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn loki_half_configured_basic_auth_rejected() {
+        // Only one half set would ship events with no auth header at all.
+        for toml in [
+            r#"[log.loki]
+enabled = true
+url = "http://loki:3100"
+basic_auth_user = "u""#,
+            r#"[log.loki]
+enabled = true
+url = "http://loki:3100"
+basic_auth_password = "p""#,
+        ] {
+            let (_dir, path) = write_toml(toml);
+            let err = ConfigApp::new(Some(&path)).unwrap_err();
+            assert!(
+                err.to_string().contains("basic_auth"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn loki_full_basic_auth_accepted() {
+        let (_dir, path) = write_toml(
+            r#"[log.loki]
+enabled = true
+url = "http://loki:3100"
+basic_auth_user = "u"
+basic_auth_password = "p""#,
+        );
+        let config = ConfigApp::new(Some(&path)).unwrap();
+        assert_eq!(config.log.loki.basic_auth_user.as_deref(), Some("u"));
+        assert_eq!(config.log.loki.basic_auth_password.as_deref(), Some("p"));
     }
 
     #[test]

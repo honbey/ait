@@ -11,6 +11,7 @@ use axum::{
 };
 use chrono::Utc;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -102,21 +103,33 @@ pub async fn auth_middleware(
         .acquire_owned()
         .await
         .map_err(internal_error)?;
+    // Read the revision before the query: if a delete or update lands while
+    // this lookup is in flight, the row it returns is already stale.
+    let revision = state.key_revision.load(Ordering::Acquire);
     let key_info = crate::run_blocking(move || db.get_api_key_by_raw(&token))
         .await
         .map_err(internal_error)?
         .map_err(|_| db_error())?;
     drop(permit);
+    let still_current = state.key_revision.load(Ordering::Acquire) == revision;
 
     match key_info {
         Some(info) => {
-            state
-                .api_key_cache
-                .insert(hash, (info.clone(), Instant::now()));
+            // Caching a row that a concurrent delete removed would keep a
+            // revoked key working for a whole CACHE_TTL, and one that a
+            // concurrent update touched would carry the old `enabled` flag.
+            // Drop the read instead and let the next request reload it.
+            if still_current {
+                state
+                    .api_key_cache
+                    .insert(hash, (info.clone(), Instant::now()));
+            }
             verify_key(&info, &mut req)?;
         }
         None => {
-            if state.negative_key_cache.len() < state.config.server.cache_max_entries as usize {
+            if still_current
+                && state.negative_key_cache.len() < state.config.server.cache_max_entries as usize
+            {
                 state.negative_key_cache.insert(hash, Instant::now());
             }
             return Err(unauthorized("Unauthorized: invalid or missing API key"));
@@ -219,12 +232,14 @@ pub async fn access_log_middleware(
 mod tests {
     use super::{ConnectInfo, Request, forwarded_client_ip, get_client_ip};
     use crate::config::TrustedProxy;
+    use crate::db::hash_key;
     use crate::test_utils::{
         create_test_state, send_request, send_request_with_headers, test_router,
     };
     use axum::body::Body;
     use axum::http::{Method, StatusCode, header};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+    use std::sync::atomic::Ordering;
 
     async fn create_key(router: &axum::Router, name: &str) -> String {
         let resp = send_request(
@@ -334,6 +349,60 @@ mod tests {
         let router = test_router(state);
         let resp = send_request(&router, Method::GET, "/v1/models", Some("fake-key"), None).await;
         assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn deleting_an_api_key_bumps_the_revision() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state.clone());
+        let (stored, _raw) = state.db.insert_api_key("doomed", None).unwrap();
+
+        let before = state.key_revision.load(Ordering::Acquire);
+        let resp = send_request(
+            &router,
+            Method::DELETE,
+            &format!("/api/api-keys/{}", stored.id),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::NO_CONTENT);
+        assert_eq!(state.key_revision.load(Ordering::Acquire), before + 1);
+    }
+
+    #[tokio::test]
+    async fn revoked_key_is_rejected_and_stays_out_of_the_cache() {
+        let (state, _dir) = create_test_state();
+        let router = test_router(state.clone());
+        let (stored, raw_key) = state.db.insert_api_key("doomed", None).unwrap();
+
+        // Warm the positive cache so the delete has something to invalidate.
+        let ok = send_request(&router, Method::GET, "/v1/models", Some(&raw_key), None).await;
+        assert_eq!(ok.status, StatusCode::OK);
+        let hash = hash_key(&raw_key);
+        assert!(state.api_key_cache.contains_key(&hash));
+
+        // Delete through the handler: it has to drop the cached entry itself.
+        let resp = send_request(
+            &router,
+            Method::DELETE,
+            &format!("/api/api-keys/{}", stored.id),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(resp.status, StatusCode::NO_CONTENT);
+        assert!(
+            !state.api_key_cache.contains_key(&hash),
+            "delete must drop the cached key"
+        );
+
+        let resp = send_request(&router, Method::GET, "/v1/models", Some(&raw_key), None).await;
+        assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+        assert!(
+            !state.api_key_cache.contains_key(&hash),
+            "a revoked key must not be written back to the positive cache"
+        );
     }
 
     #[tokio::test]

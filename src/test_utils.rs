@@ -15,6 +15,7 @@ use chrono::Utc;
 use dashmap::DashMap;
 use serde_json::Value;
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -165,6 +166,7 @@ fn build_state(config: ConfigApp, dir: TempDir) -> (AppState, TempDir) {
         provider_cache: Arc::new(DashMap::new()),
         ssrf_dns_cache: Arc::new(DashMap::new()),
         pinned_clients: Arc::new(DashMap::new()),
+        key_revision: Arc::new(AtomicU64::new(0)),
         dlp,
     };
     (state, dir)
