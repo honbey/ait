@@ -23,6 +23,9 @@ pub struct DlpScanner {
     /// Multi-pattern matcher over `rules`; `None` if the automaton failed to
     /// build, in which case detection is disabled.
     matcher: Option<AhoCorasick>,
+    /// Whether JSON number literals are scanned; see
+    /// [`crate::config::DlpConfig::scan_numbers`].
+    scan_numbers: bool,
 }
 
 impl DlpScanner {
@@ -50,6 +53,7 @@ impl DlpScanner {
             enabled: enabled && matcher.is_some(),
             rules,
             matcher,
+            scan_numbers: config.scan_numbers,
         }
     }
 
@@ -58,8 +62,9 @@ impl DlpScanner {
     }
 
     /// Returns the first configured value found in the body, or `None` if no
-    /// value matches. Only JSON string leaf values are inspected; object keys
-    /// are ignored to avoid false matches on field names.
+    /// value matches. JSON string leaves are always inspected; number leaves
+    /// only when `scan_numbers` is enabled. Object keys are never inspected,
+    /// to avoid false matches on field names.
     pub fn scan(&self, body: &Value) -> Option<&str> {
         if !self.enabled {
             return None;
@@ -67,35 +72,27 @@ impl DlpScanner {
         let Some(matcher) = &self.matcher else {
             return None;
         };
-        // Index of the earliest configured rule matching any string leaf.
+        // Index of the earliest configured rule matching any scanned leaf.
         // Scanning leaf-by-leaf keeps cross-leaf matches impossible (the
         // previous concatenated buffer separated leaves with a space).
         let mut best: Option<usize> = None;
-        scan_value(body, matcher, &mut best);
+        scan_value(body, matcher, self.scan_numbers, &mut best);
         best.map(|idx| self.rules[idx].as_str())
     }
 }
 
-fn scan_value(value: &Value, matcher: &AhoCorasick, best: &mut Option<usize>) {
+fn scan_value(value: &Value, matcher: &AhoCorasick, scan_numbers: bool, best: &mut Option<usize>) {
     if *best == Some(0) {
         return; // cannot improve on the first configured rule
     }
     match value {
-        Value::String(s) => {
-            for mat in matcher.find_iter(s) {
-                let idx = mat.pattern().as_usize();
-                *best = Some(match *best {
-                    Some(prev) => prev.min(idx),
-                    None => idx,
-                });
-                if *best == Some(0) {
-                    return;
-                }
-            }
-        }
+        Value::String(s) => scan_text(s, matcher, best),
+        // A rule that is purely numeric can arrive as a JSON number literal,
+        // which a string-only scan never sees.
+        Value::Number(n) if scan_numbers => scan_text(&n.to_string(), matcher, best),
         Value::Array(items) => {
             for item in items {
-                scan_value(item, matcher, best);
+                scan_value(item, matcher, scan_numbers, best);
                 if *best == Some(0) {
                     return;
                 }
@@ -103,13 +100,27 @@ fn scan_value(value: &Value, matcher: &AhoCorasick, best: &mut Option<usize>) {
         }
         Value::Object(map) => {
             for v in map.values() {
-                scan_value(v, matcher, best);
+                scan_value(v, matcher, scan_numbers, best);
                 if *best == Some(0) {
                     return;
                 }
             }
         }
         _ => {}
+    }
+}
+
+/// Record the earliest configured rule occurring in `text`.
+fn scan_text(text: &str, matcher: &AhoCorasick, best: &mut Option<usize>) {
+    for mat in matcher.find_iter(text) {
+        let idx = mat.pattern().as_usize();
+        *best = Some(match *best {
+            Some(prev) => prev.min(idx),
+            None => idx,
+        });
+        if *best == Some(0) {
+            return;
+        }
     }
 }
 
@@ -121,6 +132,15 @@ mod tests {
         DlpConfig {
             enabled,
             sensitive_values: values.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Same as [`config`] with number-literal scanning turned on.
+    fn config_scanning_numbers(enabled: bool, values: &[&str]) -> DlpConfig {
+        DlpConfig {
+            scan_numbers: true,
+            ..config(enabled, values)
         }
     }
 
@@ -183,6 +203,59 @@ mod tests {
             ]
         });
         assert_eq!(scanner.scan(&value), Some("idcard"));
+    }
+
+    #[test]
+    fn number_leaf_ignored_by_default() {
+        let scanner = DlpScanner::new(&config(true, &["13800138000"]));
+        // A purely numeric rule arriving as a JSON number literal stays
+        // invisible unless scan_numbers is enabled.
+        assert!(
+            scanner
+                .scan(&serde_json::json!({"user_id": 13800138000u64}))
+                .is_none()
+        );
+        // The same digits inside a string are still caught.
+        assert_eq!(
+            scanner.scan(&body("my phone is 13800138000")),
+            Some("13800138000")
+        );
+    }
+
+    #[test]
+    fn number_leaf_matched_when_scan_numbers_enabled() {
+        let scanner = DlpScanner::new(&config_scanning_numbers(true, &["13800138000"]));
+        assert_eq!(
+            scanner.scan(&serde_json::json!({"user_id": 13800138000u64})),
+            Some("13800138000")
+        );
+        // Nested numbers are reached the same way.
+        assert_eq!(
+            scanner.scan(&serde_json::json!({"a": [{"b": 13800138000u64}]})),
+            Some("13800138000")
+        );
+    }
+
+    #[test]
+    fn scan_numbers_does_not_change_other_behaviour() {
+        let scanner = DlpScanner::new(&config_scanning_numbers(true, &["13800138000"]));
+        // Strings still match...
+        assert_eq!(
+            scanner.scan(&body("my phone is 13800138000")),
+            Some("13800138000")
+        );
+        // ...a different number does not...
+        assert!(
+            scanner
+                .scan(&serde_json::json!({"user_id": 13800138001u64}))
+                .is_none()
+        );
+        // ...and object keys stay out of scope.
+        assert!(
+            scanner
+                .scan(&serde_json::json!({ "13800138000": "safe" }))
+                .is_none()
+        );
     }
 
     #[test]

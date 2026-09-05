@@ -92,3 +92,7 @@ enabled = false
 # 命中即阻断的敏感值字面量列表（子串匹配、区分大小写）
 # 例如 sensitive_values = ["110101199001011234", "13800138000", "sk-xxxxxxxxxx"]
 sensitive_values = []
+# 是否同时检测 JSON number 字面量（默认只检测字符串值）。
+# 仅对纯数字的敏感值有意义：如 {"user_id": 13800138000} 中的数字。
+# 开启后每个 number 字段都会额外参与匹配，略有开销。
+scan_numbers = false

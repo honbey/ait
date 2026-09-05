@@ -132,6 +132,11 @@ pub struct DlpConfig {
     pub enabled: bool,
     #[serde(default)]
     pub sensitive_values: Vec<String>,
+    /// Scan JSON number literals as well, not only string values. Only a
+    /// purely numeric rule can ever appear as a number, so this is off by
+    /// default: enabling it costs an extra allocation per number leaf.
+    #[serde(default)]
+    pub scan_numbers: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -199,6 +204,7 @@ impl ConfigApp {
             .set_default("security.cors_allow_credentials", false)?
             .set_default("security.dlp.enabled", false)?
             .set_default("security.dlp.sensitive_values", Vec::<String>::new())?
+            .set_default("security.dlp.scan_numbers", false)?
             .add_source(File::new(config_file, FileFormat::Toml).required(false))
             .add_source(Environment::with_prefix("AIT").separator("_"))
             .build()?
@@ -527,6 +533,7 @@ cors_allow_credentials = true
         let config = ConfigApp::new(Some("config/ait.toml.example")).unwrap();
         assert!(!config.security.dlp.enabled);
         assert!(config.security.dlp.sensitive_values.is_empty());
+        assert!(!config.security.dlp.scan_numbers);
         assert_eq!(config.proxy.max_request_body_bytes, 8 * 1024 * 1024);
     }
 
@@ -549,5 +556,20 @@ sensitive_values = ["110101199001011234", "13800138000"]
             vec!["110101199001011234", "13800138000"]
         );
         assert_eq!(config.proxy.max_request_body_bytes, 1048576);
+    }
+
+    #[test]
+    fn dlp_scan_numbers_override() {
+        let (_dir, path) = write_toml(
+            r#"
+[security.dlp]
+enabled = true
+scan_numbers = true
+sensitive_values = ["13800138000"]
+"#,
+        );
+        let config = ConfigApp::new(Some(&path)).unwrap();
+        assert!(config.security.dlp.enabled);
+        assert!(config.security.dlp.scan_numbers);
     }
 }
