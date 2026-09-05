@@ -11,80 +11,20 @@ use axum::{
 use chrono::Utc;
 use tracing::{debug, trace};
 
-use crate::app::{AppState, NEGATIVE_CACHE_TTL};
-use crate::db::{ApiKeyContext, Model, Provider, ProxyEvent, RequestId};
-use crate::error::{AitError, internal_error, not_found};
-use crate::middleware::CACHE_TTL;
-use crate::providers::create_provider;
+use crate::app::AppState;
+use crate::db::{ApiKeyContext, ProxyEvent, RequestId};
+use crate::error::{AitError, internal_error};
 use crate::ssrf;
 use crate::utils::mask_sensitive_value;
 
-/// Cache entries that know when they were written.
-///
-/// `insert_capped` is generic over the value type, so it cannot reach a
-/// timestamp on its own; the caches that go through it expose theirs here.
-trait TimestampedEntry {
-    fn inserted_at(&self) -> Instant;
-}
-
-impl TimestampedEntry for Instant {
-    fn inserted_at(&self) -> Instant {
-        *self
-    }
-}
-
-impl<T> TimestampedEntry for (T, Instant) {
-    fn inserted_at(&self) -> Instant {
-        self.1
-    }
-}
-
-/// Insert into a cache, evicting the oldest entry once the cap is reached.
-///
-/// Dropping the new entry instead would stop caching altogether: hot entries
-/// slide their timestamp on every hit (see `proxy_request`), so they never age
-/// out during cleanup and the cache stays pinned at the cap forever.
-///
-/// `DashMap::len` is approximate under concurrency, so a cache stays bounded
-/// within a small multiple of `cache_max_entries`.
-///
-/// Shared by the model cache and the negative model cache (keys come from
-/// request bodies and are therefore attacker-controlled) and the provider
-/// cache, so all three enforce the cap.
-fn insert_capped<V: TimestampedEntry>(
-    map: &dashmap::DashMap<String, V>,
-    key: &str,
-    entry: V,
-    max_entries: usize,
-) {
-    if max_entries == 0 {
-        return;
-    }
-    // Refreshing an existing key must not count against the cap.
-    if map.contains_key(key) {
-        map.insert(key.to_string(), entry);
-        return;
-    }
-    if map.len() >= max_entries {
-        // Clone the key and let the iterator (and the shard read lock it
-        // holds) go before removing; parking_lot's RwLock is not reentrant.
-        let oldest = map
-            .iter()
-            .min_by_key(|e| e.value().inserted_at())
-            .map(|e| e.key().clone());
-        if let Some(oldest) = oldest {
-            map.remove(&oldest);
-        }
-    }
-    map.insert(key.to_string(), entry);
-}
-
 mod exec;
 mod guard;
+mod resolve;
 mod sse;
 
 use exec::{proxy_non_streamed, proxy_streamed};
 use guard::{ProxyLogGuard, UsageTokens};
+use resolve::{cached_upstream, resolve_model_and_provider};
 
 /// Parse a request body and release the raw bytes immediately.
 ///
@@ -247,6 +187,54 @@ pub async fn list_models_proxy(
     })))
 }
 
+/// Record a DLP rejection and build the error the client sees.
+///
+/// A blocked request never reaches an upstream, so the record carries no
+/// provider or usage - it exists so the block appears in the logs beside the
+/// request that triggered it rather than only in the client's error.
+#[allow(clippy::too_many_arguments)]
+fn dlp_rejection(
+    state: &AppState,
+    matched: &str,
+    body: &serde_json::Value,
+    api_key: &ApiKeyContext,
+    client_ip: Option<IpAddr>,
+    request_id: &RequestId,
+    upstream_path: &str,
+    elapsed_ms: i64,
+) -> (StatusCode, Json<AitError>) {
+    let reason = format!(
+        "blocked by DLP: sensitive value '{}' matched",
+        mask_sensitive_value(matched, 3, 2)
+    );
+    state.log_manager.log_proxy(ProxyEvent {
+        timestamp: Utc::now(),
+        request_id: request_id.0.clone(),
+        api_key_name: api_key.name.clone(),
+        model_name: body
+            .get("model")
+            .and_then(|m| m.as_str())
+            .unwrap_or("blocked")
+            .to_string(),
+        provider_name: "unknown".to_string(),
+        prompt_tokens: None,
+        completion_tokens: None,
+        total_tokens: None,
+        cached_tokens: None,
+        latency_ms: elapsed_ms,
+        status: "400".to_string(),
+        endpoint: upstream_path.to_string(),
+        is_streaming: false,
+        time_to_first_token_ms: None,
+        upstream_model: "blocked".to_string(),
+        provider_type: "unknown".to_string(),
+        response_body_size: None,
+        error_message: Some(reason),
+        client_ip: client_ip.map(|ip| ip.to_string()),
+    });
+    AitError::bad_request("request blocked by sensitive data rule").into_response()
+}
+
 pub async fn proxy_request(
     state: AppState,
     api_key: ApiKeyContext,
@@ -266,40 +254,18 @@ pub async fn proxy_request(
     }
 
     if state.dlp.is_enabled()
-        && let Some(value) = state.dlp.scan(&body)
+        && let Some(matched) = state.dlp.scan(&body)
     {
-        let reason = format!(
-            "blocked by DLP: sensitive value '{}' matched",
-            mask_sensitive_value(value, 3, 2)
-        );
-        state.log_manager.log_proxy(ProxyEvent {
-            timestamp: Utc::now(),
-            request_id: request_id.0,
-            api_key_name: api_key.name.clone(),
-            model_name: body
-                .get("model")
-                .and_then(|m| m.as_str())
-                .unwrap_or("blocked")
-                .to_string(),
-            provider_name: "unknown".to_string(),
-            prompt_tokens: None,
-            completion_tokens: None,
-            total_tokens: None,
-            cached_tokens: None,
-            latency_ms: start.elapsed().as_millis() as i64,
-            status: "400".to_string(),
-            endpoint: upstream_path.to_string(),
-            is_streaming: false,
-            time_to_first_token_ms: None,
-            upstream_model: "blocked".to_string(),
-            provider_type: "unknown".to_string(),
-            response_body_size: None,
-            error_message: Some(reason),
-            client_ip: client_ip.map(|ip| ip.to_string()),
-        });
-        return Err(
-            AitError::bad_request("request blocked by sensitive data rule").into_response(),
-        );
+        return Err(dlp_rejection(
+            &state,
+            matched,
+            &body,
+            &api_key,
+            client_ip,
+            &request_id,
+            upstream_path,
+            start.elapsed().as_millis() as i64,
+        ));
     }
 
     let model_name = body.get("model").and_then(|m| m.as_str()).ok_or_else(|| {
@@ -308,78 +274,7 @@ pub async fn proxy_request(
 
     trace!(model_name, "proxy_request: start");
 
-    let (model, provider) = {
-        async fn resolve(
-            state: &AppState,
-            model_name: &str,
-        ) -> Result<(Model, Provider), (StatusCode, Json<AitError>)> {
-            let db = state.db.clone();
-            let name = model_name.to_string();
-            let max_entries = state.config.server.cache_max_entries as usize;
-            match crate::run_blocking(move || db.resolve_model(&name)).await {
-                Ok(Ok(Some((m, p)))) => {
-                    let upstream = create_provider(&p, state.http_client.clone());
-                    insert_capped(
-                        &state.provider_cache,
-                        &p.id,
-                        (upstream, Instant::now()),
-                        max_entries,
-                    );
-                    insert_capped(
-                        &state.model_cache,
-                        model_name,
-                        ((m.clone(), p.clone()), Instant::now()),
-                        max_entries,
-                    );
-                    Ok((m, p))
-                }
-                Ok(Ok(None)) => {
-                    // Unknown models go to their own bounded cache: sharing
-                    // `model_cache` let a flood of bogus names fill the entry
-                    // cap, after which valid models stopped being cached too.
-                    insert_capped(
-                        &state.negative_model_cache,
-                        model_name,
-                        Instant::now(),
-                        max_entries,
-                    );
-                    Err(not_found(format!(
-                        "Model '{}' not found or disabled",
-                        model_name
-                    )))
-                }
-                Ok(Err(e)) => Err(AitError::from_db_error(e).into_response()),
-                Err(join_err) => Err(internal_error(join_err)),
-            }
-        }
-
-        // Known-unknown first: it costs one lookup and keeps the negative
-        // verdict out of `model_cache` entirely.
-        let negative = state
-            .negative_model_cache
-            .get(model_name)
-            .is_some_and(|seen| seen.elapsed() < NEGATIVE_CACHE_TTL);
-        if negative {
-            return Err(not_found(format!(
-                "Model '{}' not found or disabled",
-                model_name
-            )));
-        }
-
-        let cached = state.model_cache.get_mut(model_name).and_then(|mut entry| {
-            if entry.1.elapsed() < CACHE_TTL {
-                // slide positive entries so hot models stay cached
-                entry.1 = Instant::now();
-                Some(entry.0.clone())
-            } else {
-                None
-            }
-        });
-        match cached {
-            Some((m, p)) => (m, p),
-            None => resolve(&state, model_name).await?,
-        }
-    };
+    let (model, provider) = resolve_model_and_provider(&state, model_name).await?;
 
     trace!(
         model = model_name,
@@ -397,31 +292,7 @@ pub async fn proxy_request(
         .into_response());
     }
 
-    let max_entries = state.config.server.cache_max_entries as usize;
-    let cached_upstream = state
-        .provider_cache
-        .get_mut(&provider.id)
-        .and_then(|mut entry| {
-            if entry.1.elapsed() < CACHE_TTL {
-                entry.1 = Instant::now();
-                Some(entry.0.clone())
-            } else {
-                None
-            }
-        });
-    let upstream = match cached_upstream {
-        Some(upstream) => upstream,
-        None => {
-            let upstream = create_provider(&provider, state.http_client.clone());
-            insert_capped(
-                &state.provider_cache,
-                &provider.id,
-                (upstream.clone(), Instant::now()),
-                max_entries,
-            );
-            upstream
-        }
-    };
+    let upstream = cached_upstream(&state, &provider);
 
     let model_name = model.name.clone();
     let provider_name = provider.name.clone();
@@ -592,7 +463,6 @@ fn count_prompt_tokens(body_len: usize, divisor: u64) -> Option<i64> {
 mod tests {
     use super::*;
     use crate::db::{ApiKeyContext, RequestId};
-    use crate::providers::UpstreamProvider;
     use crate::test_utils::{
         create_test_provider, create_test_state, create_test_state_dlp, mock_upstream_hanging,
         mock_upstream_redirect, mock_upstream_server, mock_upstream_sse_server,
@@ -601,78 +471,7 @@ mod tests {
     use axum::Extension;
     use axum::http::Method;
     use bytes::Bytes;
-    use std::sync::Arc;
     use std::time::Duration;
-
-    #[test]
-    fn insert_capped_respects_cap() {
-        let map: dashmap::DashMap<String, Instant> = dashmap::DashMap::new();
-        let entry = Instant::now();
-        for i in 0..5 {
-            insert_capped(&map, &format!("m{i}"), entry, 5);
-        }
-        assert_eq!(map.len(), 5);
-        insert_capped(&map, "m6", entry, 5);
-        assert_eq!(map.len(), 5);
-    }
-
-    #[test]
-    fn insert_capped_zero_cap_caches_nothing() {
-        let map: dashmap::DashMap<String, Instant> = dashmap::DashMap::new();
-        insert_capped(&map, "m0", Instant::now(), 0);
-        assert!(map.is_empty());
-    }
-
-    #[test]
-    fn insert_capped_evicts_oldest_when_full() {
-        use std::time::Duration;
-
-        let map: dashmap::DashMap<String, Instant> = dashmap::DashMap::new();
-        let start = Instant::now();
-        for i in 0..3 {
-            insert_capped(&map, &format!("m{i}"), start + Duration::from_secs(i), 3);
-        }
-        // A full cache must keep caching: the new entry replaces the oldest
-        // instead of being dropped, which is what kept caching off entirely.
-        insert_capped(&map, "m3", start + Duration::from_secs(3), 3);
-        assert_eq!(map.len(), 3);
-        assert!(!map.contains_key("m0"), "oldest entry is evicted");
-        assert!(map.contains_key("m3"), "newest entry is kept");
-    }
-
-    #[test]
-    fn insert_capped_bounds_provider_cache() {
-        struct NoopProvider;
-
-        #[async_trait::async_trait]
-        impl UpstreamProvider for NoopProvider {
-            async fn build_request(
-                &self,
-                _client: &reqwest::Client,
-                _body: serde_json::Value,
-                _stream: bool,
-                _upstream_model: &str,
-                _upstream_path: &str,
-            ) -> Result<reqwest::Request, String> {
-                Err("noop provider is not usable".to_string())
-            }
-        }
-
-        let map: dashmap::DashMap<String, (Arc<dyn UpstreamProvider>, Instant)> =
-            dashmap::DashMap::new();
-        let entry = || {
-            (
-                Arc::new(NoopProvider) as Arc<dyn UpstreamProvider>,
-                Instant::now(),
-            )
-        };
-        for i in 0..5 {
-            insert_capped(&map, &format!("p{i}"), entry(), 5);
-        }
-        assert_eq!(map.len(), 5);
-        insert_capped(&map, "p6", entry(), 5);
-        assert_eq!(map.len(), 5, "provider cache must honour the same cap");
-    }
 
     fn api_key() -> ApiKeyContext {
         ApiKeyContext {
